@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     gdb \
     git \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for Python management

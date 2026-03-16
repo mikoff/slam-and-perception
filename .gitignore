@@ -1,0 +1,35 @@
+# ---------------------------------------------------
+# C++ & CMake Build Artifacts
+# ---------------------------------------------------
+build/
+CMakeCache.txt
+CMakeFiles/
+*.o
+*.a
+*.so
+*.dylib
+
+# ---------------------------------------------------
+# Python & uv Environments
+# ---------------------------------------------------
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ---------------------------------------------------
+# Jupyter Notebooks
+# ---------------------------------------------------
+.ipynb_checkpoints/
+
+# ---------------------------------------------------
+# IDE & OS Files
+# ---------------------------------------------------
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.DS_Store
