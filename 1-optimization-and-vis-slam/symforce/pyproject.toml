@@ -1,7 +1,7 @@
 [project]
-name = "dummy_project"
+name = "SymforceProject"
 version = "0.1.0"
-description = "Template project"
+description = "Symforce project"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
