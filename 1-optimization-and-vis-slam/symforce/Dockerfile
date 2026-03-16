@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     gdb \
     git \
     python3 \
+    libgmp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for Python management
