@@ -1,0 +1,15 @@
+FROM debian:bookworm-slim
+
+# Install C++ build system and tools
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    gdb \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for Python management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Set default working directory
+WORKDIR /workspace
