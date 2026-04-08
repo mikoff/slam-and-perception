@@ -1,18 +1,13 @@
 {
-    "name": "Hybrid C++/Python Env",
+    "name": "dummy-project",
     "build": {
-        "dockerfile": "../Dockerfile"
+        "context": "../..",
+        "dockerfile": "../../dummy_project/Dockerfile"
     },
     "workspaceFolder": "/workspace",
-    "workspaceMount": "source=${localWorkspaceFolder}/..,target=/workspace,type=bind,consistency=cached",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
     "remoteUser": "devuser",
-    "remoteEnv": {
-        "PATH": "/home/devuser/.local/bin:${containerEnv:PATH}"
-    },
     "forwardPorts": [9749],
-    "mounts": [
-        "source=cbm-cache,target=/home/devuser/.cache/codebase-memory-mcp,type=volume"
-    ],
     "customizations": {
         "vscode": {
             "extensions": [

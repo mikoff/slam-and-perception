@@ -11,8 +11,10 @@ REPO_ROOT = pathlib.Path(__file__).parent.parent
 DECISIONS_ROOT = REPO_ROOT / ".agent_knowledge" / "decisions"
 
 
-def run(args: list[str]) -> str:
+def run(args: list[str], check: bool = False) -> str:
     result = subprocess.run([BINARY, *args], capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"{BINARY} {' '.join(args[:2])} failed:\n{result.stderr.strip()}")
     return result.stdout.strip()
 
 
@@ -43,16 +45,16 @@ def main() -> None:
     run(["config", "set", "auto_index", "true"])
 
     print("Indexing repository...")
-    output = run(["cli", "index_repository", json.dumps({"repo_path": str(REPO_ROOT)})])
+    output = run(["cli", "index_repository", json.dumps({"repo_path": str(REPO_ROOT)})], check=True)
     result = json.loads(json.loads(output)["content"][0]["text"])
     print(f"  nodes={result.get('nodes', '?')}  edges={result.get('edges', '?')}")
 
     print("Seeding ADRs...")
-    project = get_project_name()
+    project = result.get("project") or get_project_name()
     payload = json.dumps({"mode": "update", "project": project, "content": load_decisions()})
     run(["cli", "manage_adr", payload])
 
-    print("Done. Reload VS Code to activate the MCP server (http://localhost:9749 for graph UI).")
+    print("Done. Reload VS Code.")
 
 
 if __name__ == "__main__":
