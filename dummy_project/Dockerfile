@@ -4,8 +4,10 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
+    curl \
     gdb \
     git \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv for Python management
