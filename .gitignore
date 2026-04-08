@@ -32,4 +32,10 @@ __pycache__/
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+!.vscode/mcp.json
 .DS_Store
+
+# ---------------------------------------------------
+# Downloaded Datasets
+# ---------------------------------------------------
+data/
