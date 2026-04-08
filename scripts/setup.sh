@@ -6,7 +6,7 @@ set -euo pipefail
 if ! command -v codebase-memory-mcp &>/dev/null; then
   echo "Installing codebase-memory-mcp..."
   curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh \
-    | bash -s -- --skip-config
+    | bash -s -- --ui --skip-config
   export PATH="$HOME/.local/bin:$PATH"
 fi
 

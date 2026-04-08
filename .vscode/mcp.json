@@ -2,7 +2,11 @@
   "servers": {
     "codebase-memory": {
       "type": "stdio",
-      "command": "codebase-memory-mcp"
+      "command": "codebase-memory-mcp",
+      "args": [
+        "--ui=true",
+        "--port=9749"
+      ],
     }
   }
 }
