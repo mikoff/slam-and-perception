@@ -17,22 +17,42 @@ By doing this we guarantee that all the values become unitless and have the same
 **It converts physical units (meters) into statistical units (sigmas)**.
 
 ## Notations
-- $\mathbf{T}_a = \mathbf{T}_{\text{world} \leftarrow a}$: the pose of frame $a$ relative to the world frame. The pose is expressed in the world frame. However, it maps points from hte local frame to the global frame.
+ $$\mathbf{T}_a = \mathbf{T}_{\text{world} \leftarrow a}$$
+  the pose of frame $a$ relative to the world frame. The pose is expressed in the world frame. However, it maps points from hte local frame to the global frame.
   - _Code variable_: `T_wa`, `toWorldFromA`
-- $\mathbf{p}_{\text{world}} = \mathbf{T}_a \mathbf{p}_a$.
+---
+
+ $$\mathbf{p}_{\text{world}} = \mathbf{T}_a \mathbf{p}_a$$
   - _Code variables_: `p_w = T_wa * p_a`
-- $\mathbf{T}_{\text{world} \leftarrow b} = \mathbf{T}_{\text{world} \leftarrow a} \mathbf{T}_{a \leftarrow b}$: pose composition.
+---
+
+ $$\mathbf{T}_{\text{world} \leftarrow b} = \mathbf{T}_{\text{world} \leftarrow a} \mathbf{T}_{a \leftarrow b}$$
+  pose composition.
   - _Code variables_: `T_wb = T_wb * T_ab`
-- $\mathbf{T}_{ab} = \mathbf{T}_a^{-1} \mathbf{T}_b$: odometry, or relative pose.
+---
+
+ $$\mathbf{T}_{ab} = \mathbf{T}_a^{-1} \mathbf{T}_b$$
+  odometry, or relative pose.
   - _Code variables_: `T_ab = T_wa.inverse() * T_wb`
   - _SymForce_: `between(a, b)`
-- $\mathbf{e}_{ab} = \log \left( \mathbf{T}_{ab}^{-1} \hat{\mathbf{T}}_{ab} \right)^\vee$: error between a measured relative pose and a predicted relative pose, $\vee$ is the vee operator, which turns a Lie algebra matrix into a vector in Euclidean space (since the resulting matrix is skew-symmetric, we take only the essential numbers and pack them into a minimal column vector).
+---
+
+ $$\mathbf{e}_{ab} = \log \left( \mathbf{T}_{ab}^{-1} \hat{\mathbf{T}}_{ab} \right)^\vee$$
+  error between a measured relative pose and a predicted relative pose, $\vee$ is the vee operator, which turns a Lie algebra matrix into a vector in Euclidean space (since the resulting matrix is skew-symmetric, we take only the essential numbers and pack them into a minimal column vector).
   - _Code variables_: `error_ab = log(T_ab_meas.inverse() * T_ab_pred).vee()`
   - _SymForce_: `local_coordinates(T_ab_meas, T_ab_pred)`, $\ominus$
-- $\mathbf{e}_{\text{between}} = \mathbf{W}_{ab}\mathbf{e}_{ab}$: the between factor that penalizes the difference between the predicted relative pose and the measured odometry, scaled by certainty (measurement information matrix).
+---
+
+ $$\mathbf{e}_{\text{between}} = \mathbf{W}_{ab}\mathbf{e}_{ab}$$
+  the between factor that penalizes the difference between the predicted relative pose and the measured odometry, scaled by certainty (measurement information matrix).
   - _Code variables_: `res_ab = weightMatrix_ab * error_ab`
-- $\mathbf{e}_{\text{landmark}} = \mathbf{W_\text{meas}}\left(\mathbf{T}_{a}^{-1} \mathbf{p}_{\text{world}} - \mathbf{p}_{a} \right)$: the pose-to-landmark factor. It penalizes the difference between where a landmark should appear in the local frame of $a$ and where it was actually measured ($\mathbf{p}_a$).
+---
+
+ $$\mathbf{e}_{\text{landmark}} = \mathbf{W_\text{meas}}\left(\mathbf{T}_{a}^{-1} \mathbf{p}_{\text{world}} - \mathbf{p}_{a} \right)$$
+  the pose-to-landmark factor. It penalizes the difference between where a landmark should appear in the local frame of $a$ and where it was actually measured ($\mathbf{p}_a$).
   - _Code variables_: `res_lmrk = weightMatrix_meas * (T_wa.inverse() * p_w - p_a_meas)`
+---
+
 
 ## Active and passive transformations.
 **Note:** many people talk of active and passive transformations.
@@ -64,7 +84,8 @@ $$\mathbf{b} \ominus \mathbf{a} \triangleq \log(\mathbf{a}^{-1} \mathbf{b})^\vee
 Factors are directly scaled inside the residual function by multiplying the raw error vector by the square-root information matrix $\mathbf{W}$.
 $$\mathbf{e}_{\text{whitened}} = \mathbf{W} \mathbf{e}_{\text{raw}}$$
 
-This ensures the optimizer minimizes the Mahalanobis distance: $\|\mathbf{W} \mathbf{e}_{\text{raw}}\|^2_2 = \mathbf{e}_{\text{raw}}^T \Omega \mathbf{e}_{\text{raw}}$.
+This ensures the optimizer minimizes the Mahalanobis distance:
+$$\|\mathbf{W} \mathbf{e}_{\text{raw}}\|^2_2 = \mathbf{e}_{\text{raw}}^T \Omega \mathbf{e}_{\text{raw}}$$
 
 ## Robustification
 To handle outliers, standard least squares minimizes $\frac{1}{2} \|e_{whitened}\|^2$. Robustifiers wrap this squared norm in a loss function $\rho(x)$ that grows sub-quadratically (e.g., Huber or Barron loss) to reduce the pull of massive errors.
