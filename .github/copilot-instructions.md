@@ -1,7 +1,8 @@
-# Project Guidelines
+# Copilot Instructions
 
 ## STRICT TOOL REQUIREMENT: codebase-memory
-You are REQUIRED to use the `codebase-memory` MCP server tools to gather context. Do NOT use native workspace search or regex searches for architectural decisions.
+You are REQUIRED to use the `codebase-memory` MCP server tools to gather context. Do NOT use native workspace search or regex searches for architectural decisions or for finding code context.
+ALWAYS try to use `codebase-memory` tools first to find relevant information.
 
 **MANDATORY WORKFLOW:**
 Whenever asked to plan, refactor, or implement a feature, you MUST execute the following tools in this exact order BEFORE providing an answer or writing code:

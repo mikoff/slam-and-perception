@@ -15,7 +15,11 @@
                 "ms-python.python",
                 "charliermarsh.ruff",
                 "ms-toolsai.jupyter"
-            ]
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/workspace/1-optimization-and-vis-slam/symforce/.venv/bin/python",
+                "python.venvPath": "/workspace/1-optimization-and-vis-slam/symforce"
+            }
         }
     },
     "postCreateCommand": "cd 1-optimization-and-vis-slam/symforce && uv sync && cd /workspace && bash scripts/setup.sh"

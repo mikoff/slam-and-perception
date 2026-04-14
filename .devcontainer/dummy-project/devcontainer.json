@@ -15,7 +15,11 @@
                 "ms-python.python",
                 "charliermarsh.ruff",
                 "ms-toolsai.jupyter"
-            ]
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "/workspace/.venv/bin/python",
+                "python.venvPath": "/workspace"
+            }
         }
     },
     "postCreateCommand": "cd dummy_project && uv sync && cd /workspace && bash scripts/setup.sh"
