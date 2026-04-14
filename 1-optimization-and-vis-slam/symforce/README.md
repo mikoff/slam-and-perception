@@ -18,6 +18,7 @@ By doing this we guarantee that all the values become unitless and have the same
 
 ## Notations
  $$\mathbf{T}_a = \mathbf{T}_{\text{world} \leftarrow a}$$
+
   the pose of frame $a$ relative to the world frame. The pose is expressed in the world frame. However, it maps points from hte local frame to the global frame.
   - _Code variable_: `T_wa`, `toWorldFromA`
 ---
@@ -27,28 +28,33 @@ By doing this we guarantee that all the values become unitless and have the same
 ---
 
  $$\mathbf{T}_{\text{world} \leftarrow b} = \mathbf{T}_{\text{world} \leftarrow a} \mathbf{T}_{a \leftarrow b}$$
+
   pose composition.
   - _Code variables_: `T_wb = T_wb * T_ab`
 ---
 
  $$\mathbf{T}_{ab} = \mathbf{T}_a^{-1} \mathbf{T}_b$$
+
   odometry, or relative pose.
   - _Code variables_: `T_ab = T_wa.inverse() * T_wb`
   - _SymForce_: `between(a, b)`
 ---
 
  $$\mathbf{e}_{ab} = \log \left( \mathbf{T}_{ab}^{-1} \hat{\mathbf{T}}_{ab} \right)^\vee$$
+  
   error between a measured relative pose and a predicted relative pose, $\vee$ is the vee operator, which turns a Lie algebra matrix into a vector in Euclidean space (since the resulting matrix is skew-symmetric, we take only the essential numbers and pack them into a minimal column vector).
   - _Code variables_: `error_ab = log(T_ab_meas.inverse() * T_ab_pred).vee()`
   - _SymForce_: `local_coordinates(T_ab_meas, T_ab_pred)`, $\ominus$
 ---
 
  $$\mathbf{e}_{\text{between}} = \mathbf{W}_{ab}\mathbf{e}_{ab}$$
+  
   the between factor that penalizes the difference between the predicted relative pose and the measured odometry, scaled by certainty (measurement information matrix).
   - _Code variables_: `res_ab = weightMatrix_ab * error_ab`
 ---
 
  $$\mathbf{e}_{\text{landmark}} = \mathbf{W_\text{meas}}\left(\mathbf{T}_{a}^{-1} \mathbf{p}_{\text{world}} - \mathbf{p}_{a} \right)$$
+  
   the pose-to-landmark factor. It penalizes the difference between where a landmark should appear in the local frame of $a$ and where it was actually measured ($\mathbf{p}_a$).
   - _Code variables_: `res_lmrk = weightMatrix_meas * (T_wa.inverse() * p_w - p_a_meas)`
 ---
