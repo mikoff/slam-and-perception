@@ -1,8 +1,8 @@
 {
-    "name": "dummy-project",
+    "name": "gtsam (SLAM)",
     "build": {
         "context": "../..",
-        "dockerfile": "../../dummy_project/Dockerfile"
+        "dockerfile": "../../1-optimization-and-vis-slam/gtsam/Dockerfile"
     },
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
@@ -17,12 +17,14 @@
                 "ms-toolsai.jupyter"
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/workspace/dummy_project/.venv/bin/python",
-                "python.venvPath": "/workspace/dummy_project"
+                "python.defaultInterpreterPath": "/workspace/1-optimization-and-vis-slam/gtsam/.venv/bin/python",
+                "python.venvPath": "/workspace/1-optimization-and-vis-slam/gtsam",
+                "cmake.sourceDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/gtsam",
+                "cmake.buildDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/gtsam/build"
             }
         }
     },
-    "postCreateCommand": "cd dummy_project && uv sync && cd /workspace && PYTHON=/workspace/dummy_project/.venv/bin/python bash scripts/setup.sh",
+    "postCreateCommand": "cd 1-optimization-and-vis-slam/gtsam && uv sync && cd /workspace && bash scripts/setup.sh",
     "remoteEnv": {
         "PATH": "/home/devuser/.local/bin:${containerEnv:PATH}"
     }

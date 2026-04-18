@@ -1,0 +1,15 @@
+[project]
+name = "gtsam-project"
+version = "0.1.0"
+description = "GTSAM factor graph optimization project"
+readme = "README.md"
+requires-python = "==3.13.*"
+dependencies = [
+    "gtsam==4.3a0",
+    "numpy",
+    "matplotlib>=3.10",
+    "ipykernel",
+]
+
+[tool.uv]
+prerelease = "allow"

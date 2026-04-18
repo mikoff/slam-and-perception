@@ -22,5 +22,8 @@
             }
         }
     },
-    "postCreateCommand": "cd 1-optimization-and-vis-slam/symforce && uv sync && cd /workspace && bash scripts/setup.sh"
+    "postCreateCommand": "cd 1-optimization-and-vis-slam/symforce && uv sync && cd /workspace && PYTHON=/workspace/1-optimization-and-vis-slam/symforce/.venv/bin/python bash scripts/setup.sh",
+    "remoteEnv": {
+        "PATH": "/home/devuser/.local/bin:${containerEnv:PATH}"
+    }
 }

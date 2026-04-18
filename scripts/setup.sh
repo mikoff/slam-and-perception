@@ -10,4 +10,4 @@ if ! command -v codebase-memory-mcp &>/dev/null; then
   export PATH="$HOME/.local/bin:$PATH"
 fi
 
-exec python3 "$(dirname "$0")/setup.py"
+exec "${PYTHON:-python3}" "$(dirname "$0")/setup.py"
