@@ -68,7 +68,11 @@ By doing this we guarantee that all the values become unitless and have the same
 2. Passive transformation = the point perspective.
   It converts sensor data between frames. The physical objects stay still, but the mathematical grid used to measure it is swapped.
 
-**The takeaway:** an active transformation of a frame is equivalent to a passive transformation of the points in the opposite direction. Therefore, the matrix $\mathbf{T}_{\text{world}\leftarrow a}$ performs a **passive** transformation on local points, representing the exact same numerical values as the active physical movement of the frame from the _world_ to $a$ ($\mathbf{T}_{\text{world} \to a}$)
+**The takeaway:** an active transformation of a frame is equivalent to a passive transformation of the points in the opposite direction. Therefore, the matrix
+
+$$\mathbf{T}_{\text{world}\leftarrow a}$$
+
+performs a **passive** transformation on local points, representing the exact same numerical values as the active physical movement of the frame from the _world_ to $a$ ($\mathbf{T}_{\text{world} \to a}$)
 
 ## Error definition
 $$\overbrace{\hat{\mathbf{T}}}^{\text{\scriptsize predicted}} = \overbrace{\mathbf{T}}^{\text{\scriptsize anchor}} \underbrace{\exp(\mathbf{e}_{\text{right}}^\wedge)}_{\text{\scriptsize local twist}} \;\xrightarrow{\mathbf{T}^{-1} \cdot}\; \underbrace{\mathbf{T}^{-1} \hat{\mathbf{T}}}_{\text{\scriptsize pose difference}} = \exp(\mathbf{e}_{\text{right}}^\wedge) \;\xrightarrow{\log}\; \log(\mathbf{T}^{-1} \hat{\mathbf{T}}) = \overbrace{\mathbf{e}_{\text{right}}^\wedge}^{\text{\scriptsize Lie algebra}} \;\xrightarrow{\vee}\; \underbrace{\mathbf{e}_{\text{right}}}_{\text{\scriptsize error vector}} = \log(\mathbf{T}^{-1} \hat{\mathbf{T}})^\vee$$
