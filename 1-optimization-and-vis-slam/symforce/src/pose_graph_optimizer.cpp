@@ -56,27 +56,27 @@ int runSE2(const std::string& dataset_path, const std::string& output_path) {
   auto& s = graph.storage();
 
   for (int i = 0; i < num_poses; ++i)
-    s.setPose(i, init_poses[i]);
+    s.setPose(PoseId(i), init_poses[i]);
   for (const auto& [lm_id, pos] : init_lm)
-    s.setLandmark(lm_id, pos);
+    s.setLandmark(LandmarkId(lm_id), pos);
 
-  s.addPrior({.pose_id    = 0,
+  s.addPrior({.pose_id    = PoseId(0),
               .prior_pose = G::Pose::Identity(),
               .info       = G::PoseInfoMatrix::Identity() * 1000.0});
 
   for (const auto& e : edges) {
-    s.addBetween({.id_from       = e.id_from,
-                  .id_to         = e.id_to,
+    s.addBetween({.id_from       = PoseId(e.id_from),
+                  .id_to         = PoseId(e.id_to),
                   .relative_pose = G::Pose(sym::Rot2d(e.dtheta),
                                            Eigen::Vector2d(e.dx, e.dy)),
                   .info          = e.info});
   }
 
   for (const auto& o : landmarks) {
-    s.addLandmarkObservation({.pose_id     = o.pose_id,
-                              .landmark_id = o.lm_id,
-                              .observation = Eigen::Vector2d(o.dx, o.dy),
-                              .info        = o.info,
+    s.addLandmarkObservation({.pose_id      = PoseId(o.pose_id),
+                              .landmark_id  = LandmarkId(o.lm_id),
+                              .observation  = Eigen::Vector2d(o.dx, o.dy),
+                              .info         = o.info,
                               .barron_alpha = 1.0});
   }
 
@@ -116,11 +116,11 @@ int runSE3(const std::string& dataset_path, const std::string& output_path) {
   auto& s = graph.storage();
 
   for (int i = 0; i < num_poses; ++i)
-    s.setPose(i, init_poses[i]);
+    s.setPose(PoseId(i), init_poses[i]);
   for (const auto& [lm_id, pos] : init_lm)
-    s.setLandmark(lm_id, pos);
+    s.setLandmark(LandmarkId(lm_id), pos);
 
-  s.addPrior({.pose_id    = 0,
+  s.addPrior({.pose_id    = PoseId(0),
               .prior_pose = G::Pose::Identity(),
               .info       = G::PoseInfoMatrix::Identity() * 1000.0});
 
@@ -134,18 +134,18 @@ int runSE3(const std::string& dataset_path, const std::string& output_path) {
       for (int j = 0; j < 6; ++j)
         info_sf(i, j) = e.info(perm[i], perm[j]);
 
-    s.addBetween({.id_from       = e.id_from,
-                  .id_to         = e.id_to,
+    s.addBetween({.id_from       = PoseId(e.id_from),
+                  .id_to         = PoseId(e.id_to),
                   .relative_pose = G::Pose(rot3FromAxisAngle(e.rx, e.ry, e.rz),
                                            Eigen::Vector3d(e.tx, e.ty, e.tz)),
                   .info          = info_sf});
   }
 
   for (const auto& o : landmarks) {
-    s.addLandmarkObservation({.pose_id     = o.pose_id,
-                              .landmark_id = o.lm_id,
-                              .observation = Eigen::Vector3d(o.dx, o.dy, o.dz),
-                              .info        = o.info,
+    s.addLandmarkObservation({.pose_id      = PoseId(o.pose_id),
+                              .landmark_id  = LandmarkId(o.lm_id),
+                              .observation  = Eigen::Vector3d(o.dx, o.dy, o.dz),
+                              .info         = o.info,
                               .barron_alpha = 1.0});
   }
 

@@ -17,46 +17,62 @@ By doing this we guarantee that all the values become unitless and have the same
 **It converts physical units (meters) into statistical units (sigmas)**.
 
 ## Notations
- $$\mathbf{T}_a = \mathbf{T}_{\text{world} \leftarrow a}$$
 
-  the pose of frame $a$ relative to the world frame. The pose is expressed in the world frame. However, it maps points from hte local frame to the global frame.
-  - _Code variable_: `T_wa`, `toWorldFromA`
+```math
+\mathbf{T}_a = \mathbf{T}_{\text{world} \leftarrow a}
+```
+the pose of frame $a$ relative to the world frame. The pose is expressed in the world frame. However, it maps points from hte local frame to the global frame.
+- _Code variable_: `T_wa`, `toWorldFromA`
+
 ---
 
- $$\mathbf{p}_{\text{world}} = \mathbf{T}_a \mathbf{p}_a$$
-  - _Code variables_: `p_w = T_wa * p_a`
+```math
+\mathbf{p}_{\text{world}} = \mathbf{T}_a \mathbf{p}_a
+```
+- _Code variables_: `p_w = T_wa * p_a`
+
 ---
 
- $$\mathbf{T}_{\text{world} \leftarrow b} = \mathbf{T}_{\text{world} \leftarrow a} \mathbf{T}_{a \leftarrow b}$$
+```math
+\mathbf{T}_{\text{world} \leftarrow b} = \mathbf{T}_{\text{world} \leftarrow a} \mathbf{T}_{a \leftarrow b}
+```
+pose composition.
+- _Code variables_: `T_wb = T_wb * T_ab`
 
-  pose composition.
-  - _Code variables_: `T_wb = T_wa * T_ab`
 ---
 
- $$\mathbf{T}_{ab} = \mathbf{T}_a^{-1} \mathbf{T}_b$$
+```math
+\mathbf{T}_{ab} = \mathbf{T}_a^{-1} \mathbf{T}_b
+```
+odometry, or relative pose.
+- _Code variables_: `T_ab = T_wa.inverse() * T_wb`
+- _SymForce_: `between(a, b)`
 
-  odometry, or relative pose.
-  - _Code variables_: `T_ab = T_wa.inverse() * T_wb`
-  - _SymForce_: `between(a, b)`
 ---
 
- $$\mathbf{e}_{ab} = \log \left( \mathbf{T}_{ab}^{-1} \hat{\mathbf{T}}_{ab} \right)^\vee$$
-  
-  error between a measured relative pose and a predicted relative pose, $\vee$ is the vee operator, which turns a Lie algebra matrix into a vector in Euclidean space (since the resulting matrix is skew-symmetric, we take only the essential numbers and pack them into a minimal column vector).
-  - _Code variables_: `error_ab = log(T_ab_meas.inverse() * T_ab_pred).vee()`
-  - _SymForce_: `local_coordinates(T_ab_meas, T_ab_pred)`, $\ominus$
+```math
+\mathbf{e}_{ab} = \log \left( \mathbf{T}_{ab}^{-1} \hat{\mathbf{T}}_{ab} \right)^\vee
+```
+error between a measured relative pose and a predicted relative pose, $\vee$ is the vee operator, which turns a Lie algebra matrix into a vector in Euclidean space (since the resulting matrix is skew-symmetric, we take only the essential numbers and pack them into a minimal column vector).
+- _Code variables_: `error_ab = log(T_ab_meas.inverse() * T_ab_pred).vee()`
+- _SymForce_: `local_coordinates(T_ab_meas, T_ab_pred)`, $\ominus$
+
 ---
 
- $$\mathbf{e}_{\text{between}} = \mathbf{W}_{ab}\mathbf{e}_{ab}$$
-  
-  the between factor that penalizes the difference between the predicted relative pose and the measured odometry, scaled by certainty (measurement information matrix).
-  - _Code variables_: `res_ab = weightMatrix_ab * error_ab`
+```math
+\mathbf{e}_{\text{between}} = \mathbf{W}_{ab}\mathbf{e}_{ab}
+```
+the between factor that penalizes the difference between the predicted relative pose and the measured odometry, scaled by certainty (measurement information matrix).
+- _Code variables_: `res_ab = weightMatrix_ab * error_ab`
+
 ---
 
- $$\mathbf{e}_{\text{landmark}} = \mathbf{W_\text{meas}}\left(\mathbf{T}_{a}^{-1} \mathbf{p}_{\text{world}} - \mathbf{p}_{a} \right)$$
-  
-  the pose-to-landmark factor. It penalizes the difference between where a landmark should appear in the local frame of $a$ and where it was actually measured ($\mathbf{p}_a$).
-  - _Code variables_: `res_lmrk = weightMatrix_meas * (T_wa.inverse() * p_w - p_a_meas)`
+```math
+\mathbf{e}_{\text{landmark}} = \mathbf{W_\text{meas}}\left(\mathbf{T}_{a}^{-1} \mathbf{p}_{\text{world}} - \mathbf{p}_{a} \right)
+```
+the pose-to-landmark factor. It penalizes the difference between where a landmark should appear in the local frame of $a$ and where it was actually measured ($\mathbf{p}_a$).
+- _Code variables_: `res_lmrk = weightMatrix_meas * (T_wa.inverse() * p_w - p_a_meas)`
+
 ---
 
 
@@ -68,11 +84,7 @@ By doing this we guarantee that all the values become unitless and have the same
 2. Passive transformation = the point perspective.
   It converts sensor data between frames. The physical objects stay still, but the mathematical grid used to measure it is swapped.
 
-**The takeaway:** an active transformation of a frame is equivalent to a passive transformation of the points in the opposite direction. Therefore, the matrix
-
-$$\mathbf{T}_{\text{world}\leftarrow a}$$
-
-performs a **passive** transformation on local points, representing the exact same numerical values as the active physical movement of the frame from the _world_ to $a$ ($\mathbf{T}_{\text{world} \to a}$)
+**The takeaway:** an active transformation of a frame is equivalent to a passive transformation of the points in the opposite direction. Therefore, the matrix $\mathbf{T}_{\text{world}\leftarrow a}$ performs a **passive** transformation on local points, representing the exact same numerical values as the active physical movement of the frame from the _world_ to $a$ ($\mathbf{T}_{\text{world} \to a}$)
 
 ## Error definition
 $$\overbrace{\hat{\mathbf{T}}}^{\text{\scriptsize predicted}} = \overbrace{\mathbf{T}}^{\text{\scriptsize anchor}} \underbrace{\exp(\mathbf{e}_{\text{right}}^\wedge)}_{\text{\scriptsize local twist}} \;\xrightarrow{\mathbf{T}^{-1} \cdot}\; \underbrace{\mathbf{T}^{-1} \hat{\mathbf{T}}}_{\text{\scriptsize pose difference}} = \exp(\mathbf{e}_{\text{right}}^\wedge) \;\xrightarrow{\log}\; \log(\mathbf{T}^{-1} \hat{\mathbf{T}}) = \overbrace{\mathbf{e}_{\text{right}}^\wedge}^{\text{\scriptsize Lie algebra}} \;\xrightarrow{\vee}\; \underbrace{\mathbf{e}_{\text{right}}}_{\text{\scriptsize error vector}} = \log(\mathbf{T}^{-1} \hat{\mathbf{T}})^\vee$$
@@ -132,11 +144,17 @@ The Barron kernel generalises common M-estimators (Geman–McClure at `α = −2
 
 ```
 pose_graph_optimizer (main)
+  ├─ runSE2()                       SE2-specific pipeline
+  ├─ runSE3()                       SE3-specific pipeline
   └─ CFactorGraph<G>               factor_graph.hpp / .inl / .cpp
        ├─ CFactorGraphStorage<G>   factor_graph_storage.hpp / .inl / .cpp
        │    ├─ sym::Values<double> -- all variables (poses, landmarks, measurements)
        │    └─ sym::Factor<double> -- residual + Jacobian handles (SymForce-generated)
        └─ sym::Optimizer<double>   (SymForce LM sparse solver)
+
+Type-safe identifiers (slam-types library):
+  PoseId     = StrongId<PoseTag, int>   -- prevents mixing pose / landmark indices
+  LandmarkId = StrongId<LandmarkTag, int>
 
 Geometry policies (geometry_types.hpp / .cpp):
   SE2  -- sym::Pose2d, Eigen::Vector2d, 3×3 info matrices
@@ -147,6 +165,10 @@ Dataset parsers (dataset_parser.hpp / .cpp):
   parseDatasetSE3  -- EDGE3 / POINT3 tokens
   detectDatasetGeometry -- auto-selects pipeline from first recognised token
 ```
+
+### Type-safe identifiers
+
+Measurement structs (`PriorMeasurement`, `BetweenMeasurement`, `LoopClosureMeasurement`, `LandmarkMeasurement`) use `PoseId` and `LandmarkId` from the shared `slam-types` library (`slam::core::StrongId`). This prevents accidentally passing a landmark index where a pose index is expected at compile time. The raw `int` values are extracted via `.value()` only at the sym::Values boundary (inside geometry policy build methods and `CFactorGraphStorage`).
 
 ### Geometry policy pattern
 

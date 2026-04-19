@@ -10,14 +10,14 @@ inline CFactorGraphStorage<G>::CFactorGraphStorage() {
 
 template <typename G>
 inline void CFactorGraphStorage<G>::setPose(
-    int id, const typename G::Pose& pose) {
-  values_.Set({'P', id}, pose);
+    PoseId id, const typename G::Pose& pose) {
+  values_.Set({'P', id.value()}, pose);
   poses_.insert(id);
-  max_pose_id_ = std::max(max_pose_id_, id);
+  max_pose_id_ = std::max(max_pose_id_, id.value());
 }
 
 template <typename G>
-inline bool CFactorGraphStorage<G>::hasPose(int id) const {
+inline bool CFactorGraphStorage<G>::hasPose(PoseId id) const {
   return poses_.count(id) > 0;
 }
 
@@ -28,18 +28,18 @@ inline int CFactorGraphStorage<G>::numPoses() const {
 
 template <typename G>
 inline void CFactorGraphStorage<G>::setLandmark(
-    int id, const typename G::Position& position) {
-  values_.Set({'L', id}, position);
+    LandmarkId id, const typename G::Position& position) {
+  values_.Set({'L', id.value()}, position);
   landmarks_.insert(id);
 }
 
 template <typename G>
-inline bool CFactorGraphStorage<G>::hasLandmark(int id) const {
+inline bool CFactorGraphStorage<G>::hasLandmark(LandmarkId id) const {
   return landmarks_.count(id) > 0;
 }
 
 template <typename G>
-inline const std::unordered_set<int>&
+inline const std::unordered_set<LandmarkId>&
 CFactorGraphStorage<G>::landmarkIds() const {
   return landmarks_;
 }

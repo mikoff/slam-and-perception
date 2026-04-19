@@ -21,22 +21,22 @@ class CFactorGraphStorage {
   CFactorGraphStorage();
 
   /// @brief Set initial pose estimate. Must be called before referencing.
-  void setPose(int id, const typename G::Pose& pose);
+  void setPose(PoseId id, const typename G::Pose& pose);
 
   /// @brief Check whether pose @p id has been initialized.
-  bool hasPose(int id) const;
+  bool hasPose(PoseId id) const;
 
   /// @brief Number of pose slots (max_id + 1).
   int numPoses() const;
 
   /// @brief Set initial landmark estimate. Must be called before referencing.
-  void setLandmark(int id, const typename G::Position& position);
+  void setLandmark(LandmarkId id, const typename G::Position& position);
 
   /// @brief Check whether landmark @p id has been initialized.
-  bool hasLandmark(int id) const;
+  bool hasLandmark(LandmarkId id) const;
 
   /// @brief All initialized landmark ids.
-  const std::unordered_set<int>& landmarkIds() const;
+  const std::unordered_set<LandmarkId>& landmarkIds() const;
 
   /// @brief Add a prior factor. Pose must be initialized.
   void addPrior(const typename G::PriorMeas& m);
@@ -69,8 +69,8 @@ class CFactorGraphStorage {
   sym::Values<double> values_;
   std::vector<sym::Factor<double>> factors_;
 
-  std::unordered_set<int> poses_;
-  std::unordered_set<int> landmarks_;
+  std::unordered_set<PoseId> poses_;
+  std::unordered_set<LandmarkId> landmarks_;
   int max_pose_id_ = -1;
 
   int next_edge_ = 0;

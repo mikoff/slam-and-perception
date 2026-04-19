@@ -51,16 +51,17 @@ void CFactorGraph<G>::saveJson(
   json poses_arr = json::array();
   int n = storage_.numPoses();
   for (int i = 0; i < n; ++i) {
-    if (!storage_.hasPose(i)) continue;
+    PoseId pid(i);
+    if (!storage_.hasPose(pid)) continue;
     auto pose = vals.template At<typename G::Pose>(sym::Key('P', i));
-    poses_arr.push_back(G::poseToJson(i, pose));
+    poses_arr.push_back(G::poseToJson(pid, pose));
   }
   result["poses"] = poses_arr;
 
   json lm_arr = json::array();
-  for (int lm_id : storage_.landmarkIds()) {
+  for (LandmarkId lm_id : storage_.landmarkIds()) {
     auto pos =
-        vals.template At<typename G::Position>(sym::Key('L', lm_id));
+        vals.template At<typename G::Position>(sym::Key('L', lm_id.value()));
     lm_arr.push_back(G::landmarkToJson(lm_id, pos));
   }
   result["landmarks"] = lm_arr;

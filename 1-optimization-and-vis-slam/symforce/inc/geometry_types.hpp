@@ -12,6 +12,14 @@
 #include <symforce/opt/factor.h>
 #include <symforce/opt/values.h>
 
+#include <slam/core/strong_id.hpp>
+
+// -- Type-safe identifiers ------------------------------------------------
+struct PoseTag {};
+struct LandmarkTag {};
+using PoseId     = slam::core::StrongId<PoseTag, int>;
+using LandmarkId = slam::core::StrongId<LandmarkTag, int>;
+
 // -- Forward declarations for measurement structs -------------------------
 
 template <typename G> struct PriorMeasurement;
@@ -50,10 +58,10 @@ struct SE2 {
       sym::Values<double>& v, int index, const LandmarkMeas& m);
 
   /// @brief Serialize a pose to JSON.
-  static nlohmann::json poseToJson(int id, const Pose& pose);
+  static nlohmann::json poseToJson(PoseId id, const Pose& pose);
 
   /// @brief Serialize a landmark position to JSON.
-  static nlohmann::json landmarkToJson(int id, const Position& pos);
+  static nlohmann::json landmarkToJson(LandmarkId id, const Position& pos);
 };
 
 // =========================================================================
@@ -87,10 +95,10 @@ struct SE3 {
       sym::Values<double>& v, int index, const LandmarkMeas& m);
 
   /// @brief Serialize a pose to JSON.
-  static nlohmann::json poseToJson(int id, const Pose& pose);
+  static nlohmann::json poseToJson(PoseId id, const Pose& pose);
 
   /// @brief Serialize a landmark position to JSON.
-  static nlohmann::json landmarkToJson(int id, const Position& pos);
+  static nlohmann::json landmarkToJson(LandmarkId id, const Position& pos);
 };
 
 // =========================================================================
@@ -100,7 +108,7 @@ struct SE3 {
 /// @brief Prior factor measurement data.
 template <typename G>
 struct PriorMeasurement {
-  int pose_id;
+  PoseId pose_id;
   typename G::Pose prior_pose;
   typename G::PoseInfoMatrix info;
 };
@@ -108,8 +116,8 @@ struct PriorMeasurement {
 /// @brief Odometry (between) factor measurement data.
 template <typename G>
 struct BetweenMeasurement {
-  int id_from;
-  int id_to;
+  PoseId id_from;
+  PoseId id_to;
   typename G::Pose relative_pose;
   typename G::PoseInfoMatrix info;
 };
@@ -117,8 +125,8 @@ struct BetweenMeasurement {
 /// @brief Robust loop-closure factor measurement data.
 template <typename G>
 struct LoopClosureMeasurement {
-  int id_from;
-  int id_to;
+  PoseId id_from;
+  PoseId id_to;
   typename G::Pose relative_pose;
   typename G::PoseInfoMatrix info;
   double barron_alpha = -2.0;
@@ -128,8 +136,8 @@ struct LoopClosureMeasurement {
 /// @brief Landmark observation factor measurement data.
 template <typename G>
 struct LandmarkMeasurement {
-  int pose_id;
-  int landmark_id;
+  PoseId pose_id;
+  LandmarkId landmark_id;
   typename G::Position observation;
   typename G::LandmarkInfoMatrix info;
   double barron_alpha = -2.0;

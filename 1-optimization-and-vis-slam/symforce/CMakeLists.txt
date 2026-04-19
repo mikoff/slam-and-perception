@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.14)
 project(Week1Symforce)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(FMT_CONSTEVAL=)
 
 # Release build with -O3 by default
 if(NOT CMAKE_BUILD_TYPE)
@@ -40,4 +41,5 @@ target_link_libraries(pose_graph_optimizer PRIVATE symforce_opt nlohmann_json::n
 target_include_directories(pose_graph_optimizer PRIVATE
   ${CMAKE_SOURCE_DIR}/inc/gen
   ${CMAKE_SOURCE_DIR}/inc
+  ${CMAKE_SOURCE_DIR}/../slam-types/include
 )
