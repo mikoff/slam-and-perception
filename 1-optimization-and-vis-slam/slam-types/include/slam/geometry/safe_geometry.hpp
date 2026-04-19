@@ -134,9 +134,14 @@ template <typename PoseT, typename PointT, typename FA, typename FB, typename FC
     return TaggedPoint<PointT, FA>(GeometryTraits<PoseT>::template action<PointT>(tf.value(), pt.value()));
 }
 
-/// @brief Compute the relative transform between two poses sharing a reference frame.
-///
-/// between(T_{Ref←A}, T_{Ref←B}) = T_{A←B}
+/// @brief Computes the relative transformation between two Poses.
+/// Takes two entities that exist within the same Reference frame and computes
+/// the relative mathematical action required to move from Entity A to Entity B.
+/// Mathematically equivalent to: $T_{A \leftarrow B} = T_{Ref \leftarrow A}^{-1} * T_{Ref \leftarrow B}$
+/// @note The compilation will fail if the two poses do not share the exact same Reference Frame.
+/// @param poseA The starting state ($T_{Ref \leftarrow A}$).
+/// @param poseB The target state ($T_{Ref \leftarrow B}$).
+/// @return A transformation mapping points from Entity B to Entity A ($T_{A \leftarrow B}$).
 template <typename DataT, typename EntityA, typename EntityB, typename Reference>
 [[nodiscard]] constexpr auto between(const Pose<DataT, EntityA, Reference>& poseA,
                                      const Pose<DataT, EntityB, Reference>& poseB)
