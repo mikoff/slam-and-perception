@@ -28,5 +28,9 @@ RUN git clone --depth=1 --branch 4.3a0 https://github.com/borglab/gtsam.git /tmp
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
+# Install codebase-memory-mcp (dev tooling — belongs in image, not postCreateCommand)
+RUN curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh \
+    | bash -s -- --ui --skip-config --dir=/usr/local/bin
+
 RUN useradd -m -s /bin/bash devuser
 WORKDIR /workspace

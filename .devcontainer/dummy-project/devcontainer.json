@@ -6,6 +6,7 @@
     },
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "forwardPorts": [9749],
     "remoteUser": "devuser",
     "customizations": {
         "vscode": {
@@ -22,7 +23,10 @@
             }
         }
     },
-    "postCreateCommand": "cd dummy_project && uv sync && cd /workspace && PYTHON=/workspace/dummy_project/.venv/bin/python bash scripts/setup.sh",
+    "postCreateCommand": {
+        "uv-sync": "cd dummy_project && uv sync",
+        "mcp-setup": "cd /workspace && bash scripts/setup.sh"
+    },
     "remoteEnv": {
         "PATH": "/home/devuser/.local/bin:${containerEnv:PATH}"
     }
