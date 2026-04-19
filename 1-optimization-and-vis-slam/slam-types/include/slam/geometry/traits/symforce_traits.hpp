@@ -1,16 +1,14 @@
-/**
- * @file symforce_traits.hpp
- * @brief GeometryTraits specialization for symforce's sym::Pose2<Scalar>.
- *
- * Include this header when using safe_geometry.hpp with sym::Pose2d (or any
- * sym::Pose2<Scalar> instantiation).  The default traits assume lowercase
- * `inverse()`, but symforce uses `Inverse()`.
- *
- * @code
- * #include <slam/geometry/safe_geometry.hpp>
- * #include <slam/geometry/traits/symforce_traits.hpp>
- * @endcode
- */
+/// @file symforce_traits.hpp
+/// @brief GeometryTraits specialization for symforce's sym::Pose2<Scalar>.
+///
+/// Include this header when using safe_geometry.hpp with sym::Pose2d (or any
+/// sym::Pose2<Scalar> instantiation).  The default traits assume lowercase
+/// `inverse()`, but symforce uses `Inverse()`.
+///
+/// @code
+/// #include <slam/geometry/safe_geometry.hpp>
+/// #include <slam/geometry/traits/symforce_traits.hpp>
+/// @endcode
 
 #pragma once
 

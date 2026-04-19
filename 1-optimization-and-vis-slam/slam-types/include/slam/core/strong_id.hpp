@@ -1,44 +1,41 @@
-/**
- * @file strong_id.hpp
- * @brief Provides a strongly-typed ID wrapper using the Phantom Type parameter pattern.
- *
- * This header defines the `StrongId` template class, which is used to create
- * type-safe identifiers (e.g., PoseId, LandmarkId) that cannot be implicitly
- * mixed, preventing logic errors in complex graph operations.
- */
+/// @file strong_id.hpp
+/// @brief Provides a strongly-typed ID wrapper using the Phantom Type parameter pattern.
+///
+/// This header defines the `StrongId` template class, which is used to create
+/// type-safe identifiers (e.g., PoseId, LandmarkId) that cannot be implicitly
+/// mixed, preventing logic errors in complex graph operations.
 
 #pragma once
 
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <limits>
+#include <ostream>
+#include <type_traits> // For std::is_integral_v
+#include <compare>     // For std::strong_ordering (C++20)
 
 namespace slam {
 namespace core {
 
-/**
- * @brief A strongly typed wrapper for identifier values.
- *
- * @tparam Tag An empty struct used solely to differentiate types at compile time.
- * @tparam T The underlying integral type (defaults to uint64_t).
- */
+/// @brief A strongly typed wrapper for identifier values.
+///
+/// @tparam Tag An empty struct used solely to differentiate types at compile time.
+/// @tparam T The underlying integral type (defaults to uint64_t).
 template <typename Tag, typename T = uint64_t>
 class StrongId {
+    // Enforce that T is actually a number
+    static_assert(std::is_integral_v<T>, "StrongId underlying type must be an integral type.");
+    
 public:
     /// Expose the underlying integral type.
     using ValueType = T;
 
-    /**
-     * @brief Default constructor. Initializes the ID to an invalid state.
-     */
+    /// @brief Default constructor. Initializes the ID to an invalid state.
     constexpr StrongId() noexcept : value_(invalid_value()) {}
 
-    /**
-     * @brief Explicit constructor from an underlying value.
-     * @param value The raw identifier value.
-     * @note Explicit keyword prevents accidental conversions from raw integers.
-     */
+    /// @brief Explicit constructor from an underlying value.
+    /// @param value The raw identifier value.
+    /// @note Explicit keyword prevents accidental conversions from raw integers.
     constexpr explicit StrongId(T value) noexcept : value_(value) {}
 
     // Trivial copy and move semantics
@@ -47,36 +44,22 @@ public:
     constexpr StrongId& operator=(const StrongId&) noexcept = default;
     constexpr StrongId& operator=(StrongId&&) noexcept = default;
 
-    /**
-     * @brief Retrieves the underlying raw value.
-     * @return The raw identifier value.
-     */
-    constexpr T value() const noexcept { return value_; }
+    /// @brief Retrieves the underlying raw value.
+    /// @return The raw identifier value.
+    [[nodiscard]] constexpr T value() const noexcept { return value_; }
 
-    /**
-     * @brief Checks if the ID represents a valid entity.
-     * @return True if valid, false if uninitialized/invalid.
-     */
-    constexpr bool isValid() const noexcept { return value_ != invalid_value(); }
+    /// @brief Checks if the ID represents a valid entity.
+    /// @return True if valid, false if uninitialized/invalid.
+    [[nodiscard]] constexpr bool isValid() const noexcept { return value_ != invalid_value(); }
 
-    /**
-     * @brief Returns a canonical Invalid ID for this type.
-     * @return A StrongId initialized to the invalid state.
-     */
-    static constexpr StrongId Invalid() noexcept { return StrongId(invalid_value()); }
+    /// @brief Returns a canonical Invalid ID for this type.
+    /// @return A StrongId initialized to the invalid state.
+    [[nodiscard]] static constexpr StrongId Invalid() noexcept { return StrongId(invalid_value()); }
 
-    // --- Relational Operators ---
+    // This single line replaces all 6 comparison operators (==, !=, <, >, <=, >=)
+    [[nodiscard]] constexpr auto operator<=>(const StrongId&) const noexcept = default;
 
-    constexpr bool operator==(const StrongId& other) const noexcept { return value_ == other.value_; }
-    constexpr bool operator!=(const StrongId& other) const noexcept { return value_ != other.value_; }
-    constexpr bool operator<(const StrongId& other) const noexcept  { return value_ < other.value_; }
-    constexpr bool operator>(const StrongId& other) const noexcept  { return value_ > other.value_; }
-    constexpr bool operator<=(const StrongId& other) const noexcept { return value_ <= other.value_; }
-    constexpr bool operator>=(const StrongId& other) const noexcept { return value_ >= other.value_; }
-
-    /**
-     * @brief Stream output operator for logging and debugging.
-     */
+    /// @brief Stream output operator for logging and debugging.
     friend std::ostream& operator<<(std::ostream& os, const StrongId& id) {
         if (id.isValid()) {
             os << id.value_;
@@ -89,11 +72,9 @@ public:
 private:
     T value_;
 
-    /**
-     * @brief Defines the sentinel value representing an invalid state.
-     * @return The maximum possible value for type T.
-     */
-    static constexpr T invalid_value() noexcept {
+    /// @brief Defines the sentinel value representing an invalid state.
+    /// @return The maximum possible value for type T.
+    [[nodiscard]] static constexpr T invalid_value() noexcept {
         return std::numeric_limits<T>::max();
     }
 };
@@ -104,14 +85,12 @@ private:
 // --- Hash Specialization ---
 namespace std {
 
-/**
- * @brief Specialization of std::hash for slam::core::StrongId.
- *
- * Allows StrongId to be used seamlessly as keys in unordered containers.
- */
+/// @brief Specialization of std::hash for slam::core::StrongId.
+///
+/// Allows StrongId to be used seamlessly as keys in unordered containers.
 template <typename Tag, typename T>
 struct hash<slam::core::StrongId<Tag, T>> {
-    size_t operator()(const slam::core::StrongId<Tag, T>& id) const noexcept {
+    [[nodiscard]] size_t operator()(const slam::core::StrongId<Tag, T>& id) const noexcept {
         return std::hash<T>{}(id.value());
     }
 };

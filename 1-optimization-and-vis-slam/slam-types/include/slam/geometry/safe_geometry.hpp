@@ -1,10 +1,8 @@
-/**
- * @file safe_geometry.hpp
- * @brief Compile-time safe geometry wrappers using Tagged Types and Inheritance.
- *
- * Provides Transform, Pose, and TaggedPoint templates that enforce coordinate
- * frame consistency at compile time via phantom frame-tag types.
- */
+/// @file safe_geometry.hpp
+/// @brief Compile-time safe geometry wrappers using Tagged Types and Inheritance.
+///
+/// Provides Transform, Pose, and TaggedPoint templates that enforce coordinate
+/// frame consistency at compile time via phantom frame-tag types.
 
 #pragma once
 
