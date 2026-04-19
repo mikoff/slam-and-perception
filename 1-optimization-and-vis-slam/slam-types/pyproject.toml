@@ -1,0 +1,9 @@
+[project]
+name = "slam-types"
+version = "0.1.0"
+description = "Type-safe SLAM primitives: StrongId identifiers and compile-time safe geometry"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ipykernel",
+]

@@ -7,10 +7,10 @@ RUN apt-get update && apt-get install -y \
     gdb \
     git \
     python3 \
-    docker.io \
+    libgmp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Build and install GTSAM 4.3a0 (C++ only, no Boost)
+# Build and install GTSAM 4.3a0 (C++ only, no Boost) for integration tests
 RUN git clone --depth=1 --branch 4.3a0 https://github.com/borglab/gtsam.git /tmp/gtsam \
  && cmake -S /tmp/gtsam -B /tmp/gtsam-build \
         -DCMAKE_BUILD_TYPE=Release \

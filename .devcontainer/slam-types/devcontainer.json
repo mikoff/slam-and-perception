@@ -1,8 +1,8 @@
 {
-    "name": "gtsam (SLAM)",
+    "name": "slam-types (header-only library)",
     "build": {
         "context": "../..",
-        "dockerfile": "../../1-optimization-and-vis-slam/gtsam/Dockerfile"
+        "dockerfile": "../../1-optimization-and-vis-slam/slam-types/Dockerfile"
     },
     "mounts": ["source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"],
     "features": {
@@ -24,14 +24,14 @@
                 "ms-toolsai.jupyter"
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/workspace/1-optimization-and-vis-slam/gtsam/.venv/bin/python",
-                "python.venvPath": "/workspace/1-optimization-and-vis-slam/gtsam",
-                "cmake.sourceDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/gtsam",
-                "cmake.buildDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/gtsam/build"
+                "python.defaultInterpreterPath": "/workspace/1-optimization-and-vis-slam/slam-types/.venv/bin/python",
+                "python.venvPath": "/workspace/1-optimization-and-vis-slam/slam-types",
+                "cmake.sourceDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/slam-types",
+                "cmake.buildDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/slam-types/build"
             }
         }
     },
-    "postCreateCommand": "cd 1-optimization-and-vis-slam/gtsam && uv sync && cd /workspace && bash scripts/setup.sh",
+    "postCreateCommand": "cd 1-optimization-and-vis-slam/slam-types && uv sync && cd /workspace && bash scripts/setup.sh",
     "remoteEnv": {
         "PATH": "/home/devuser/.local/bin:${containerEnv:PATH}"
     }

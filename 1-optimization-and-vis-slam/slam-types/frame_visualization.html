@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SLAM Geometry: Horizontal Interactive Model</title>
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --panel-bg: #ffffff;
+            --text-main: #334155;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+            --accent: #3b82f6;
+            
+            /* Graph Colors */
+            --map-color: #334155;    /* Slate */
+            --veh-color: #f97316;    /* Orange */
+            --point-color: #4f46e5;  /* Indigo */
+            --res-color: #10b981;    /* Emerald */
+            --trans-color: #e11d48;  /* Rose */
+        }
+
+        body { 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background-color: var(--bg-color); 
+            color: var(--text-main);
+            margin: 0; 
+            padding: 40px 20px; 
+            display: flex;
+            justify-content: center;
+        }
+        
+        .container { 
+            max-width: 1200px; 
+            width: 100%;
+            background: var(--panel-bg); 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.05), 0 8px 10px -6px rgba(0,0,0,0.01); 
+        }
+
+        h2 { margin-top: 0; color: var(--text-main); font-weight: 600; text-align: center; margin-bottom: 30px;}
+
+        .controls { 
+            display: flex; 
+            gap: 25px; 
+            margin-bottom: 30px; 
+            padding: 20px; 
+            background: #f1f5f9; 
+            border-radius: 8px; 
+            flex-wrap: wrap; 
+            justify-content: center;
+            border: 1px solid var(--border);
+        }
+
+        .control-group { 
+            display: flex; 
+            flex-direction: column; 
+            gap: 8px; 
+            min-width: 160px; 
+        }
+
+        .control-group label {
+            font-size: 0.85em;
+            font-weight: 600;
+            color: var(--text-light);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .control-group span { color: var(--accent); font-weight: 700; }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px; width: 16px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px;
+            cursor: pointer;
+            background: #cbd5e1;
+            border-radius: 2px;
+        }
+
+        .panels { 
+            display: flex; 
+            flex-direction: row; 
+            gap: 30px; 
+            justify-content: space-between; 
+        }
+
+        .panel { 
+            flex: 1; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+        }
+
+        canvas { 
+            border: 1px solid var(--border); 
+            background-color: #ffffff; 
+            width: 100%; 
+            max-width: 350px; 
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+        }
+
+        .title { font-weight: 600; margin: 15px 0 5px 0; font-size: 1.1em; color: var(--text-main); }
+        .desc { font-size: 0.85em; color: var(--text-light); text-align: center; height: 40px; line-height: 1.4; }
+
+        .math { 
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; 
+            font-size: 1.05em; 
+            background: #f8fafc; 
+            padding: 20px; 
+            width: 100%; 
+            box-sizing: border-box; 
+            border-radius: 8px; 
+            margin-top: 30px;
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            line-height: 1.6;
+        }
+
+        @media (max-width: 900px) {
+            .panels { flex-direction: column; align-items: center; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>SLAM Geometry: Poses & Transforms</h2>
+    
+    <div class="controls">
+        <div class="control-group">
+            <label>Vehicle X (t_x): <span id="valX">4</span></label>
+            <input type="range" id="sliderX" min="-8" max="8" step="0.5" value="4">
+        </div>
+        <div class="control-group">
+            <label>Vehicle Y (t_y): <span id="valY">3</span></label>
+            <input type="range" id="sliderY" min="-8" max="8" step="0.5" value="3">
+        </div>
+        <div class="control-group">
+            <label>Rotation CCW (θ): <span id="valTheta">45</span>°</label>
+            <input type="range" id="sliderTheta" min="0" max="360" step="5" value="45">
+        </div>
+        <div class="control-group">
+            <label>Local Point X (p_veh_x): <span id="valPX">2</span></label>
+            <input type="range" id="sliderPX" min="-5" max="5" step="0.5" value="2">
+        </div>
+        <div class="control-group">
+            <label>Local Point Y (p_veh_y): <span id="valPY">0</span></label>
+            <input type="range" id="sliderPY" min="-5" max="5" step="0.5" value="0">
+        </div>
+    </div>
+
+    <div class="panels">
+        <div class="panel">
+            <canvas id="canvas1"></canvas>
+            <div class="title">Initial Aligned State</div>
+            <div class="desc">Map and Vehicle frames overlap perfectly.<br>T_map←veh = I</div>
+        </div>
+
+        <div class="panel">
+            <canvas id="canvas2"></canvas>
+            <div class="title">The Pose</div>
+            <div class="desc">Rotate CCW around origin (θ),<br>then Translate (t).</div>
+        </div>
+
+        <div class="panel">
+            <canvas id="canvas3"></canvas>
+            <div class="title">Reprojection</div>
+            <div class="desc">Project to Virtual Axes (R * p_veh),<br>then add shift (t).</div>
+        </div>
+    </div>
+
+    <div class="math" id="mathOutput">p_map = R * p_veh + t</div>
+</div>
+
+<script>
+    const scale = 16; // pixels per unit
+    const centerOffset = 175; // Logical center of 350x350 canvas
+
+    // Colors matching CSS
+    const cMap = '#334155';
+    const cVeh = '#f97316';
+    const cPoint = '#4f46e5';
+    const cRes = '#10b981';
+    const cTrans = '#e11d48';
+
+    function getInputs() {
+        return {
+            x: parseFloat(document.getElementById('sliderX').value),
+            y: parseFloat(document.getElementById('sliderY').value),
+            theta: parseFloat(document.getElementById('sliderTheta').value) * Math.PI / 180,
+            px: parseFloat(document.getElementById('sliderPX').value),
+            py: parseFloat(document.getElementById('sliderPY').value),
+        };
+    }
+
+    function updateLabels() {
+        document.getElementById('valX').innerText = document.getElementById('sliderX').value;
+        document.getElementById('valY').innerText = document.getElementById('sliderY').value;
+        document.getElementById('valTheta').innerText = document.getElementById('sliderTheta').value;
+        document.getElementById('valPX').innerText = document.getElementById('sliderPX').value;
+        document.getElementById('valPY').innerText = document.getElementById('sliderPY').value;
+    }
+
+    // HiDPI Canvas Setup
+    function setupCanvas(canvasId) {
+        const canvas = document.getElementById(canvasId);
+        const ctx = canvas.getContext('2d');
+        
+        // CSS size
+        const size = 350;
+        canvas.style.width = size + "px";
+        canvas.style.height = size + "px";
+
+        // Device Pixel Ratio for sharp rendering
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = size * dpr;
+        canvas.height = size * dpr;
+        
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, size, size);
+        
+        ctx.save();
+        ctx.translate(centerOffset, centerOffset);
+        ctx.scale(1, -1); // Standard Cartesian (Y up)
+        
+        drawGrid(ctx);
+        return ctx;
+    }
+
+    function drawGrid(ctx) {
+        ctx.strokeStyle = '#f1f5f9';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for(let i = -10; i <= 10; i++) {
+            ctx.moveTo(i * scale, -10 * scale); ctx.lineTo(i * scale, 10 * scale);
+            ctx.moveTo(-10 * scale, i * scale); ctx.lineTo(10 * scale, i * scale);
+        }
+        ctx.stroke();
+        
+        // Subtle main axes
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.beginPath();
+        ctx.moveTo(0, -10 * scale); ctx.lineTo(0, 10 * scale);
+        ctx.moveTo(-10 * scale, 0); ctx.lineTo(10 * scale, 0);
+        ctx.stroke();
+    }
+
+    // Helper to draw text with a subtle background so it doesn't clash with grid
+    function drawLabel(ctx, text, x, y, color, offsetX = 0, offsetY = 0) {
+        ctx.save();
+        ctx.scale(1, -1); // Unflip Y for text
+        ctx.font = "bold 11px sans-serif";
+        const textWidth = ctx.measureText(text).width;
+        
+        const finalX = (x * scale) + offsetX;
+        const finalY = (-y * scale) + offsetY;
+
+        // White halo/background for legibility
+        ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+        ctx.fillRect(finalX - textWidth/2 - 2, finalY - 6, textWidth + 4, 14);
+        
+        ctx.fillStyle = color;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(text, finalX, finalY);
+        ctx.restore();
+    }
+
+    function drawArrow(ctx, fromX, fromY, toX, toY, color, width=2, dashed=false) {
+        const headlen = 8;
+        const dx = toX - fromX;
+        const dy = toY - fromY;
+        const angle = Math.atan2(dy, dx);
+        
+        // Don't draw if length is 0
+        if (Math.abs(dx) < 0.01 && Math.abs(dy) < 0.01) return;
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        if (dashed) ctx.setLineDash([4, 4]); else ctx.setLineDash([]);
+        ctx.moveTo(fromX * scale, fromY * scale);
+        ctx.lineTo(toX * scale, toY * scale);
+        ctx.stroke();
+        
+        // Arrow head
+        ctx.beginPath();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.moveTo(toX * scale, toY * scale);
+        ctx.lineTo((toX * scale) - headlen * Math.cos(angle - Math.PI / 6), (toY * scale) - headlen * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo((toX * scale) - headlen * Math.cos(angle + Math.PI / 6), (toY * scale) - headlen * Math.sin(angle + Math.PI / 6));
+        ctx.fill();
+    }
+
+    function drawAxes(ctx, ox, oy, theta, color, dashed=false, labelPrefix="") {
+        const cosT = Math.cos(theta);
+        const sinT = Math.sin(theta);
+        const len = 4; // Axis length
+        
+        drawArrow(ctx, ox, oy, ox + len*cosT, oy + len*sinT, color, 2.5, dashed); // X axis
+        drawArrow(ctx, ox, oy, ox - len*sinT, oy + len*cosT, color, 2.5, dashed); // Y axis
+
+        if (labelPrefix) {
+            drawLabel(ctx, labelPrefix + "x", ox + (len+0.5)*cosT, oy + (len+0.5)*sinT, color);
+            drawLabel(ctx, labelPrefix + "y", ox - (len+0.5)*sinT, oy + (len+0.5)*cosT, color);
+        }
+    }
+
+    function drawPoint(ctx, x, y, color, label="") {
+        ctx.beginPath();
+        ctx.arc(x * scale, y * scale, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+
+        if (label) {
+            drawLabel(ctx, label, x, y, color, 0, -15);
+        }
+    }
+
+    function draw() {
+        updateLabels();
+        const data = getInputs();
+
+        // --- Panel 1: Aligned ---
+        const ctx1 = setupCanvas('canvas1');
+        drawAxes(ctx1, 0, 0, 0, cMap, false, "M"); // Map axes
+        drawAxes(ctx1, 0, 0, 0, cVeh, false, "V"); // Vehicle axes
+        drawLabel(ctx1, "Om, Ov", 0, 0, "#000", -20, 15);
+        ctx1.restore();
+
+        // --- Panel 2: Pose ---
+        const ctx2 = setupCanvas('canvas2');
+        drawAxes(ctx2, 0, 0, 0, cMap, false, "M"); // Map axes
+        drawLabel(ctx2, "Om", 0, 0, cMap, -15, 15);
+        
+        drawArrow(ctx2, 0, 0, data.x, data.y, cTrans, 2.5); // t
+        drawLabel(ctx2, "t", data.x/2, data.y/2, cTrans, 10, -10);
+
+        drawAxes(ctx2, data.x, data.y, data.theta, cVeh, false, "V"); // Rotated axes
+        drawLabel(ctx2, "Ov", data.x, data.y, cVeh, -15, 15);
+        
+        // Rotation arc
+        if (data.theta > 0) {
+            ctx2.beginPath();
+            ctx2.arc(data.x * scale, data.y * scale, 28, 0, data.theta);
+            ctx2.strokeStyle = cTrans;
+            ctx2.lineWidth = 2;
+            ctx2.stroke();
+            // Arrowhead for arc
+            const arrowX = data.x * scale + 28 * Math.cos(data.theta);
+            const arrowY = data.y * scale + 28 * Math.sin(data.theta);
+            ctx2.beginPath();
+            ctx2.fillStyle = cTrans;
+            ctx2.arc(arrowX, arrowY, 4, 0, Math.PI*2);
+            ctx2.fill();
+            
+            drawLabel(ctx2, "θ", data.x + 1.2*Math.cos(data.theta/2), data.y + 1.2*Math.sin(data.theta/2), cTrans);
+        }
+        ctx2.restore();
+
+        // --- Panel 3: Reprojection ---
+        const ctx3 = setupCanvas('canvas3');
+        drawAxes(ctx3, 0, 0, 0, cMap); // Map axes
+        drawLabel(ctx3, "Om", 0, 0, cMap, -15, 15);
+
+        // Math
+        const rX = data.px * Math.cos(data.theta) - data.py * Math.sin(data.theta);
+        const rY = data.px * Math.sin(data.theta) + data.py * Math.cos(data.theta);
+        const mapX = data.x + rX;
+        const mapY = data.y + rY;
+
+        // Virtual Axes (Dashed Map-aligned at vehicle origin)
+        drawAxes(ctx3, data.x, data.y, 0, '#94a3b8', true); 
+        drawLabel(ctx3, "Ov", data.x, data.y, cVeh, -15, 15);
+
+        // Vehicle Axes
+        drawAxes(ctx3, data.x, data.y, data.theta, cVeh); 
+
+        // Vectors
+        drawArrow(ctx3, 0, 0, data.x, data.y, cTrans, 2, true); // t (dashed)
+        drawLabel(ctx3, "t", data.x/2, data.y/2, cTrans, 10, -10);
+
+        drawArrow(ctx3, data.x, data.y, mapX, mapY, cRes, 2.5); // R*p_veh
+        drawLabel(ctx3, "R*p_veh", data.x + rX/2, data.y + rY/2, cRes, -15, -10);
+
+        drawArrow(ctx3, 0, 0, mapX, mapY, cRes, 3); // Final p_map vector
+        drawLabel(ctx3, "p_map", mapX/2, mapY/2, cRes, 15, 10);
+
+        // Projection lines to Virtual Axes
+        ctx3.beginPath();
+        ctx3.setLineDash([2, 4]);
+        ctx3.strokeStyle = cPoint;
+        ctx3.moveTo(data.x * scale, data.y * scale);
+        ctx3.lineTo(mapX * scale, mapY * scale);
+        ctx3.stroke();
+
+        // Local Point
+        drawPoint(ctx3, mapX, mapY, cPoint, "p_veh / p_map");
+        ctx3.restore();
+
+        // --- Live Math Output ---
+        document.getElementById('mathOutput').innerHTML = 
+            `<strong style="color:var(--text-main)">Calculation: p_map = R * p_veh + t</strong><br><br>` +
+            `<span style="color:var(--point-color)">p_veh</span> = [${data.px.toFixed(1)}, ${data.py.toFixed(1)}] (Local)<br>` +
+            `<span style="color:var(--trans-color)">t</span> = [${data.x.toFixed(1)}, ${data.y.toFixed(1)}] (Translation)<br>` +
+            `<span style="color:var(--res-color)">R * p_veh</span> = [${rX.toFixed(2)}, ${rY.toFixed(2)}] (Rotated to Virtual Axes)<br><br>` +
+            `<strong><span style="color:var(--res-color)">p_map</span> = [${mapX.toFixed(2)}, ${mapY.toFixed(2)}] (Global)</strong>`;
+    }
+
+    // Attach listeners
+    document.querySelectorAll('input').forEach(input => {
+        input.addEventListener('input', draw);
+    });
+
+    // Initial draw
+    draw();
+</script>
+
+</body>
+</html>
