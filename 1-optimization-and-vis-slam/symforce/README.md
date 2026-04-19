@@ -224,7 +224,7 @@ Files are downloaded to `/workspace/data/iSAM2/` and skipped if already present.
 ```bash
 cd /workspace/1-optimization-and-vis-slam/symforce
 source .venv/bin/activate
-cd build && cmake --build . -j$(nproc) && cd ..
+cmake -B build && cmake --build build -j$(nproc)
 ```
 
 ### 3. Run
