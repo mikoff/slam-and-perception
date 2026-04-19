@@ -11,8 +11,7 @@ Uses [GTSAM](https://gtsam.org/) to build and optimize a 2D pose graph with odom
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
 ./build/gtsam_example
 ```
 
