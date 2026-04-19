@@ -89,6 +89,10 @@ template <typename DataT, typename EntityFrame, typename ReferenceFrame>
 class Pose : public Transform<DataT, ReferenceFrame, EntityFrame> {
 public:
     using Transform<DataT, ReferenceFrame, EntityFrame>::Transform;
+
+    /// @brief Allow seamless promotion from a matching Transform back to a Pose.
+    constexpr Pose(const Transform<DataT, ReferenceFrame, EntityFrame>& tf) 
+        : Transform<DataT, ReferenceFrame, EntityFrame>(tf) {}
 };
 
 // ============================================================================

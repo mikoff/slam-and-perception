@@ -45,6 +45,14 @@ TEST(SymforceIntegration, PoseComposition) {
 
     EXPECT_NEAR(T_map_sens.value().Position().x(), 6.0, 1e-9);
     EXPECT_NEAR(T_map_sens.value().Position().y(), 0.0, 1e-9);
+
+    Pose2_MV T_a(make_pose(1.0, 2.0, std::numbers::pi / 4.0));
+    Pose2_MV T_b(make_pose(3.0, 4.0, std::numbers::pi / 4.0));
+    auto T_a_b = slam::geometry::between(T_a, T_b);
+    Pose2_MV T_b_expected = T_a * T_a_b;
+    EXPECT_NEAR(T_b.value().Position().x(), T_b_expected.value().Position().x(), 1e-9);
+    EXPECT_NEAR(T_b.value().Position().y(), T_b_expected.value().Position().y(), 1e-9);
+    EXPECT_NEAR(T_b.value().Rotation().ToTangent()[0], T_b_expected.value().Rotation().ToTangent()[0], 1e-9);
 }
 
 TEST(SymforceIntegration, PointAction) {

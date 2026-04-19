@@ -30,7 +30,7 @@ By doing this we guarantee that all the values become unitless and have the same
  $$\mathbf{T}_{\text{world} \leftarrow b} = \mathbf{T}_{\text{world} \leftarrow a} \mathbf{T}_{a \leftarrow b}$$
 
   pose composition.
-  - _Code variables_: `T_wb = T_wb * T_ab`
+  - _Code variables_: `T_wb = T_wa * T_ab`
 ---
 
  $$\mathbf{T}_{ab} = \mathbf{T}_a^{-1} \mathbf{T}_b$$
@@ -88,9 +88,11 @@ $$\mathbf{b} \ominus \mathbf{a} \triangleq \log(\mathbf{a}^{-1} \mathbf{b})^\vee
 
 ## Whitening
 Factors are directly scaled inside the residual function by multiplying the raw error vector by the square-root information matrix $\mathbf{W}$.
+
 $$\mathbf{e}_{\text{whitened}} = \mathbf{W} \mathbf{e}_{\text{raw}}$$
 
 This ensures the optimizer minimizes the Mahalanobis distance:
+
 $$\|\mathbf{W} \mathbf{e}_{\text{raw}}\|^2_2 = \mathbf{e}_{\text{raw}}^T \Omega \mathbf{e}_{\text{raw}}$$
 
 ## Robustification
