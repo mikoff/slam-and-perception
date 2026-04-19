@@ -15,8 +15,6 @@ add_subdirectory(
 )
 
 add_executable(gtsam_example src/main.cpp)
-add_executable(safe_types_example src/test_gtsam_geometry.cpp)
 
-target_link_libraries(gtsam_example PRIVATE gtsam)
-target_link_libraries(safe_types_example PRIVATE gtsam slam_types)
+target_link_libraries(gtsam_example PRIVATE gtsam slam_types)
 
