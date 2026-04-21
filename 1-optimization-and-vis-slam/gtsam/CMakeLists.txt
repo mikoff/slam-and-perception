@@ -5,16 +5,134 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-find_package(GTSAM REQUIRED)
+include(FetchContent)
 
-# Consume slam-types header-only library from sibling directory
+# ---------------------------------------------------------------------------
+# System dependencies
+# ---------------------------------------------------------------------------
+find_package(GTSAM REQUIRED)
+find_package(Protobuf REQUIRED)
+
+# ---------------------------------------------------------------------------
+# FetchContent dependencies
+# ---------------------------------------------------------------------------
+
+# MCAP C++ — header-only, no CMakeLists.txt in the repo
+FetchContent_Declare(
+    mcap
+    GIT_REPOSITORY https://github.com/foxglove/mcap.git
+    GIT_TAG        releases/cpp/v2.1.3
+)
+FetchContent_MakeAvailable(mcap)
+
+add_library(mcap INTERFACE)
+target_include_directories(mcap INTERFACE
+    ${mcap_SOURCE_DIR}/cpp/mcap/include
+)
+
+# nlohmann/json
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+)
+FetchContent_MakeAvailable(json)
+
+# ---------------------------------------------------------------------------
+# Sibling: slam-types (header-only)
+# ---------------------------------------------------------------------------
 add_subdirectory(
     ${CMAKE_CURRENT_SOURCE_DIR}/../slam-types
     ${CMAKE_CURRENT_BINARY_DIR}/slam-types
     EXCLUDE_FROM_ALL
 )
 
+# ---------------------------------------------------------------------------
+# Target: gtsam_example (existing pose-graph demo)
+# ---------------------------------------------------------------------------
 add_executable(gtsam_example src/main.cpp)
-
 target_link_libraries(gtsam_example PRIVATE gtsam slam_types)
+
+# ---------------------------------------------------------------------------
+# Target: nuscenes_loader
+# ---------------------------------------------------------------------------
+
+# --- Proto generation from MCAP at build time ---
+# The Python script extracts .proto from MCAP FileDescriptorSets, then runs
+# protoc to produce .pb.h / .pb.cc.  A stamp file tracks completion.
+set(MCAP_DATA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../data/nuscenes/mcap)
+set(MCAP_SAMPLE   ${MCAP_DATA_DIR}/NuScenes-v1.0-mini-scene-0061.mcap)
+set(PROTO_DIR     ${CMAKE_CURRENT_BINARY_DIR}/schemas)
+set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/proto-gen)
+set(PROTO_STAMP   ${CMAKE_CURRENT_BINARY_DIR}/proto-gen.stamp)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
+add_custom_command(
+    OUTPUT ${PROTO_STAMP}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_and_compile_protos.py
+            ${MCAP_SAMPLE}
+            ${PROTO_DIR}
+            ${PROTO_GEN_DIR}
+            ${Protobuf_PROTOC_EXECUTABLE}
+    COMMAND ${CMAKE_COMMAND} -E touch ${PROTO_STAMP}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_and_compile_protos.py
+    COMMENT "Extracting protobuf schemas from MCAP and compiling to C++"
+    VERBATIM
+)
+
+add_custom_target(generate_protos DEPENDS ${PROTO_STAMP})
+
+# Glob the generated .pb.cc after the custom command has run.
+# On the first build the directory won't exist yet, so we list the known
+# outputs explicitly.  These match the foxglove schema set in NuScenes MCAP.
+set(_fg ${PROTO_GEN_DIR}/foxglove)
+set(_gp ${PROTO_GEN_DIR}/google/protobuf)
+set(PROTO_SRCS
+    ${_fg}/ArrowPrimitive.pb.cc      ${_fg}/CameraCalibration.pb.cc
+    ${_fg}/CircleAnnotation.pb.cc     ${_fg}/Color.pb.cc
+    ${_fg}/CompressedImage.pb.cc      ${_fg}/CubePrimitive.pb.cc
+    ${_fg}/CylinderPrimitive.pb.cc    ${_fg}/FrameTransform.pb.cc
+    ${_fg}/Grid.pb.cc                 ${_fg}/ImageAnnotations.pb.cc
+    ${_fg}/KeyValuePair.pb.cc         ${_fg}/LinePrimitive.pb.cc
+    ${_fg}/LocationFix.pb.cc          ${_fg}/ModelPrimitive.pb.cc
+    ${_fg}/PackedElementField.pb.cc   ${_fg}/Point2.pb.cc
+    ${_fg}/Point3.pb.cc               ${_fg}/PointCloud.pb.cc
+    ${_fg}/PointsAnnotation.pb.cc     ${_fg}/Pose.pb.cc
+    ${_fg}/PoseInFrame.pb.cc          ${_fg}/Quaternion.pb.cc
+    ${_fg}/SceneEntity.pb.cc          ${_fg}/SceneEntityDeletion.pb.cc
+    ${_fg}/SceneUpdate.pb.cc          ${_fg}/SpherePrimitive.pb.cc
+    ${_fg}/TextAnnotation.pb.cc       ${_fg}/TextPrimitive.pb.cc
+    ${_fg}/TriangleListPrimitive.pb.cc ${_fg}/Vector2.pb.cc
+    ${_fg}/Vector3.pb.cc
+    ${_gp}/duration.pb.cc             ${_gp}/timestamp.pb.cc
+)
+
+# Mark generated sources so CMake doesn't complain they're missing at
+# configure time.
+set_source_files_properties(${PROTO_SRCS} PROPERTIES GENERATED TRUE)
+
+add_executable(nuscenes_loader
+    src/nuscenes_main.cpp
+    src/nuscenes_mcap_loader.cpp
+    ${PROTO_SRCS}
+)
+
+add_dependencies(nuscenes_loader generate_protos)
+
+target_include_directories(nuscenes_loader PRIVATE
+    ${PROTO_GEN_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(nuscenes_loader PRIVATE
+    mcap
+    nlohmann_json::nlohmann_json
+    protobuf::libprotobuf
+    slam_types
+    gtsam
+    lz4
+    zstd
+)
 

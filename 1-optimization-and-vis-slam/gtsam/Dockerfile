@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     gdb \
     git \
+    protobuf-compiler \
+    libprotobuf-dev \
+    liblz4-dev \
+    libzstd-dev \
     python3 \
     python3-dev \
     python3-pip \
@@ -14,8 +18,8 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Build-time Python deps for GTSAM wrapper generation
-RUN pip3 install --break-system-packages pyparsing numpy setuptools wheel
+# Build-time Python deps for GTSAM wrapper generation + MCAP proto extraction
+RUN pip3 install --break-system-packages pyparsing numpy setuptools wheel mcap protobuf
 
 # Build and install GTSAM develop (C++ + Python bindings)
 RUN git clone --depth=1 --branch develop https://github.com/borglab/gtsam.git /tmp/gtsam \

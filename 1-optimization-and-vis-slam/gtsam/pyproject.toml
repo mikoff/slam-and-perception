@@ -9,6 +9,8 @@ dependencies = [
     "numpy",
     "matplotlib>=3.10",
     "ipykernel",
+    "mcap",
+    "protobuf",
 ]
 
 [tool.uv]
