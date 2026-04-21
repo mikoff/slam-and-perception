@@ -5,7 +5,7 @@ description = "GTSAM factor graph optimization project"
 readme = "README.md"
 requires-python = "==3.13.*"
 dependencies = [
-    "gtsam==4.3a0",
+    "gtsam==4.3a1",
     "numpy",
     "matplotlib>=3.10",
     "ipykernel",
@@ -13,3 +13,4 @@ dependencies = [
 
 [tool.uv]
 prerelease = "allow"
+find-links = ["/opt/wheels"]
