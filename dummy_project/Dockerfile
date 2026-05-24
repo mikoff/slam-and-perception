@@ -3,6 +3,10 @@ FROM debian:trixie-slim
 # Install C++ build system and tools
 RUN apt-get update && apt-get install -y \
     build-essential \
+    clangd \
+    clang-format \
+    clang-tidy \
+    cmake \
     curl \
     gdb \
     git \

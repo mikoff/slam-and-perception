@@ -1,0 +1,65 @@
+# Root clangd configuration for multi-project workspace
+# Per-project CompilationDatabase paths route each subproject to its build dir.
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - cppcoreguidelines-*
+      - google-*
+      - modernize-*
+      - performance-*
+      - readability-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - cppcoreguidelines-avoid-magic-numbers
+      - readability-magic-numbers
+  UnusedIncludes: Strict
+
+---
+
+# Treat .inl files as C++ headers (avoids "not part of any TU" errors)
+If:
+  PathMatch: .*\.inl
+CompileFlags:
+  Add: [-xc++-header]
+
+---
+
+# Treat .hpp files as C++ headers when opened standalone
+If:
+  PathMatch: .*\.hpp
+CompileFlags:
+  Add: [-xc++-header]
+
+---
+
+# gtsam project
+If:
+  PathMatch: 1-optimization-and-vis-slam/gtsam/.*
+CompileFlags:
+  CompilationDatabase: 1-optimization-and-vis-slam/gtsam/build
+
+---
+
+# slam-types project
+If:
+  PathMatch: 1-optimization-and-vis-slam/slam-types/.*
+CompileFlags:
+  CompilationDatabase: 1-optimization-and-vis-slam/slam-types/build
+
+---
+
+# symforce project
+If:
+  PathMatch: 1-optimization-and-vis-slam/symforce/.*
+CompileFlags:
+  CompilationDatabase: 1-optimization-and-vis-slam/symforce/build
+
+---
+
+# dummy project
+If:
+  PathMatch: dummy_project/.*
+CompileFlags:
+  CompilationDatabase: dummy_project/build

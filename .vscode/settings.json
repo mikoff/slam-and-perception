@@ -1,0 +1,32 @@
+{
+    "github.copilot.chat.anthropic.tools.websearch.maxUses": 20,
+    "chat.agent.maxRequests": 500,
+    // ─── Disable cpptools IntelliSense (clangd takes over) ───────────────
+    "C_Cpp.intelliSenseEngine": "disabled",
+    // ─── clangd configuration ────────────────────────────────────────────
+    "clangd.path": "clangd",
+    "clangd.arguments": [
+        "--background-index",
+        "--clang-tidy",
+        "--header-insertion=iwyu",
+        "--completion-style=detailed",
+        "--function-arg-placeholders",
+        "--fallback-style=Google"
+    ],
+    // ─── Format on save ──────────────────────────────────────────────────
+    "editor.formatOnSave": true,
+    "editor.formatOnType": true,
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.formatOnSave": true
+    },
+    "[c]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.formatOnSave": true
+    },
+    // ─── File associations for .inl files ────────────────────────────────
+    "files.associations": {
+        "*.inl": "cpp",
+        "*.hpp": "cpp"
+    }
+}
