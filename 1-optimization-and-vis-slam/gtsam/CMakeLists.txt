@@ -56,10 +56,10 @@ add_subdirectory(
 )
 
 # ---------------------------------------------------------------------------
-# Target: gtsam_example (existing pose-graph demo)
+# Target: gtsam_example (existing pose-graph demo) - disabled, src/main.cpp removed
 # ---------------------------------------------------------------------------
-add_executable(gtsam_example src/main.cpp)
-target_link_libraries(gtsam_example PRIVATE gtsam slam_types)
+# add_executable(gtsam_example src/main.cpp)
+# target_link_libraries(gtsam_example PRIVATE gtsam slam_types)
 
 # ---------------------------------------------------------------------------
 # Target: nuscenes_loader
@@ -138,6 +138,38 @@ target_include_directories(nuscenes_loader PRIVATE
 )
 
 target_link_libraries(nuscenes_loader PRIVATE
+    mcap
+    nlohmann_json::nlohmann_json
+    protobuf::libprotobuf
+    slam_types
+    gtsam
+    small_gicp
+    lz4
+    zstd
+)
+
+# ---------------------------------------------------------------------------
+# Target: nufuse (refactored pipeline)
+# ---------------------------------------------------------------------------
+add_executable(nufuse
+    src/main_nufuse.cpp
+    src/io/mcap_loader.cpp
+    src/processing/geo_utils.cpp
+    src/processing/lidar_odometry.cpp
+    src/processing/measurement_processor.cpp
+    src/graph/builder.cpp
+    src/results/optimizer.cpp
+    ${PROTO_SRCS}
+)
+
+add_dependencies(nufuse generate_protos)
+
+target_include_directories(nufuse PRIVATE
+    ${PROTO_GEN_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(nufuse PRIVATE
     mcap
     nlohmann_json::nlohmann_json
     protobuf::libprotobuf
