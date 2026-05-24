@@ -38,6 +38,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# small_gicp — header-only point cloud registration (ICP/GICP)
+FetchContent_Declare(
+    small_gicp
+    GIT_REPOSITORY https://github.com/koide3/small_gicp.git
+    GIT_TAG        v1.0.0
+)
+FetchContent_MakeAvailable(small_gicp)
+
 # ---------------------------------------------------------------------------
 # Sibling: slam-types (header-only)
 # ---------------------------------------------------------------------------
@@ -116,6 +124,9 @@ set_source_files_properties(${PROTO_SRCS} PROPERTIES GENERATED TRUE)
 add_executable(nuscenes_loader
     src/nuscenes_main.cpp
     src/nuscenes_mcap_loader.cpp
+    src/measurement_processor.cpp
+    src/graph_builder.cpp
+    src/lidar_odometry.cpp
     ${PROTO_SRCS}
 )
 
@@ -132,6 +143,7 @@ target_link_libraries(nuscenes_loader PRIVATE
     protobuf::libprotobuf
     slam_types
     gtsam
+    small_gicp
     lz4
     zstd
 )

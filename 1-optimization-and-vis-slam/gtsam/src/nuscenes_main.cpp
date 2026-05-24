@@ -1,121 +1,173 @@
 /// @file nuscenes_main.cpp
-/// @brief Loads NuScenes MCAP data and prints a summary of all sensor streams.
+/// @brief GPS + IMU + LiDAR factor graph from NuScenes MCAP data.
+///
+/// Pipeline:
+///   1. Load MCAP → raw sensor measurements.
+///   2. Compute LiDAR GICP odometry → body-frame relative poses.
+///   3. Feed IMU / GNSS / LiDAR into MeasurementProcessor → FactorStorage.
+///   4. Build GTSAM graph from FactorStorage → optimize → print results.
 
+#include "graph_builder.hpp"
+#include "lidar_odometry.hpp"
+#include "measurement_processor.hpp"
 #include "nuscenes_mcap_loader.hpp"
 
+#include <gtsam/inference/Symbol.h>
+#include <gtsam/nonlinear/LevenbergMarquardtOptimizer.h>
+
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
-#include <gtsam/navigation/CombinedImuFactor.h>
+#include <unordered_map>
+
+using namespace gtsam;
+using symbol_shorthand::B;
+using symbol_shorthand::X;
+
+// ─── Optimization ────────────────────────────────────────────────────────────
+
+static Values optimize(const NonlinearFactorGraph& graph, const Values& initial) {
+    LevenbergMarquardtParams params;
+    params.setVerbosityLM("SUMMARY");
+    LevenbergMarquardtOptimizer optimizer(graph, initial, params);
+    return optimizer.optimize();
+}
+
+// ─── Results ─────────────────────────────────────────────────────────────────
+
+static void printResults(const Values& result, int num_keyframes,
+                         const nuscenes::SceneData& scene) {
+    std::cout << "\nOptimized ENU trajectory (first/last 3) [m]:\n";
+    for (int i = 0; i <= std::min(2, num_keyframes); ++i) {
+        const auto t = result.at<Pose3>(X(i)).translation();
+        std::cout << "  pose[" << i << "]:  E=" << t.x()
+                  << "  N=" << t.y() << "  U=" << t.z() << "\n";
+    }
+    if (num_keyframes > 5) std::cout << "  ...\n";
+    for (int i = std::max(3, num_keyframes - 2); i <= num_keyframes; ++i) {
+        const auto t = result.at<Pose3>(X(i)).translation();
+        std::cout << "  pose[" << i << "]:  E=" << t.x()
+                  << "  N=" << t.y() << "  U=" << t.z() << "\n";
+    }
+
+    const auto bias = result.at<imuBias::ConstantBias>(B(num_keyframes));
+    std::cout << "\nFinal bias: accel=[" << bias.accelerometer().transpose()
+              << "]  gyro=[" << bias.gyroscope().transpose() << "]\n";
+
+    const Point3 gt = scene.odom.back().pose.value().translation()
+                    - scene.odom.front().pose.value().translation();
+    const Point3 est = result.at<Pose3>(X(num_keyframes)).translation();
+    const Point3 delta = est - gt;
+
+    std::cout << "\nEnd-position error:\n"
+              << "  Ground truth : " << gt.transpose() << " [m]\n"
+              << "  Estimated    : " << est.transpose() << " [m]\n"
+              << "  ||error||    : " << delta.norm() << " m\n";
+
+    Symbol T_BL_key('L', 0);  // Static extrinsic: base_link → lidar (assumed constant).
+    std::cout << "\nLidar extrinsics estimation:\n";
+    if (result.exists(T_BL_key)) {
+        const auto T_BL = result.at<Pose3>(T_BL_key);
+        std::cout << "  Estimated T_body_lidar:\n" << T_BL << "\n";
+        std::cout << "  GT: T_body_lidar:\n" << scene.extrinsics.body_from_lidar_top->value() << "\n";
+    } else {
+        std::cout << "  No lidar extrinsics factor in graph.\n";
+    }
+}
+
+// ─── main ────────────────────────────────────────────────────────────────────
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <path-to-mcap>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <path-to-mcap>\n";
         return EXIT_FAILURE;
     }
 
     const std::filesystem::path mcap_path(argv[1]);
     if (!std::filesystem::exists(mcap_path)) {
-        std::cerr << "File not found: " << mcap_path << std::endl;
+        std::cerr << "File not found: " << mcap_path << "\n";
         return EXIT_FAILURE;
     }
 
-    std::cout << "Loading " << mcap_path.filename() << " ..." << std::endl;
+    // ── 1. Load raw measurements ─────────────────────────────────────────────
+    std::cout << "Loading " << mcap_path.filename() << " ...\n";
     nuscenes::SceneData scene;
     try {
         scene = nuscenes::loadMcap(mcap_path);
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << "\n";
         return EXIT_FAILURE;
     }
 
-    std::cout << "Loaded: "
-              << scene.imu.size() << " IMU, "
-              << scene.odom.size() << " odom, "
-              << scene.gnss.size() << " GNSS, "
-              << scene.lidar.size() << " lidar, "
-              << scene.radar.size() << " radar, "
-              << scene.images.size() << " image, "
-              << scene.ego_poses.size() << " ego poses" << std::endl;
+    if (scene.imu.empty() || scene.gnss.size() < 2 || scene.odom.empty()) {
+        std::cerr << "Insufficient data (need IMU, >=2 GNSS, odom).\n";
+        return EXIT_FAILURE;
+    }
 
-    if (!scene.imu.empty()) {
-        const auto& m = scene.imu.front();
-        const auto& a = m.linear_acceleration.value();
-        const auto& g = m.angular_velocity.value();
-        std::cout << "\nFirst IMU (ImuFrame): "
-                  << "accel=(" << a(0) << ", " << a(1) << ", " << a(2) << ") "
-                  << "gyro=(" << g(0) << ", " << g(1) << ", " << g(2) << ")"
-                  << std::endl;
+    std::cout << "  IMU: " << scene.imu.size()
+              << "  GNSS: " << scene.gnss.size()
+              << "  Odom: " << scene.odom.size()
+              << "  LiDAR: " << scene.lidar.size() << "\n";
+
+    // ── 2. Compute LiDAR GICP odometry ───────────────────────────────────────
+    if (!scene.extrinsics.body_from_lidar_top) {
+        std::cerr << "Missing body_from_lidar_top extrinsic!\n";
+        return EXIT_FAILURE;
     }
-    if (!scene.odom.empty()) {
-        const auto& m = scene.odom.front();
-        const auto& t = m.pose.value().translation();
-        const auto& v = m.velocity.value();
-        std::cout << "First odom (BodyFrame->MapFrame): "
-                  << "pos=(" << t(0) << ", " << t(1) << ", " << t(2) << ") "
-                  << "vel=(" << v(0) << ", " << v(1) << ", " << v(2) << ")"
-                  << std::endl;
-    }
-    if (!scene.gnss.empty()) {
-        const auto& m = scene.gnss.front();
-        const auto& lla = m.lla.value();
-        std::cout << "First GNSS (WGS84): "
-                  << "lat=" << lla(0) << " lon=" << lla(1)
-                  << " alt=" << lla(2) << std::endl;
-    }
-    if (!scene.lidar.empty()) {
-        const auto& m = scene.lidar.front();
-        std::cout << "First LiDAR (frame=" << m.msg.frame_id() << "): "
-                  << m.msg.data().size() << " bytes, "
-                  << "stride=" << m.msg.point_stride() << std::endl;
-    }
-    if (!scene.radar.empty()) {
-        const auto& m = scene.radar.front();
-        std::cout << "First radar (frame=" << m.msg.frame_id() << "): "
-                  << m.msg.data().size() << " bytes, "
-                  << "stride=" << m.msg.point_stride() << std::endl;
-    }
-    if (!scene.images.empty()) {
-        const auto& m = scene.images.front();
-        std::cout << "First image (frame=" << m.msg.frame_id() << "): "
-                  << "format=" << m.msg.format()
-                  << " size=" << m.msg.data().size() << " bytes" << std::endl;
-    }
-    // ---- Extrinsic calibration summary ------------------------------------
-    std::cout << "\nExtrinsic calibration (body -> sensor):" << std::endl;
-    const auto& cal = scene.extrinsics;
-    auto printExtrinsic = [](const char* name, const auto& opt) {
-        if (opt) {
-            const auto& t = opt->value().translation();
-            std::cout << "  " << name << ": t=("
-                      << t(0) << ", " << t(1) << ", " << t(2) << ")"
-                      << std::endl;
+    std::cout << "\nComputing LiDAR GICP odometry...\n";
+    auto lidar_poses = computeLidarOdometry(
+        scene.lidar, *scene.extrinsics.body_from_lidar_top);
+    std::cout << "  LiDAR pairs: " << lidar_poses.size()
+              << "  converged: "
+              << std::count_if(lidar_poses.begin(), lidar_poses.end(),
+                               [](const auto& lp) { return lp.converged; })
+              << "\n";
+
+    // Build stamp_to → body-frame relative pose map (converged pairs only).
+    std::unordered_map<uint64_t, Pose3> lidar_rel;
+    for (const auto& lp : lidar_poses)
+        if (lp.converged) lidar_rel[lp.stamp_to] = lp.T_lidar.value();
+
+    // ── 3. Process measurements → FactorStorage ──────────────────────────────
+    ProcessorConfig cfg;
+    MeasurementProcessor processor(cfg, scene.odom);
+
+    auto gnss_it  = scene.gnss.cbegin();
+    auto imu_it   = scene.imu.cbegin();
+    auto lidar_it = scene.lidar.cbegin();
+
+    while (gnss_it  != scene.gnss.cend()  ||
+           imu_it   != scene.imu.cend()   ||
+           lidar_it != scene.lidar.cend()) {
+        const uint64_t t_gnss  = gnss_it  != scene.gnss.cend()  ? gnss_it->stamp.value()  : UINT64_MAX;
+        const uint64_t t_imu   = imu_it   != scene.imu.cend()   ? imu_it->stamp.value()   : UINT64_MAX;
+        const uint64_t t_lidar = lidar_it != scene.lidar.cend() ? lidar_it->stamp.value() : UINT64_MAX;
+
+        if (t_imu <= t_gnss && t_imu <= t_lidar) {
+            processor.addImu(*imu_it++);
+        } else if (t_gnss <= t_lidar) {
+            processor.addGnss(*gnss_it++);
+        } else {
+            const uint64_t stamp = lidar_it->stamp.value();
+            auto it = lidar_rel.find(stamp);
+            processor.addLidar(stamp, it != lidar_rel.end()
+                ? std::optional<Pose3>(it->second) : std::nullopt);
+            ++lidar_it;
         }
-    };
-    printExtrinsic("LIDAR_TOP       ", cal.body_from_lidar_top);
-    printExtrinsic("CAM_FRONT       ", cal.body_from_cam_front);
-    printExtrinsic("CAM_FRONT_LEFT  ", cal.body_from_cam_front_left);
-    printExtrinsic("CAM_FRONT_RIGHT ", cal.body_from_cam_front_right);
-    printExtrinsic("CAM_BACK        ", cal.body_from_cam_back);
-    printExtrinsic("CAM_BACK_LEFT   ", cal.body_from_cam_back_left);
-    printExtrinsic("CAM_BACK_RIGHT  ", cal.body_from_cam_back_right);
-    printExtrinsic("RADAR_FRONT     ", cal.body_from_radar_front);
-    printExtrinsic("RADAR_FRONT_LEFT", cal.body_from_radar_front_left);
-    printExtrinsic("RADAR_FRONT_RIGHT", cal.body_from_radar_front_right);
-    printExtrinsic("RADAR_BACK_LEFT ", cal.body_from_radar_back_left);
-    printExtrinsic("RADAR_BACK_RIGHT", cal.body_from_radar_back_right);
-
-    if (!scene.ego_poses.empty()) {
-        const auto& first = scene.ego_poses.front().msg.value().translation();
-        const auto& last = scene.ego_poses.back().msg.value().translation();
-        std::cout << "\nEgo trajectory (map -> body): "
-                  << scene.ego_poses.size() << " poses, "
-                  << "start=(" << first(0) << ", " << first(1) << ", " << first(2) << ") "
-                  << "end=(" << last(0) << ", " << last(1) << ", " << last(2) << ")"
-                  << std::endl;
     }
+
+    FactorStorage storage = std::move(processor).finalize();
+
+    // ── 4. Build GTSAM graph → optimize ──────────────────────────────────────
+    auto [graph, initial, num_keyframes, num_corrupted] = buildGtsamGraph(storage);
+    std::cout << "Graph: " << graph.size() << " factors, "
+              << initial.size() << " variables, "
+              << num_keyframes + 1 << " keyframes, "
+              << num_corrupted << " corrupted GNSS fixes\n";
+
+    auto result = optimize(graph, initial);
+    printResults(result, num_keyframes, scene);
 
     return EXIT_SUCCESS;
-
-
 }
