@@ -26,10 +26,10 @@ RUN pip3 install --break-system-packages pyparsing numpy setuptools wheel mcap p
 
 # Build and install GTSAM develop (C++ + Python bindings)
 RUN git clone --depth=1 --branch develop https://github.com/borglab/gtsam.git /tmp/gtsam \
- && cmake -S /tmp/gtsam -B /tmp/gtsam-build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_FLAGS="-Wno-error=free-nonheap-object -Wno-error=array-bounds" \
-           -DGTSAM_BUILD_TESTS=OFF \
+    && cmake -S /tmp/gtsam -B /tmp/gtsam-build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_FLAGS="-Wno-error=free-nonheap-object -Wno-error=array-bounds" \
+    -DGTSAM_BUILD_TESTS=OFF \
     -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
     -DGTSAM_BUILD_UNSTABLE=OFF \
     -DGTSAM_BUILD_PYTHON=ON \
