@@ -121,33 +121,6 @@ set(PROTO_SRCS
 # configure time.
 set_source_files_properties(${PROTO_SRCS} PROPERTIES GENERATED TRUE)
 
-add_executable(nuscenes_loader
-    src/nuscenes_main.cpp
-    src/nuscenes_mcap_loader.cpp
-    src/measurement_processor.cpp
-    src/graph_builder.cpp
-    src/lidar_odometry.cpp
-    ${PROTO_SRCS}
-)
-
-add_dependencies(nuscenes_loader generate_protos)
-
-target_include_directories(nuscenes_loader PRIVATE
-    ${PROTO_GEN_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-target_link_libraries(nuscenes_loader PRIVATE
-    mcap
-    nlohmann_json::nlohmann_json
-    protobuf::libprotobuf
-    slam_types
-    gtsam
-    small_gicp
-    lz4
-    zstd
-)
-
 # ---------------------------------------------------------------------------
 # Target: nufuse (refactored pipeline)
 # ---------------------------------------------------------------------------
