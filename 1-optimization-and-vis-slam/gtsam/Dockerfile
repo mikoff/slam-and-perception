@@ -44,9 +44,9 @@ RUN git clone --depth=1 --branch develop https://github.com/borglab/gtsam.git /t
     && pip3 wheel --no-deps -w /opt/wheels /tmp/gtsam-build/python \
     && rm -rf /tmp/gtsam /tmp/gtsam-build \
     && ldconfig
-    
-     Install codebase-memory-mcp (dev tooling — belongs in image, not postCreateCommand)
-    UN curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh \
+
+# Install codebase-memory-mcp (dev tooling — belongs in image, not postCreateCommand)
+RUN curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh \
     | bash -s -- --ui --skip-config --dir=/usr/local/bin
 
 RUN useradd -m -s /bin/bash devuser
