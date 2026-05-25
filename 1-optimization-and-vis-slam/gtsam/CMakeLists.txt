@@ -128,6 +128,7 @@ set_source_files_properties(${PROTO_SRCS} PROPERTIES GENERATED TRUE)
 add_executable(nufuse
     src/main_nufuse.cpp
     src/io/mcap_loader.cpp
+    src/io/mcap_writer.cpp
     src/processing/geo_utils.cpp
     src/processing/lidar_odometry.cpp
     src/processing/measurement_processor.cpp

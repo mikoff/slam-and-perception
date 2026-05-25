@@ -11,11 +11,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <unordered_map>
 
 #include "domain/scene_data.hpp"
 #include "graph/builder.hpp"
 #include "io/mcap_loader.hpp"
+#include "io/mcap_writer.hpp"
 #include "processing/lidar_odometry.hpp"
 #include "processing/measurement_processor.hpp"
 #include "results/optimizer.hpp"
@@ -136,7 +138,7 @@ void printLidarExtrinsics(const results::OptimizedResults& res, const domain::Sc
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
-    std::cerr << "Usage: " << argv[0] << " <path-to-mcap>\n";
+    std::cerr << "Usage: " << argv[0] << " <path-to-mcap> [--output <path>]\n";
     return EXIT_FAILURE;
   }
 
@@ -144,6 +146,13 @@ int main(int argc, char* argv[]) {
   if (!std::filesystem::exists(mcap_path)) {
     std::cerr << "File not found: " << mcap_path << "\n";
     return EXIT_FAILURE;
+  }
+
+  std::optional<std::filesystem::path> output_path;
+  for (int i = 2; i < argc; ++i) {
+    if (std::string_view(argv[i]) == "--output" && i + 1 < argc) {
+      output_path = argv[++i];
+    }
   }
 
   // 1. Load
@@ -188,6 +197,11 @@ int main(int argc, char* argv[]) {
   printBias(results);
   printError(results, scene);
   printLidarExtrinsics(results, scene);
+
+  // 6. Export merged MCAP for Foxglove visualization
+  if (output_path) {
+    nufuse::io::writeResultsMcap(mcap_path, *output_path, results, storage, scene);
+  }
 
   return EXIT_SUCCESS;
 }

@@ -6,6 +6,7 @@
 
 #include <iostream>
 #include <mcap/reader.hpp>
+#include <mcap/writer.hpp>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
