@@ -155,3 +155,47 @@ target_link_libraries(nufuse PRIVATE
     zstd
 )
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+option(NUFUSE_BUILD_TESTS "Build factor unit tests" ON)
+
+if(NUFUSE_BUILD_TESTS)
+    enable_testing()
+
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.15.2
+    )
+    set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    # --- Radar Radial Velocity Factor ---
+    add_executable(test_radar_radial_velocity_factor
+        tests/test_radar_radial_velocity_factor.cpp
+    )
+    target_include_directories(test_radar_radial_velocity_factor PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(test_radar_radial_velocity_factor PRIVATE
+        gtsam
+        GTest::gtest_main
+    )
+    add_test(NAME test_radar_radial_velocity_factor COMMAND test_radar_radial_velocity_factor)
+
+    # --- Lidar Extrinsics Factor ---
+    add_executable(test_lidar_extrinsics_factor
+        tests/test_lidar_extrinsics_factor.cpp
+    )
+    target_include_directories(test_lidar_extrinsics_factor PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(test_lidar_extrinsics_factor PRIVATE
+        gtsam
+        GTest::gtest_main
+    )
+    add_test(NAME test_lidar_extrinsics_factor COMMAND test_lidar_extrinsics_factor)
+endif()
+
