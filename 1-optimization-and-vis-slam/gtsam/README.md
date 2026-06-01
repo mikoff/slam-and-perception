@@ -152,11 +152,11 @@ Each step has a known Jacobian:
 
 Final Jacobians by chaining:
 
-$$\frac{\partial e}{\partial X_i} = H_{\text{err\_pred}} \cdot H_{\text{pred\_Pi}} \cdot H_{\text{Pi\_Xi}}$$
+$$\frac{\partial e}{\partial X_i} = H_{\text{err-pred}} \cdot H_{\text{pred-Pi}} \cdot H_{\text{Pi-Xi}}$$
 
-$$\frac{\partial e}{\partial X_j} = H_{\text{err\_pred}} \cdot H_{\text{pred\_Pj}} \cdot H_{\text{Pj\_Xj}}$$
+$$\frac{\partial e}{\partial X_j} = H_{\text{err-pred}} \cdot H_{\text{pred-Pj}} \cdot H_{\text{Pj-Xj}}$$
 
-$$\frac{\partial e}{\partial T_{BL}} = H_{\text{err\_pred}} \cdot \left( H_{\text{pred\_Pi}} \cdot H_{\text{Pi\_TBL}} + H_{\text{pred\_Pj}} \cdot H_{\text{Pj\_TBL}} \right)$$
+$$\frac{\partial e}{\partial T_{BL}} = H_{\text{err-pred}} \cdot \left( H_{\text{pred-Pi}} \cdot H_{\text{Pi-TBL}} + H_{\text{pred-Pj}} \cdot H_{\text{Pj-TBL}} \right)$$
 
 The $T_{BL}$ Jacobian is a **sum** because both $P_i$ and $P_j$ depend on $T_{BL}$ (product rule on SE(3)).
 
