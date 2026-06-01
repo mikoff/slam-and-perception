@@ -28,5 +28,6 @@
     "files.associations": {
         "*.inl": "cpp",
         "*.hpp": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "/workspace/dummy_project"
 }

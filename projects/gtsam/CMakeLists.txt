@@ -166,7 +166,7 @@ add_dependencies(nufuse generate_protos)
 
 target_include_directories(nufuse PRIVATE
     ${PROTO_GEN_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/inc
 )
 
 target_link_libraries(nufuse PRIVATE
@@ -202,7 +202,7 @@ if(NUFUSE_BUILD_TESTS)
         tests/test_spatiotemporal_radar_factor.cpp
     )
     target_include_directories(test_spatiotemporal_radar_factor PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
     )
     target_link_libraries(test_spatiotemporal_radar_factor PRIVATE
         gtsam
@@ -215,7 +215,7 @@ if(NUFUSE_BUILD_TESTS)
         tests/test_lidar_extrinsics_factor.cpp
     )
     target_include_directories(test_lidar_extrinsics_factor PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
     )
     target_link_libraries(test_lidar_extrinsics_factor PRIVATE
         gtsam
@@ -229,7 +229,7 @@ if(NUFUSE_BUILD_TESTS)
         src/processing/geo_utils.cpp
     )
     target_include_directories(test_geo_utils PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
     )
     target_link_libraries(test_geo_utils PRIVATE
         slam_types
@@ -244,7 +244,7 @@ if(NUFUSE_BUILD_TESTS)
         src/core/config_loader.cpp
     )
     target_include_directories(test_config_loader PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
     )
     target_link_libraries(test_config_loader PRIVATE
         slam_types
@@ -291,7 +291,7 @@ if(NUFUSE_BUILD_PYTHON)
 
     target_include_directories(_nufuse PRIVATE
         ${PROTO_GEN_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/inc
     )
 
     target_link_libraries(_nufuse PRIVATE
