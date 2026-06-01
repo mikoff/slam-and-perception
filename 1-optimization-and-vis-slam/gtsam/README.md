@@ -226,6 +226,50 @@ $T_{BL}$ is only observable when the vehicle experiences **rotational excitation
 
 ---
 
+## Factor Catalog
+
+### 1. LiDAR Extrinsics Factor (Ternary)
+
+Jointly estimates the body-to-LiDAR extrinsic $T_{BL} \in SE(3)$ alongside the trajectory.
+
+$$e = \text{Log}\!\left(Z_{ij}^{-1} \cdot T_{BL}^{-1} \cdot X_i^{-1} \cdot X_j \cdot T_{BL}\right) \in \mathbb{R}^6$$
+
+Keys: `X_i`, `X_j`, `T_BL`. Noise: anisotropic 6-DoF with Huber robust kernel.
+
+### 2. Spatiotemporal Radar Factor (Ternary)
+
+Constrains body velocity via radar Doppler measurements with lever-arm compensation.
+
+$$e = v_r^{\text{meas}} - \left(-\mathbf{u}_R^\top \cdot R_{BR}^\top \cdot \left(R_{BW}^\top \, \mathbf{v}_W + \boldsymbol{\omega}_B \times \mathbf{t}_{BR}\right)\right)$$
+
+Keys: `X_i` (pose), `V_i` (velocity), `T_BR` (radar extrinsic). Noise: 1-DoF scalar with Huber.
+
+### 3. Forward Velocity Scale Factor (Ternary)
+
+Constrains forward-axis displacement between poses to match scaled wheel odometry.
+
+$$e = \frac{(X_i^{-1} \cdot X_j)_x}{\Delta t} - \left((1 + \delta_s) \cdot v_{\text{odom}} - (\boldsymbol{\omega}_B \times \mathbf{l})_x\right)$$
+
+Keys: `X_i`, `X_j`, `S` (scale delta). The scale variable $\delta_s$ is initialized at $-0.03$ (i.e. scale = 0.97) with a tight prior ($\sigma = 0.001$) to ensure slow convergence and prevent divergence on short sequences.
+
+### 4. Non-Holonomic Constraint (Binary)
+
+Enforces zero lateral/vertical velocity at the rear axle in body frame.
+
+$$e = \begin{pmatrix} v_{\text{axle},y} \\ v_{\text{axle},z} \end{pmatrix}, \quad \mathbf{v}_{\text{axle}} = R_{WB}^\top \, \mathbf{v}_W + \boldsymbol{\omega}_B \times \mathbf{t}_{I \to A}$$
+
+Keys: `X_i` (pose), `V_i` (velocity). Noise: 2-DoF diagonal.
+
+### 5. GTSAM Built-in Factors
+
+| Factor | Keys | Dim |
+|--------|------|-----|
+| `CombinedImuFactor` | $X_i, V_i, B_i, X_j, V_j, B_j$ | 15 |
+| `GPSFactor` (robust Huber) | $X_i$ | 3 |
+| Pose/Velocity/Bias priors | single variable | 6/3/6 |
+
+---
+
 ## Foxglove Visualization
 
 Pass `--output <path>` to produce a **merged** MCAP file containing the original recording plus optimization results — open a single file in Foxglove to see everything:
@@ -263,36 +307,72 @@ gtsam/
 ├── CMakeLists.txt
 ├── Dockerfile
 ├── pyproject.toml
+├── config/
+│   └── default.json                # Reference JSON config (all parameters with defaults)
 ├── scripts/
 │   ├── download_data.py
 │   └── extract_and_compile_protos.py
 ├── notebook/
 │   └── pose_graph.ipynb
+├── tests/
+│   ├── test_lidar_extrinsics_factor.cpp    # Analytical Jacobian verification
+│   ├── test_spatiotemporal_radar_factor.cpp
+│   ├── test_geo_utils.cpp                  # Geodetic utils + nearest-odom lookup
+│   └── test_config_loader.cpp              # JSON config loading & defaults
 └── src/
-    ├── main_nufuse.cpp             # Entry point: MCAP → optimize → results
+    ├── main_nufuse.cpp             # Thin CLI entry point (parses args → pipeline)
     ├── core/
     │   ├── types.hpp               # Frame-tagged transforms, poses, timestamps
-    │   └── frames.hpp              # Coordinate frame tags (Body, Enu, LidarTop, ...)
+    │   ├── frames.hpp              # Coordinate frame tags (Body, Enu, LidarTop, ...)
+    │   ├── pipeline_config.hpp     # Full pipeline configuration struct (all noise params)
+    │   └── config_loader.hpp/cpp   # Load PipelineConfig from JSON file
     ├── domain/
     │   ├── measurements.hpp        # ImuMeasurement, OdomMeasurement, GnssFix
-    │   ├── calibration.hpp         # ExtrinsicCalibration struct
+    │   ├── calibration.hpp         # ExtrinsicCalibration with sensor registry
     │   └── scene_data.hpp          # SceneData container for all sensor streams
     ├── factor/
-    │   ├── lidar_extrinsics.hpp    # Custom ternary factor (X_i, X_j, T_BL)
-    │   └── lidar_extrinsics.inl    # Analytical Jacobians via chain rule
+    │   ├── lidar_extrinsics.hpp/.inl        # Ternary factor (X_i, X_j, T_BL)
+    │   └── spatiotemporal_radar.hpp/.inl    # Radar Doppler factor with lever arm
     ├── graph/
-    │   ├── builder.hpp/cpp         # Factor graph assembly + noise models
+    │   ├── builder.hpp/cpp         # Factor graph assembly (FactorGraphBundle)
     │   ├── factor_types.hpp        # StoredImuFactor, StoredGpsFactor, etc.
     │   └── factor_storage.hpp      # Intermediate storage between processing and graph
     ├── io/
     │   ├── mcap_loader.hpp/cpp     # MCAP reader: protobuf + JSON decoding
     │   └── mcap_writer.hpp/cpp     # MCAP writer: results → Foxglove visualization
+    ├── pipeline/
+    │   └── pipeline.hpp/cpp        # High-level orchestrator: scene + config → results
     ├── processing/
     │   ├── measurement_processor.hpp/cpp  # Chronological keyframe creation
+    │   ├── measurement_merger.hpp/cpp     # Chronological sensor interleaving
+    │   ├── bias_estimator.hpp/cpp         # Initial gyro bias from IMU vs odom
+    │   ├── gps_corruptor.hpp/cpp          # Standalone GPS spike injection (testing)
+    │   ├── nhc_generator.hpp/cpp          # Non-holonomic constraint factor generation
+    │   ├── forward_velocity_generator.hpp/cpp  # Forward velocity scale factors
     │   ├── lidar_odometry.hpp/cpp         # GICP scan-matching (small-gicp)
-    │   └── geo_utils.hpp/cpp              # WGS84→ENU, SE(3) interpolation
+    │   ├── radar_processor.hpp/cpp        # RANSAC ego-velocity + factor creation
+    │   └── geo_utils.hpp/cpp              # WGS84→ENU, odom interpolation/lookup
     └── results/
-        └── optimizer.hpp/cpp       # LM optimization + covariance extraction
+        ├── optimizer.hpp/cpp       # LM optimization + covariance extraction
+        └── reporter.hpp/cpp        # Console reporting of trajectory/bias/errors
+```
+
+### Configuration System
+
+All noise parameters and algorithm settings are defined in `core/pipeline_config.hpp` with compiled defaults. Override any subset via a JSON config file:
+
+```bash
+./build/nufuse <mcap_file> --config config/default.json
+```
+
+Fields not present in the JSON retain their compiled defaults. See `config/default.json` for the complete schema. Example partial override:
+
+```json
+{
+  "sensors": { "enable_radar": false },
+  "gps": { "sigma": 2.0, "huber_threshold": 2.0 },
+  "imu": { "gravity": 9.81 }
+}
 ```
 
 ## Dependencies
@@ -312,3 +392,62 @@ gtsam/
 ```bash
 uv sync  # installs gtsam wheel, numpy, matplotlib, ipykernel
 ```
+
+---
+
+## Tests
+
+Four test binaries verify analytical Jacobians, utilities, and configuration:
+
+```bash
+./build/test_lidar_extrinsics_factor      # 9 tests — Jacobian correctness
+./build/test_spatiotemporal_radar_factor   # 7 tests — Jacobian correctness
+./build/test_geo_utils                    # 7 tests — LLA→ENU, nearest odom lookup
+./build/test_config_loader                # 7 tests — JSON loading, defaults, errors
+```
+
+Factor tests use `gtsam::internal::testFactorJacobians()` with step size $\delta = 10^{-5}$ and tolerance $10^{-6}$. Config tests verify partial override semantics (unspecified fields keep compiled defaults).
+
+---
+
+## Results — End-Position Error (m)
+
+Evaluated on NuScenes-mini (~20 s scenes). GPS limited to first 3 fixes (initialization anchor only); 20% of fixes corrupted with ±100 m spikes + Huber robust kernel. Config 1 uses ground-truth position for the first keyframe (pure dead-reckoning test).
+
+**Key improvement:** gyro bias prior is initialized from IMU vs odometry comparison and adapted per observability regime (tight in dead-reckoning, loose with LiDAR). This prevents spurious heading drift in pure IMU+NHC mode while allowing full bias calibration when exteroceptive heading references are available.
+
+| Scene | C1 | C2 | C3 | C4 | C5 | C6 | C7 |
+|-------|----|----|----|----|----|----|-----|
+| 0061 | 1.5 | 2.0 | 1.7 | 2.0 | 6.0 | 2.8 | **2.4** |
+| 0103 | 4.7 | 4.3 | 6.5 | 4.3 | 4.7 | 6.1 | **6.8** |
+| 0553 | 0.01 | 0.55 | 0.53 | 0.55 | 1.3 | 13 | **0.53** |
+| 0655 | 3.8 | 4.5 | 15 | 4.4 | 17 | 12 | **18** |
+| 0757 | 0.92 | 1.3 | 2.4 | 1.3 | 5.0 | 7.1 | **2.6** |
+| 0796 | 10 | 10 | 32 | 9.9 | 90 | 27 | **36** |
+| 0916 | 3.3 | 2.9 | 12 | 2.9 | 7.3 | 2.8 | **11** |
+| 1077 | 8.9 | — | 80 | — | 100 | — | **84** |
+| 1094 | 7.7 | 7.5 | 14 | 7.5 | 25 | 13 | **15** |
+| 1100 | 0.24 | 0.39 | 0.31 | 0.38 | 0.57 | 0.89 | **0.28** |
+
+"—" = crash (keyframing requires LiDAR timestamps when LiDAR is disabled).
+
+### Configuration Key
+
+| ID | Sensors | Flags |
+|----|---------|-------|
+| **C1** | IMU + NHC + FwdVel (GT init) | `--no-gps --no-lidar --no-radar --init-from-gt` |
+| **C2** | GPS(3) + IMU + NHC + FwdVel | `--no-lidar --no-radar --gps-max 3` |
+| **C3** | GPS(3) + IMU + LiDAR + NHC + FwdVel | `--no-radar --gps-max 3` |
+| **C4** | GPS(3) + IMU + Radar + NHC + FwdVel | `--no-lidar --gps-max 3` |
+| **C5** | GPS(3) + IMU + LiDAR + NHC | `--no-radar --no-fwdvel --gps-max 3` |
+| **C6** | GPS(3) + IMU + Radar + NHC | `--no-lidar --no-fwdvel --gps-max 3` |
+| **C7** | Full (all sensors) | `--gps-max 3` |
+
+### Findings
+
+1. **Data-driven bias initialization is essential.** Computing initial gyro bias from IMU vs odometry comparison ($\text{bias} \approx \bar{\omega}_\text{imu} - \bar{\omega}_\text{odom}$ over first 100 samples) and using a tight prior ($\sigma_\text{gyro} = 0.003$ rad/s) reduced C1 errors by 3–6× on turning scenes (1094: 43 → 7.7 m, 0796: 37 → 10 m).
+2. **Adaptive priors by observability regime.** Without LiDAR, the gyro prior must be tight (heading is unobservable). With LiDAR providing dense rotation info, the prior is loosened ($\sigma = 0.1$) to allow bias calibration against LiDAR heading.
+3. **FwdVel + NHC achieve near-LiDAR accuracy in dead-reckoning.** C1/C2 now match or beat C3 on most scenes — the tight gyro prior + FwdVel scale provide better heading/speed than LiDAR GICP (which has systematic heading errors from planar scenes).
+4. **LiDAR GICP heading is unreliable** on flat urban roads (0796: 32 m, 0655: 15 m). The GICP algorithm struggles with rotational alignment on planar/symmetric scenes, requiring the optimizer to absorb heading error into gyro bias.
+5. **Radar provides marginal improvement** (C4 ≈ C2) — nuScenes radar is sparse with high noise ($\sigma = 1.5$ m/s).
+6. **Dead-reckoning limit** for consumer MEMS IMU: ~4% of distance on turning scenes (heading error from gyro noise random walk + accelerometer model mismatch), sub-meter on straight drives.

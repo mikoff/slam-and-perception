@@ -57,12 +57,6 @@ add_subdirectory(
 )
 
 # ---------------------------------------------------------------------------
-# Target: gtsam_example (existing pose-graph demo) - disabled, src/main.cpp removed
-# ---------------------------------------------------------------------------
-# add_executable(gtsam_example src/main.cpp)
-# target_link_libraries(gtsam_example PRIVATE gtsam slam_types)
-
-# ---------------------------------------------------------------------------
 # Target: nuscenes_loader
 # ---------------------------------------------------------------------------
 
@@ -118,22 +112,53 @@ set(PROTO_SRCS
     ${_gp}/duration.pb.cc             ${_gp}/timestamp.pb.cc
 )
 
+# Foxglove-only protos (without google/protobuf/*.pb.cc) for the Python module.
+# System libprotobuf already registers google/protobuf descriptors; including
+# our own copies causes fatal double-registration when loaded alongside Python.
+set(PROTO_SRCS_FOXGLOVE
+    ${_fg}/ArrowPrimitive.pb.cc      ${_fg}/CameraCalibration.pb.cc
+    ${_fg}/CircleAnnotation.pb.cc     ${_fg}/Color.pb.cc
+    ${_fg}/CompressedImage.pb.cc      ${_fg}/CubePrimitive.pb.cc
+    ${_fg}/CylinderPrimitive.pb.cc    ${_fg}/FrameTransform.pb.cc
+    ${_fg}/Grid.pb.cc                 ${_fg}/ImageAnnotations.pb.cc
+    ${_fg}/KeyValuePair.pb.cc         ${_fg}/LinePrimitive.pb.cc
+    ${_fg}/LocationFix.pb.cc          ${_fg}/ModelPrimitive.pb.cc
+    ${_fg}/PackedElementField.pb.cc   ${_fg}/Point2.pb.cc
+    ${_fg}/Point3.pb.cc               ${_fg}/PointCloud.pb.cc
+    ${_fg}/PointsAnnotation.pb.cc     ${_fg}/Pose.pb.cc
+    ${_fg}/PoseInFrame.pb.cc          ${_fg}/Quaternion.pb.cc
+    ${_fg}/SceneEntity.pb.cc          ${_fg}/SceneEntityDeletion.pb.cc
+    ${_fg}/SceneUpdate.pb.cc          ${_fg}/SpherePrimitive.pb.cc
+    ${_fg}/TextAnnotation.pb.cc       ${_fg}/TextPrimitive.pb.cc
+    ${_fg}/TriangleListPrimitive.pb.cc ${_fg}/Vector2.pb.cc
+    ${_fg}/Vector3.pb.cc
+)
+
 # Mark generated sources so CMake doesn't complain they're missing at
 # configure time.
-set_source_files_properties(${PROTO_SRCS} PROPERTIES GENERATED TRUE)
+set_source_files_properties(${PROTO_SRCS} ${PROTO_SRCS_FOXGLOVE} PROPERTIES GENERATED TRUE)
 
 # ---------------------------------------------------------------------------
 # Target: nufuse (refactored pipeline)
 # ---------------------------------------------------------------------------
 add_executable(nufuse
     src/main_nufuse.cpp
+    src/core/config_loader.cpp
     src/io/mcap_loader.cpp
     src/io/mcap_writer.cpp
+    src/pipeline/pipeline.cpp
+    src/processing/bias_estimator.cpp
+    src/processing/forward_velocity_generator.cpp
     src/processing/geo_utils.cpp
+    src/processing/gps_corruptor.cpp
     src/processing/lidar_odometry.cpp
+    src/processing/measurement_merger.cpp
     src/processing/measurement_processor.cpp
+    src/processing/nhc_generator.cpp
+    src/processing/radar_processor.cpp
     src/graph/builder.cpp
     src/results/optimizer.cpp
+    src/results/reporter.cpp
     ${PROTO_SRCS}
 )
 
@@ -172,18 +197,18 @@ if(NUFUSE_BUILD_TESTS)
     set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
 
-    # --- Radar Radial Velocity Factor ---
-    add_executable(test_radar_radial_velocity_factor
-        tests/test_radar_radial_velocity_factor.cpp
+    # --- Spatiotemporal Radar Factor ---
+    add_executable(test_spatiotemporal_radar_factor
+        tests/test_spatiotemporal_radar_factor.cpp
     )
-    target_include_directories(test_radar_radial_velocity_factor PRIVATE
+    target_include_directories(test_spatiotemporal_radar_factor PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
-    target_link_libraries(test_radar_radial_velocity_factor PRIVATE
+    target_link_libraries(test_spatiotemporal_radar_factor PRIVATE
         gtsam
         GTest::gtest_main
     )
-    add_test(NAME test_radar_radial_velocity_factor COMMAND test_radar_radial_velocity_factor)
+    add_test(NAME test_spatiotemporal_radar_factor COMMAND test_spatiotemporal_radar_factor)
 
     # --- Lidar Extrinsics Factor ---
     add_executable(test_lidar_extrinsics_factor
@@ -197,5 +222,100 @@ if(NUFUSE_BUILD_TESTS)
         GTest::gtest_main
     )
     add_test(NAME test_lidar_extrinsics_factor COMMAND test_lidar_extrinsics_factor)
+
+    # --- Geo Utils ---
+    add_executable(test_geo_utils
+        tests/test_geo_utils.cpp
+        src/processing/geo_utils.cpp
+    )
+    target_include_directories(test_geo_utils PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(test_geo_utils PRIVATE
+        slam_types
+        gtsam
+        GTest::gtest_main
+    )
+    add_test(NAME test_geo_utils COMMAND test_geo_utils)
+
+    # --- Config Loader ---
+    add_executable(test_config_loader
+        tests/test_config_loader.cpp
+        src/core/config_loader.cpp
+    )
+    target_include_directories(test_config_loader PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(test_config_loader PRIVATE
+        slam_types
+        nlohmann_json::nlohmann_json
+        gtsam
+        GTest::gtest_main
+    )
+    add_test(NAME test_config_loader COMMAND test_config_loader)
+endif()
+
+# ---------------------------------------------------------------------------
+# Python bindings (pybind11)
+# ---------------------------------------------------------------------------
+option(NUFUSE_BUILD_PYTHON "Build Python bindings" ON)
+
+if(NUFUSE_BUILD_PYTHON)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+    # pybind11 ships with GTSAM's wrapper toolkit
+    set(pybind11_DIR "/usr/local/lib/gtwrap/pybind11")
+    add_subdirectory(${pybind11_DIR} ${CMAKE_CURRENT_BINARY_DIR}/pybind11 EXCLUDE_FROM_ALL)
+
+    pybind11_add_module(_nufuse
+        src/bindings/pynufuse.cpp
+        src/core/config_loader.cpp
+        src/io/mcap_loader.cpp
+        src/pipeline/pipeline.cpp
+        src/processing/bias_estimator.cpp
+        src/processing/forward_velocity_generator.cpp
+        src/processing/geo_utils.cpp
+        src/processing/gps_corruptor.cpp
+        src/processing/lidar_odometry.cpp
+        src/processing/measurement_merger.cpp
+        src/processing/measurement_processor.cpp
+        src/processing/nhc_generator.cpp
+        src/processing/radar_processor.cpp
+        src/graph/builder.cpp
+        src/results/optimizer.cpp
+        src/results/reporter.cpp
+        ${PROTO_SRCS_FOXGLOVE}
+    )
+
+    add_dependencies(_nufuse generate_protos)
+
+    target_include_directories(_nufuse PRIVATE
+        ${PROTO_GEN_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(_nufuse PRIVATE
+        mcap
+        nlohmann_json::nlohmann_json
+        protobuf::libprotobuf
+        slam_types
+        gtsam
+        small_gicp
+        lz4
+        zstd
+    )
+
+    # Hide protobuf symbols to avoid descriptor pool clashes with Python protobuf
+    target_link_options(_nufuse PRIVATE
+        "LINKER:--exclude-libs,ALL"
+    )
+    target_compile_definitions(_nufuse PRIVATE
+        PROTOBUF_USE_DLLS
+    )
+
+    # Install into the source tree for easy import
+    set_target_properties(_nufuse PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/nufuse"
+    )
 endif()
 

@@ -4,9 +4,11 @@
 #include "io/mcap_writer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <google/protobuf/descriptor.h>
 #include <google/protobuf/descriptor.pb.h>
+#include <gtsam/inference/Symbol.h>
 #include <iostream>
 #include <mcap/reader.hpp>
 #include <mcap/writer.hpp>
@@ -208,6 +210,17 @@ void writeResultsMcap(const std::filesystem::path& source_path,
   mcap::Channel ext_gt_ch("/nufuse/extrinsics/ground_truth", "protobuf", frame_transform_schema_id);
   writer.addChannel(ext_gt_ch);
 
+  mcap::Channel trajectory_ch("/nufuse/trajectory", "protobuf", location_fix_schema_id);
+  writer.addChannel(trajectory_ch);
+
+  mcap::Channel radar_ext_est_ch("/nufuse/radar_extrinsics/estimated", "protobuf",
+                                 frame_transform_schema_id);
+  writer.addChannel(radar_ext_est_ch);
+
+  mcap::Channel radar_ext_gt_ch("/nufuse/radar_extrinsics/ground_truth", "protobuf",
+                                frame_transform_schema_id);
+  writer.addChannel(radar_ext_gt_ch);
+
   // ─── Pre-build nufuse messages sorted by timestamp ───────────────────────
 
   struct PendingMsg {
@@ -235,7 +248,41 @@ void writeResultsMcap(const std::filesystem::path& source_path,
 
   // Poses + extrinsics
   const gtsam::Pose3& estimated_ext = results.body_from_lidar.value();
-  const gtsam::Pose3& gt_ext = scene.extrinsics.body_from_lidar_top->value();
+  const gtsam::Pose3 gt_ext = scene.extrinsics.body_from_lidar_top
+                                  ? scene.extrinsics.body_from_lidar_top->value()
+                                  : gtsam::Pose3::Identity();
+
+  // Radar extrinsic ground truth lookup
+  auto getRadarGtExtrinsic = [&](int idx) -> gtsam::Pose3 {
+    switch (idx) {
+      case 0:
+        return scene.extrinsics.body_from_radar_front
+                   ? scene.extrinsics.body_from_radar_front->value()
+                   : gtsam::Pose3::Identity();
+      case 1:
+        return scene.extrinsics.body_from_radar_front_left
+                   ? scene.extrinsics.body_from_radar_front_left->value()
+                   : gtsam::Pose3::Identity();
+      case 2:
+        return scene.extrinsics.body_from_radar_front_right
+                   ? scene.extrinsics.body_from_radar_front_right->value()
+                   : gtsam::Pose3::Identity();
+      case 3:
+        return scene.extrinsics.body_from_radar_back_left
+                   ? scene.extrinsics.body_from_radar_back_left->value()
+                   : gtsam::Pose3::Identity();
+      case 4:
+        return scene.extrinsics.body_from_radar_back_right
+                   ? scene.extrinsics.body_from_radar_back_right->value()
+                   : gtsam::Pose3::Identity();
+      default:
+        return gtsam::Pose3::Identity();
+    }
+  };
+
+  static const std::array<std::string, 5> kRadarNames = {"RADAR_FRONT", "RADAR_FRONT_LEFT",
+                                                         "RADAR_FRONT_RIGHT", "RADAR_BACK_LEFT",
+                                                         "RADAR_BACK_RIGHT"};
 
   for (const auto& kf : results.poses) {
     const uint64_t stamp_ns = kf.stamp.value();
@@ -243,11 +290,35 @@ void writeResultsMcap(const std::filesystem::path& source_path,
 
     nufuse_msgs.push_back(
         {stamp_ns, pose_ch.id, buildFrameTransform(stamp_ns, "map", "base_link", body_pose)});
+
+    // Lidar extrinsics (only if lidar was active)
+    if (scene.extrinsics.body_from_lidar_top) {
+      nufuse_msgs.push_back(
+          {stamp_ns, ext_estimated_ch.id,
+           buildFrameTransform(stamp_ns, "base_link", "LIDAR_TOP_estimated", estimated_ext)});
+      nufuse_msgs.push_back({stamp_ns, ext_gt_ch.id,
+                             buildFrameTransform(stamp_ns, "base_link", "LIDAR_TOP_gt", gt_ext)});
+    }
+
+    // Radar extrinsics
+    for (const auto& [id, est_pose] : results.radar_extrinsics) {
+      const int idx = static_cast<int>(id);
+      if (idx >= 0 && idx < 5) {
+        const std::string est_child = kRadarNames[idx] + "_estimated";
+        const std::string gt_child = kRadarNames[idx] + "_gt";
+        nufuse_msgs.push_back({stamp_ns, radar_ext_est_ch.id,
+                               buildFrameTransform(stamp_ns, "base_link", est_child, est_pose)});
+        nufuse_msgs.push_back(
+            {stamp_ns, radar_ext_gt_ch.id,
+             buildFrameTransform(stamp_ns, "base_link", gt_child, getRadarGtExtrinsic(idx))});
+      }
+    }
+
+    // Estimated trajectory as LocationFix for map panel
+    double traj_lat = 0, traj_lon = 0, traj_alt = 0;
+    enuToLla(body_pose.translation(), ref, traj_lat, traj_lon, traj_alt);
     nufuse_msgs.push_back(
-        {stamp_ns, ext_estimated_ch.id,
-         buildFrameTransform(stamp_ns, "base_link", "LIDAR_TOP_estimated", estimated_ext)});
-    nufuse_msgs.push_back({stamp_ns, ext_gt_ch.id,
-                           buildFrameTransform(stamp_ns, "base_link", "LIDAR_TOP_gt", gt_ext)});
+        {stamp_ns, trajectory_ch.id, buildLocationFix(stamp_ns, traj_lat, traj_lon, traj_alt)});
   }
 
   std::sort(nufuse_msgs.begin(), nufuse_msgs.end(),

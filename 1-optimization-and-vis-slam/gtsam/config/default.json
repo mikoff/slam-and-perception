@@ -1,0 +1,80 @@
+{
+    "sensors": {
+        "enable_gps": true,
+        "enable_lidar": true,
+        "enable_radar": true,
+        "enable_nhc": true,
+        "enable_fwdvel": true,
+        "gps_max_measurements": 0
+    },
+    "prior": {
+        "pose_rot_sigma": 0.05,
+        "pose_trans_sigma": 0.5,
+        "velocity_sigma": 0.1,
+        "bias_accel_sigma": 0.1,
+        "bias_gyro_sigma": 0.003,
+        "bias_gyro_sigma_obs": 0.1
+    },
+    "gps": {
+        "sigma": 1.0,
+        "robust_threshold": 1.345
+    },
+    "lidar": {
+        "odom_rot_sigma": 0.05,
+        "odom_trans_sigma": 0.1,
+        "robust_threshold": 0.5,
+        "extrinsic_prior_rot_sigma": 0.01,
+        "extrinsic_prior_trans_sigma": 0.05,
+        "min_inliers": 0,
+        "max_registration_error": 1e9,
+        "max_translation_m": 1e9,
+        "imu_consistency_threshold": 0.0
+    },
+    "radar": {
+        "velocity_sigma": 1.5,
+        "robust_threshold": 0.5,
+        "extrinsic_prior_rot_sigma": 1e-4,
+        "extrinsic_prior_yaw_sigma": 1e-2,
+        "extrinsic_prior_trans_xy": 1e-2,
+        "extrinsic_prior_trans_z": 1e-4
+    },
+    "nhc": {
+        "lateral_sigma": 0.1,
+        "vertical_sigma": 0.1,
+        "lever_arm_x": 0.0,
+        "lever_arm_y": 0.0,
+        "lever_arm_z": 0.0
+    },
+    "forward_velocity": {
+        "sigma": 0.5,
+        "scale_prior_sigma": 0.001
+    },
+    "radar_processing": {
+        "ransac_max_iterations": 100,
+        "ransac_inlier_threshold": 0.3,
+        "ransac_min_inliers": 3,
+        "max_measurements_per_scan": 5
+    },
+    "imu": {
+        "accel_noise_density": 0.0003924,
+        "gyro_noise_density": 0.000205689,
+        "integration_sigma": 1e-4,
+        "bias_accel_sigma": 0.004905,
+        "bias_gyro_sigma": 1.4544e-6,
+        "gravity": 9.81
+    },
+    "gps_corruption": {
+        "enable": true,
+        "spike_metres": 100.0,
+        "spike_fraction": 0.20,
+        "rng_seed": 42
+    },
+    "imu_keyframe_interval_s": 0.5,
+    "robust_kernel": "cauchy",
+    "optimizer": "lm",
+    "gnc": {
+        "mu_step": 1.4,
+        "relative_cost_tol": 1e-5,
+        "weights_tol": 1e-4
+    }
+}

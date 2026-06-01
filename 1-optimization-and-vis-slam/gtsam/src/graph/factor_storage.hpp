@@ -3,22 +3,25 @@
 
 #pragma once
 
-#include "graph/factor_types.hpp"
-
 #include <optional>
 #include <vector>
+
+#include "graph/factor_types.hpp"
 
 namespace nufuse::graph {
 
 /// @brief Collects all factors and keyframe estimates produced by measurement
 ///        processing, ready for graph construction.
 struct FactorStorage {
-    std::optional<PriorFactor> prior;
-    std::vector<StoredImuFactor> imu_factors;
-    std::vector<StoredGpsFactor> gps_factors;
-    std::vector<StoredLidarFactor> lidar_factors;
-    std::vector<KeyframeEstimate> estimates;
-    int num_corrupted = 0;
+  std::optional<PriorFactor> prior;
+  std::vector<StoredImuFactor> imu_factors;
+  std::vector<StoredGpsFactor> gps_factors;
+  std::vector<StoredLidarFactor> lidar_factors;
+  std::vector<StoredRadarFactor> radar_factors;
+  std::vector<StoredNhcFactor> nhc_factors;
+  std::vector<StoredForwardVelocityFactor> forward_velocity_factors;
+  std::vector<KeyframeEstimate> estimates;
+  int num_corrupted = 0;
 };
 
 }  // namespace nufuse::graph

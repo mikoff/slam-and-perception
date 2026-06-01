@@ -91,9 +91,9 @@ void parseImu(domain::SceneData& scene, const char* data, int size, core::Timest
       gtsam::Vector3(gyro["x"].get<double>(), gyro["y"].get<double>(), gyro["z"].get<double>()));
 
   const auto& quat = json["q"];
-  measurement.orientation =
+  measurement.orientation = core::BodyOrientationEnu(
       gtsam::Rot3::Quaternion(quat["w"].get<double>(), quat["x"].get<double>(),
-                              quat["y"].get<double>(), quat["z"].get<double>());
+                              quat["y"].get<double>(), quat["z"].get<double>()));
 
   scene.imu.push_back(std::move(measurement));
 }

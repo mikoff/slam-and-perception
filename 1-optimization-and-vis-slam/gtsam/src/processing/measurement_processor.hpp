@@ -3,23 +3,23 @@
 
 #pragma once
 
+#include <gtsam/navigation/CombinedImuFactor.h>
+#include <gtsam/navigation/ImuBias.h>
+#include <optional>
+#include <vector>
+
+#include "core/pipeline_config.hpp"
 #include "domain/measurements.hpp"
 #include "graph/factor_storage.hpp"
 
-#include <gtsam/navigation/CombinedImuFactor.h>
-#include <gtsam/navigation/ImuBias.h>
-
-#include <optional>
-#include <random>
-#include <vector>
-
 namespace nufuse::processing {
 
-/// @brief Controls GPS corruption injection for robustness testing.
+/// @brief Configuration for measurement processing.
 struct ProcessorConfig {
-    double spike_metres   = 100.0;
-    double spike_fraction = 0.20;
-    unsigned rng_seed     = 42u;
+  bool init_from_gt = false;                  // Use ground truth position for first keyframe
+  gtsam::imuBias::ConstantBias initial_bias;  // Pre-computed initial IMU bias
+  core::ImuIntrinsicsConfig imu;              // IMU noise parameters
+  double keyframe_interval_s = 0.5;           // IMU-only keyframe interval
 };
 
 /// @brief Processes raw sensor measurements into a FactorStorage.
@@ -27,37 +27,38 @@ struct ProcessorConfig {
 /// Feed measurements via addImu/addGnss/addLidar in chronological order.
 /// Call finalize() to retrieve the completed storage.
 class MeasurementProcessor {
-public:
-    MeasurementProcessor(const ProcessorConfig& cfg,
-                         const std::vector<domain::OdomMeasurement>& odom);
+ public:
+  MeasurementProcessor(const ProcessorConfig& cfg,
+                       const std::vector<domain::OdomMeasurement>& odom);
 
-    void addImu(const domain::ImuMeasurement& m);
-    void addGnss(const domain::GnssFix& fix);
-    void addLidar(core::Timestamp stamp, std::optional<gtsam::Pose3> rel_pose);
+  void addImu(const domain::ImuMeasurement& m);
 
-    graph::FactorStorage finalize() &&;
+  /// @brief Add a GNSS fix. The corrupted flag is set externally (by GpsCorruptor).
+  void addGnss(const domain::GnssFix& fix, bool corrupted = false);
 
-private:
-    void createKeyframe(uint64_t stamp_ns);
-    void initializeFirstKeyframe(uint64_t stamp_ns);
-    void storeImuFactor(uint64_t stamp_ns);
-    void storeKeyframeEstimate(uint64_t stamp_ns);
+  void addLidar(core::Timestamp stamp, std::optional<gtsam::Pose3> rel_pose);
 
-    const ProcessorConfig& cfg_;
-    const std::vector<domain::OdomMeasurement>& odom_;
-    gtsam::imuBias::ConstantBias bias0_;
-    gtsam::PreintegratedCombinedMeasurements pim_;
-    graph::FactorStorage storage_;
+  graph::FactorStorage finalize() &&;
 
-    std::mt19937 rng_;
-    std::bernoulli_distribution coin_;
-    std::uniform_real_distribution<double> spike_dir_{-1.0, 1.0};
+ private:
+  void createKeyframe(uint64_t stamp_ns);
+  void initializeFirstKeyframe(uint64_t stamp_ns);
+  void storeImuFactor(uint64_t stamp_ns);
+  void storeKeyframeEstimate(uint64_t stamp_ns);
 
-    std::optional<domain::ImuMeasurement> prev_imu_;
-    double lat0_ = 0.0, lon0_ = 0.0, alt0_ = 0.0;
-    gtsam::Point3 odom_origin_;
-    int idx_ = -1;
-    int lidar_prev_idx_ = -1;
+  const ProcessorConfig& cfg_;
+  const std::vector<domain::OdomMeasurement>& odom_;
+  gtsam::imuBias::ConstantBias bias0_;
+  gtsam::PreintegratedCombinedMeasurements pim_;
+  graph::FactorStorage storage_;
+
+  std::optional<domain::ImuMeasurement> prev_imu_;
+  double lat0_ = 0.0, lon0_ = 0.0, alt0_ = 0.0;
+  gtsam::Point3 odom_origin_;
+  int idx_ = -1;
+  int lidar_prev_idx_ = -1;
+  uint64_t last_imu_keyframe_stamp_ns_ = 0;
+  uint64_t keyframe_interval_ns_;
 };
 
 }  // namespace nufuse::processing

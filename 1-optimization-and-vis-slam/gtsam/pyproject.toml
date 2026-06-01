@@ -11,6 +11,8 @@ dependencies = [
     "ipykernel",
     "mcap",
     "protobuf",
+    "pandas",
+    "tabulate",
 ]
 
 [tool.uv]

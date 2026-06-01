@@ -54,6 +54,13 @@ using BodyInEnu = slam::geometry::Pose<gtsam::Pose3, cf::Body, cf::Enu>;
 using BodyInMap = slam::geometry::Pose<gtsam::Pose3, cf::Body, cf::Map>;
 
 // ============================================================================
+// Rotation aliases
+// ============================================================================
+
+/// @brief Body orientation in ENU frame (rotation from Body to Enu).
+using BodyOrientationEnu = slam::geometry::Transform<gtsam::Rot3, cf::Enu, cf::Body>;
+
+// ============================================================================
 // Tagged point aliases
 // ============================================================================
 

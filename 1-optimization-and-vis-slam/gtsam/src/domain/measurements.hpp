@@ -16,7 +16,7 @@ struct ImuMeasurement {
     core::Timestamp stamp;
     core::ImuVector linear_acceleration;
     core::ImuVector angular_velocity;
-    gtsam::Rot3 orientation;
+    core::BodyOrientationEnu orientation;
 };
 
 /// @brief Vehicle odometry: pose + dynamics in body/map frames.

@@ -1,6 +1,11 @@
 # Root clangd configuration for multi-project workspace
 # Per-project CompilationDatabase paths route each subproject to its build dir.
 
+CompileFlags:
+  # Remove GCC-specific flags that clangd/clang cannot process:
+  # -fopenmp requires libomp-dev for clang (omp.h); not needed for intellisense.
+  Remove: [-fopenmp]
+
 Diagnostics:
   ClangTidy:
     Add:

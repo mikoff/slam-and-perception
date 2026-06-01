@@ -11,15 +11,15 @@ namespace nufuse::processing {
 
 using namespace gtsam;
 
-// ─── IMU parameters (NuScenes Bosch BMI055) ──────────────────────────────────
+// ─── IMU parameters ──────────────────────────────────────────────────────────
 
-static auto makeImuParams() {
-  auto params = PreintegratedCombinedMeasurements::Params::MakeSharedU(9.81);
-  params->accelerometerCovariance = I_3x3 * std::pow(0.0003924, 2);
-  params->gyroscopeCovariance = I_3x3 * std::pow(0.000205689, 2);
-  params->integrationCovariance = I_3x3 * 1e-8;
-  params->biasAccCovariance = I_3x3 * std::pow(0.004905, 2);
-  params->biasOmegaCovariance = I_3x3 * std::pow(1.4544e-6, 2);
+static auto makeImuParams(const core::ImuIntrinsicsConfig& imu) {
+  auto params = PreintegratedCombinedMeasurements::Params::MakeSharedU(imu.gravity);
+  params->accelerometerCovariance = I_3x3 * std::pow(imu.accel_noise_density, 2);
+  params->gyroscopeCovariance = I_3x3 * std::pow(imu.gyro_noise_density, 2);
+  params->integrationCovariance = I_3x3 * std::pow(imu.integration_sigma, 2);
+  params->biasAccCovariance = I_3x3 * std::pow(imu.bias_accel_sigma, 2);
+  params->biasOmegaCovariance = I_3x3 * std::pow(imu.bias_gyro_sigma, 2);
   return params;
 }
 
@@ -29,9 +29,9 @@ MeasurementProcessor::MeasurementProcessor(const ProcessorConfig& cfg,
                                            const std::vector<domain::OdomMeasurement>& odom)
     : cfg_(cfg),
       odom_(odom),
-      pim_(makeImuParams(), imuBias::ConstantBias{}),
-      rng_(cfg.rng_seed),
-      coin_(cfg.spike_fraction) {}
+      bias0_(cfg.initial_bias),
+      pim_(makeImuParams(cfg.imu), cfg.initial_bias),
+      keyframe_interval_ns_(static_cast<uint64_t>(cfg.keyframe_interval_s * 1e9)) {}
 
 // ─── IMU integration ─────────────────────────────────────────────────────────
 
@@ -45,6 +45,19 @@ void MeasurementProcessor::addImu(const domain::ImuMeasurement& measurement) {
     }
   }
   prev_imu_ = measurement;
+
+  // If graph hasn't been initialized (by GPS), do it now on first IMU
+  if (idx_ == -1) {
+    initializeFirstKeyframe(measurement.stamp.value());
+    last_imu_keyframe_stamp_ns_ = measurement.stamp.value();
+    return;
+  }
+
+  // For IMU-only operation: create keyframes at regular intervals
+  if (measurement.stamp.value() - last_imu_keyframe_stamp_ns_ >= keyframe_interval_ns_) {
+    createKeyframe(measurement.stamp.value());
+    last_imu_keyframe_stamp_ns_ = measurement.stamp.value();
+  }
 }
 
 // ─── First keyframe initialization ──────────────────────────────────────────
@@ -52,7 +65,10 @@ void MeasurementProcessor::addImu(const domain::ImuMeasurement& measurement) {
 void MeasurementProcessor::initializeFirstKeyframe(uint64_t stamp_ns) {
   const auto first_odom = interpolateOdom(odom_, stamp_ns);
   const Rot3 initial_rotation = first_odom.pose.value().rotation();
-  const Pose3 initial_pose(initial_rotation, Point3::Zero());
+  // If init_from_gt is true, use ground truth translation; otherwise origin is (0,0,0)
+  const Point3 initial_position =
+      cfg_.init_from_gt ? first_odom.pose.value().translation() : Point3::Zero();
+  const Pose3 initial_pose(initial_rotation, initial_position);
   const Vector3 initial_velocity = initial_rotation.rotate(first_odom.velocity.value());
   odom_origin_ = first_odom.pose.value().translation();
 
@@ -61,7 +77,7 @@ void MeasurementProcessor::initializeFirstKeyframe(uint64_t stamp_ns) {
   prior.pose = core::BodyInEnu(initial_pose);
   prior.velocity = core::EnuVelocity(initial_velocity);
   prior.bias = bias0_;
-  prior.gps_position = core::EnuPosition(Point3::Zero());
+  prior.gps_position = core::EnuPosition(cfg_.init_from_gt ? initial_position : Point3::Zero());
   storage_.prior = prior;
 
   graph::KeyframeEstimate estimate;
@@ -76,7 +92,7 @@ void MeasurementProcessor::initializeFirstKeyframe(uint64_t stamp_ns) {
 
 // ─── GNSS processing ─────────────────────────────────────────────────────────
 
-void MeasurementProcessor::addGnss(const domain::GnssFix& fix) {
+void MeasurementProcessor::addGnss(const domain::GnssFix& fix, bool corrupted) {
   const uint64_t stamp_ns = fix.stamp.value();
   const auto& lla = fix.lla.value();
 
@@ -91,10 +107,9 @@ void MeasurementProcessor::addGnss(const domain::GnssFix& fix) {
   createKeyframe(stamp_ns);
 
   Point3 enu = llaToEnu(lla(0), lla(1), lla(2), lat0_, lon0_, alt0_);
-  bool corrupted = coin_(rng_);
+  last_imu_keyframe_stamp_ns_ = stamp_ns;
+
   if (corrupted) {
-    enu += Point3(spike_dir_(rng_) * cfg_.spike_metres, spike_dir_(rng_) * cfg_.spike_metres,
-                  spike_dir_(rng_) * cfg_.spike_metres);
     ++storage_.num_corrupted;
   }
 
@@ -111,6 +126,7 @@ void MeasurementProcessor::addLidar(core::Timestamp stamp, std::optional<Pose3> 
   if (idx_ == -1) return;
 
   createKeyframe(stamp.value());
+  last_imu_keyframe_stamp_ns_ = stamp.value();  // Reset IMU interval timer
 
   if (rel_pose && lidar_prev_idx_ >= 0) {
     graph::StoredLidarFactor lidar_factor;

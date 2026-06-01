@@ -54,4 +54,17 @@ domain::OdomMeasurement interpolateOdom(const std::vector<domain::OdomMeasuremen
   return result;
 }
 
+const domain::OdomMeasurement& findNearestOdom(const std::vector<domain::OdomMeasurement>& odom,
+                                               uint64_t stamp_ns) {
+  auto it = std::lower_bound(
+      odom.begin(), odom.end(), stamp_ns,
+      [](const domain::OdomMeasurement& m, uint64_t s) { return m.stamp.value() < s; });
+  if (it == odom.end())
+    --it;
+  else if (it != odom.begin() &&
+           (it->stamp.value() - stamp_ns) > (stamp_ns - std::prev(it)->stamp.value()))
+    --it;
+  return *it;
+}
+
 }  // namespace nufuse::processing
