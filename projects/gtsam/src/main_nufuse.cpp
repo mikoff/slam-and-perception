@@ -1,32 +1,17 @@
 /// @file main_nufuse.cpp
 /// @brief CLI entry point for the NuFuse multi-sensor SLAM pipeline.
-///
-/// Pipeline:
-///   1. Load MCAP -> typed sensor measurements.
-///   2. Compute LiDAR GICP odometry -> body-frame relative poses.
-///   3. Merge measurements chronologically -> FactorStorage.
-///   4. Build GTSAM factor graph -> optimize -> type-safe results.
-///   5. Report and export.
 
-#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
-#include <unordered_map>
 
 #include "core/config_loader.hpp"
 #include "core/pipeline_config.hpp"
 #include "domain/scene_data.hpp"
-#include "graph/builder.hpp"
 #include "io/mcap_loader.hpp"
 #include "io/mcap_writer.hpp"
-#include "processing/forward_velocity_generator.hpp"
-#include "processing/lidar_odometry.hpp"
-#include "processing/measurement_merger.hpp"
-#include "processing/nhc_generator.hpp"
-#include "processing/radar_processor.hpp"
-#include "results/optimizer.hpp"
+#include "pipeline/pipeline.hpp"
 #include "results/reporter.hpp"
 
 namespace {
@@ -41,17 +26,6 @@ bool validateScene(const nufuse::domain::SceneData& scene) {
     return false;
   }
   return true;
-}
-
-std::unordered_map<uint64_t, gtsam::Pose3> buildLidarRelMap(
-    const std::vector<nufuse::processing::LidarRelativePose>& lidar_poses) {
-  std::unordered_map<uint64_t, gtsam::Pose3> lidar_rel_map;
-  for (const auto& pose : lidar_poses) {
-    if (pose.converged) {
-      lidar_rel_map[pose.stamp_to.value()] = pose.T_lidar.value();
-    }
-  }
-  return lidar_rel_map;
 }
 
 }  // anonymous namespace
@@ -121,8 +95,8 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // 1. Load
-  std::cout << "Loading " << mcap_path.filename() << " ...\n";
+  // Load
+  std::cout << "Running NuFuse on " << mcap_path.filename() << " ...\n";
   nufuse::domain::SceneData scene;
   try {
     scene = nufuse::io::loadMcap(mcap_path);
@@ -133,69 +107,26 @@ int main(int argc, char* argv[]) {
 
   if (!validateScene(scene)) return EXIT_FAILURE;
 
-  std::cout << "  IMU: " << scene.imu.size() << "  GNSS: " << scene.gnss.size()
-            << "  Odom: " << scene.odom.size() << "  LiDAR: " << scene.lidar.size()
-            << "  Radar: " << scene.radar.size() << "\n";
+  // Run pipeline
+  auto [results, storage] = nufuse::pipeline::run(scene, pipeline_cfg, init_from_gt);
 
-  // 2. LiDAR odometry
-  std::unordered_map<uint64_t, gtsam::Pose3> lidar_rel;
-  if (pipeline_cfg.enable_lidar) {
-    std::cout << "\nComputing LiDAR GICP odometry...\n";
-    auto lidar_poses = nufuse::processing::computeLidarOdometry(
-        scene.lidar, *scene.extrinsics.body_from_lidar_top);
-    std::cout << "  LiDAR pairs: " << lidar_poses.size() << "  converged: "
-              << std::count_if(lidar_poses.begin(), lidar_poses.end(),
-                               [](const auto& p) { return p.converged; })
-              << "\n";
-    lidar_rel = buildLidarRelMap(lidar_poses);
-  }
-
-  // 3. Merge measurements
-  auto storage =
-      nufuse::processing::mergeMeasurements(scene, lidar_rel, pipeline_cfg, init_from_gt);
-
-  // 4. Radar processing
-  if (pipeline_cfg.enable_radar && !scene.radar.empty()) {
-    std::cout << "\nProcessing radar data (" << scene.radar.size() << " scans)...\n";
-    auto radar_cfg = nufuse::processing::RadarProcessorConfig::fromPipelineConfig(pipeline_cfg);
-    storage.radar_factors =
-        nufuse::processing::processRadarScans(scene.radar, scene.extrinsics, scene.odom, radar_cfg);
-    std::cout << "  Radar factors: " << storage.radar_factors.size() << "\n";
-  }
-
-  // 5. NHC + forward velocity
-  if (pipeline_cfg.enable_nhc) {
-    storage.nhc_factors = nufuse::processing::generateNhcFactors(storage, scene.odom);
-    if (pipeline_cfg.enable_fwdvel) {
-      storage.forward_velocity_factors =
-          nufuse::processing::generateForwardVelocityFactors(storage, scene.odom);
-    }
-  }
-
-  // 6. Build graph & optimize
-  auto graph_bundle = nufuse::graph::buildGraph(storage, scene.extrinsics, pipeline_cfg);
-  std::cout << "Graph: " << graph_bundle.graph.size() << " factors, " << graph_bundle.initial.size()
-            << " variables, " << graph_bundle.num_keyframes + 1 << " keyframes, "
-            << graph_bundle.num_corrupted << " corrupted GNSS fixes\n";
-
-  auto results = nufuse::results::optimize(graph_bundle, storage);
-
-  // 7. Report
+  // Report
   nufuse::results::printTrajectory(results);
   nufuse::results::printBias(results);
   nufuse::results::printError(results, scene, init_from_gt);
   nufuse::results::printLidarExtrinsics(results, scene);
   nufuse::results::printRadarExtrinsics(results, scene);
 
-  if (pipeline_cfg.enable_fwdvel && !storage.forward_velocity_factors.empty()) {
+  if (pipeline_cfg.enable_fwdvel) {
     std::cout << "\nOdometry scale: " << (1.0 + results.odom_scale_delta.value)
               << " (delta=" << results.odom_scale_delta.value << ")\n";
   }
 
-  // 8. Export merged MCAP
+  // Export merged MCAP
   if (output_path) {
     nufuse::io::writeResultsMcap(mcap_path, *output_path, results, storage, scene);
   }
 
+  std::cout << "Done.\n";
   return EXIT_SUCCESS;
 }

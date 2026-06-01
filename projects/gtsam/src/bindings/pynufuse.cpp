@@ -234,10 +234,10 @@ PYBIND11_MODULE(_nufuse, m) {
         // Run pipeline (optionally suppress output)
         nufuse::results::OptimizedResults results;
         if (verbose) {
-          results = nufuse::pipeline::run(scene, config, init_from_gt);
+          results = nufuse::pipeline::run(scene, config, init_from_gt).results;
         } else {
           SuppressOutput guard;
-          results = nufuse::pipeline::run(scene, config, init_from_gt);
+          results = nufuse::pipeline::run(scene, config, init_from_gt).results;
         }
         auto error = computeError(results, scene, init_from_gt);
 
@@ -271,10 +271,10 @@ PYBIND11_MODULE(_nufuse, m) {
 
           nufuse::results::OptimizedResults results;
           if (verbose) {
-            results = nufuse::pipeline::run(scene, config, init_from_gt);
+            results = nufuse::pipeline::run(scene, config, init_from_gt).results;
           } else {
             SuppressOutput guard;
-            results = nufuse::pipeline::run(scene, config, init_from_gt);
+            results = nufuse::pipeline::run(scene, config, init_from_gt).results;
           }
           auto error = computeError(results, scene, init_from_gt);
 

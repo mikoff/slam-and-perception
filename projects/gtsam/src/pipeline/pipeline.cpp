@@ -49,8 +49,8 @@ std::unordered_map<uint64_t, gtsam::Pose3> buildImuPredictions(
 
 }  // anonymous namespace
 
-results::OptimizedResults run(const domain::SceneData& scene, const core::PipelineConfig& config,
-                              bool init_from_gt) {
+PipelineOutput run(const domain::SceneData& scene, const core::PipelineConfig& config,
+                   bool init_from_gt) {
   // 1. LiDAR odometry with quality gating
   std::unordered_map<uint64_t, gtsam::Pose3> lidar_rel;
   std::vector<processing::LidarRelativePose> lidar_poses_raw;
@@ -104,7 +104,8 @@ results::OptimizedResults run(const domain::SceneData& scene, const core::Pipeli
 
   // 5. Build graph & optimize
   auto graph_bundle = graph::buildGraph(storage, scene.extrinsics, config);
-  return results::optimize(graph_bundle, storage, config);
+  auto results = results::optimize(graph_bundle, storage, config);
+  return {std::move(results), std::move(storage)};
 }
 
 }  // namespace nufuse::pipeline
