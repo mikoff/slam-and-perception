@@ -41,25 +41,25 @@ CompileFlags:
 
 # gtsam project
 If:
-  PathMatch: 1-optimization-and-vis-slam/gtsam/.*
+  PathMatch: projects/gtsam/.*
 CompileFlags:
-  CompilationDatabase: 1-optimization-and-vis-slam/gtsam/build
+  CompilationDatabase: projects/gtsam/build
 
 ---
 
 # slam-types project
 If:
-  PathMatch: 1-optimization-and-vis-slam/slam-types/.*
+  PathMatch: projects/slam-types/.*
 CompileFlags:
-  CompilationDatabase: 1-optimization-and-vis-slam/slam-types/build
+  CompilationDatabase: projects/slam-types/build
 
 ---
 
 # symforce project
 If:
-  PathMatch: 1-optimization-and-vis-slam/symforce/.*
+  PathMatch: projects/symforce/.*
 CompileFlags:
-  CompilationDatabase: 1-optimization-and-vis-slam/symforce/build
+  CompilationDatabase: projects/symforce/build
 
 ---
 

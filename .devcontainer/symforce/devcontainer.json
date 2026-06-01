@@ -2,7 +2,7 @@
     "name": "symforce (SLAM)",
     "build": {
         "context": "../..",
-        "dockerfile": "../../1-optimization-and-vis-slam/symforce/Dockerfile"
+        "dockerfile": "../../projects/symforce/Dockerfile"
     },
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
@@ -21,13 +21,13 @@
                 "ms-toolsai.jupyter"
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/workspace/1-optimization-and-vis-slam/symforce/.venv/bin/python",
-                "python.venvPath": "/workspace/1-optimization-and-vis-slam/symforce"
+                "python.defaultInterpreterPath": "/workspace/projects/symforce/.venv/bin/python",
+                "python.venvPath": "/workspace/projects/symforce"
             }
         }
     },
     "postCreateCommand": {
-        "uv-sync": "cd 1-optimization-and-vis-slam/symforce && uv sync",
+        "uv-sync": "cd projects/symforce && uv sync",
         "mcp-setup": "cd /workspace && bash scripts/setup.sh"
     },
     "remoteEnv": {

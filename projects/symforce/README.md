@@ -214,7 +214,7 @@ Measurement structs (`PriorMeasurement`, `BetweenMeasurement`, `LoopClosureMeasu
 Datasets are stored in the top-level `data/` folder of the repo (shared across all projects). Run once:
 
 ```bash
-python /workspace/1-optimization-and-vis-slam/symforce/scripts/download_data.py
+python /workspace/projects/symforce/scripts/download_data.py
 ```
 
 Files are downloaded to `/workspace/data/iSAM2/` and skipped if already present.
@@ -222,7 +222,7 @@ Files are downloaded to `/workspace/data/iSAM2/` and skipped if already present.
 ### 2. Build
 
 ```bash
-cd /workspace/1-optimization-and-vis-slam/symforce
+cd /workspace/projects/symforce
 source .venv/bin/activate
 cmake -B build && cmake --build build -j$(nproc)
 ```

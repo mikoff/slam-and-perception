@@ -2,7 +2,7 @@
     "name": "gtsam (SLAM)",
     "build": {
         "context": "../..",
-        "dockerfile": "../../1-optimization-and-vis-slam/gtsam/Dockerfile"
+        "dockerfile": "../../projects/gtsam/Dockerfile"
     },
     "mounts": [
         "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
@@ -30,15 +30,15 @@
                 "ms-toolsai.jupyter"
             ],
             "settings": {
-                "python.defaultInterpreterPath": "/workspace/1-optimization-and-vis-slam/gtsam/.venv/bin/python",
-                "python.venvPath": "/workspace/1-optimization-and-vis-slam/gtsam",
-                "cmake.sourceDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/gtsam",
-                "cmake.buildDirectory": "${workspaceFolder}/1-optimization-and-vis-slam/gtsam/build"
+                "python.defaultInterpreterPath": "/workspace/projects/gtsam/.venv/bin/python",
+                "python.venvPath": "/workspace/projects/gtsam",
+                "cmake.sourceDirectory": "${workspaceFolder}/projects/gtsam",
+                "cmake.buildDirectory": "${workspaceFolder}/projects/gtsam/build"
             }
         }
     },
     "postCreateCommand": {
-        "uv-sync": "cd 1-optimization-and-vis-slam/gtsam && uv sync",
+        "uv-sync": "cd projects/gtsam && uv sync",
         "mcp-setup": "cd /workspace && bash scripts/setup.sh"
     },
     "remoteEnv": {

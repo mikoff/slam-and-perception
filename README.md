@@ -16,3 +16,11 @@ Every small project is aimed at demonstration of one specific tool/framework/alg
 2. 📚 Read paper/documentation and start prototyping.
 3. 🧪 Write the code and demonstrate results.
 4. ✅ Wrap up the project and switch to the next one.
+
+## Projects
+
+- **[slam-types](projects/slam-types/)** - A C++20 header-only library of compile-time safety primitives for SLAM codebases. Provides `StrongId` for type-safe identifiers (preventing ID mix-ups between poses, landmarks, etc.) and frame-tagged transforms that enforce coordinate-frame consistency at compile time, catching frame mismatches as build errors with zero runtime overhead.
+
+- **[NuFuse / gtsam](projects/gtsam/)** - A tightly-integrated SLAM back-end built on GTSAM that fuses IMU preintegration, GNSS fixes, and LiDAR scan-matching odometry into a single factor graph. The optimizer jointly estimates the vehicle trajectory and the LiDAR extrinsic calibration, using robust factors to gracefully handle GPS outliers. Evaluated on the nuScenes mini dataset via MCAP.
+
+- **[symforce](projects/symforce/)** - An exploration of symbolic factor graph optimization using SymForce. Covers uncertainty representation and whitening, Lie group notation for poses and odometry, and the derivation of residuals for SE(3) factors - providing the mathematical foundation for automatic Jacobian generation in SLAM back-ends.
