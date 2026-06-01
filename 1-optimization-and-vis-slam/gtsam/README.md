@@ -445,7 +445,7 @@ Evaluated on NuScenes-mini (~20 s scenes). GPS limited to first 3 fixes (initial
 
 ### Findings
 
-1. **Data-driven bias initialization is essential.** Computing initial gyro bias from IMU vs odometry comparison ($\text{bias} \approx \bar{\omega}_\text{imu} - \bar{\omega}_\text{odom}$ over first 100 samples) and using a tight prior ($\sigma_\text{gyro} = 0.003$ rad/s) reduced C1 errors by 3–6× on turning scenes (1094: 43 → 7.7 m, 0796: 37 → 10 m).
+1. **Data-driven bias initialization is essential.** Computing initial gyro bias from IMU vs odometry comparison ($\text{bias} \approx \bar{\omega}\_\text{imu} - \bar{\omega}\_\text{odom}$ over first 100 samples) and using a tight prior ($\sigma\_\text{gyro} = 0.003$ rad/s) reduced C1 errors by 3–6× on turning scenes (1094: 43 → 7.7 m, 0796: 37 → 10 m).
 2. **Adaptive priors by observability regime.** Without LiDAR, the gyro prior must be tight (heading is unobservable). With LiDAR providing dense rotation info, the prior is loosened ($\sigma = 0.1$) to allow bias calibration against LiDAR heading.
 3. **FwdVel + NHC achieve near-LiDAR accuracy in dead-reckoning.** C1/C2 now match or beat C3 on most scenes — the tight gyro prior + FwdVel scale provide better heading/speed than LiDAR GICP (which has systematic heading errors from planar scenes).
 4. **LiDAR GICP heading is unreliable** on flat urban roads (0796: 32 m, 0655: 15 m). The GICP algorithm struggles with rotational alignment on planar/symmetric scenes, requiring the optimizer to absorb heading error into gyro bias.
