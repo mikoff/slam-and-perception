@@ -1,0 +1,21 @@
+[project]
+name = "vision-sandbox"
+version = "0.1.0"
+description = "Sandbox for training and playing around with Vision Transformers, DINOv3, and other neural networks."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    "torchvision",
+    "ipykernel",
+    "numpy"
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }

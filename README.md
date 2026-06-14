@@ -24,3 +24,5 @@ Every small project is aimed at demonstration of one specific tool/framework/alg
 - **[NuFuse / gtsam](projects/gtsam/)** - A tightly-integrated SLAM back-end built on GTSAM that fuses IMU preintegration, GNSS fixes, and LiDAR scan-matching odometry into a single factor graph. The optimizer jointly estimates the vehicle trajectory and the LiDAR extrinsic calibration, using robust factors to gracefully handle GPS outliers. Evaluated on the nuScenes mini dataset via MCAP.
 
 - **[symforce](projects/symforce/)** - An exploration of symbolic factor graph optimization using SymForce. Covers uncertainty representation and whitening, Lie group notation for poses and odometry, and the derivation of residuals for SE(3) factors - providing the mathematical foundation for automatic Jacobian generation in SLAM back-ends.
+
+- **[vision-sandbox](projects/vision-sandbox/)** - A playground for training, testing, and exploring Vision Transformers (ViTs), DINOv3, and other vision neural network models, set up with a lightweight `uv` Python environment.
