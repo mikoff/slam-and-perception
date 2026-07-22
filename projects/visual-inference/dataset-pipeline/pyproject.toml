@@ -1,0 +1,28 @@
+[project]
+name = "dataset-pipeline"
+version = "0.1.0"
+description = "Storage-efficient Dataset Ninja Supervisely to unified COCO conversion"
+requires-python = ">=3.11"
+dependencies = [
+  "opencv-python-headless==4.13.0.92",
+  "Pillow==12.2.0",
+  "pycocotools==2.0.11",
+  "PyYAML==6.0.3",
+  "supervisely==6.74.13",
+  "zstandard==0.25.0",
+]
+
+[dependency-groups]
+dev = ["pytest==9.0.2"]
+
+[project.scripts]
+dataset-pipeline = "dataset_pipeline.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+

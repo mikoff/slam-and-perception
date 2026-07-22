@@ -1,0 +1,36 @@
+workspace_root: ../../../../data/visual-inference-datasets
+taxonomy: automotive_taxonomy_mapping.json
+
+datasets:
+  nuimages:
+    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/nuimages-DatasetNinja.tar
+    extracted_dir: raw/nuimages
+    project_subpath: null
+  woodscape_rgb_fisheye:
+    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/woodscape-rgb-fisheye-DatasetNinja.tar
+    extracted_dir: raw/woodscape_rgb_fisheye
+    project_subpath: null
+  bdd100k_images_100k:
+    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/bdd100k_-images-100k-DatasetNinja.tar
+    extracted_dir: raw/bdd100k_images_100k
+    project_subpath: null
+  coco_2017:
+    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/coco-2017-DatasetNinja.tar
+    extracted_dir: raw/coco_2017
+    project_subpath: null
+
+storage:
+  image_link_mode: symlink
+  relative_symlinks: true
+  delete_intermediate_projects_after_export: true
+
+splits:
+  train_aliases: [train, training, train2017]
+  val_aliases: [val, valid, validation, val2017]
+  test_aliases: [test, test2017]
+
+validation:
+  preview_count: 100
+  random_seed: 42
+  validation_fraction: 0.1
+  clip_boxes_to_image: true

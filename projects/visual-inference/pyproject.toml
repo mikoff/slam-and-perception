@@ -1,0 +1,20 @@
+[project]
+name = "visual-inference"
+version = "0.1.0"
+description = "Experiments with neural network distillation and visual inference."
+requires-python = ">=3.11"
+dependencies = [
+    "dataset-tools",
+    "pillow",
+    "pycocotools",
+    "supervisely",
+    "torch",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
