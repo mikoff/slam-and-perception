@@ -8,7 +8,28 @@ dependencies = [
     "pillow",
     "pycocotools",
     "supervisely",
+    "timm>=1.0.27,<2",
     "torch",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["student_detector"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+inspection = [
+    "ai-edge-model-explorer>=0.1.32,<0.2",
+    "matplotlib>=3.10",
+    "numpy>=1.26",
+    "tensorboard>=2.20",
+    "torchinfo>=1.8",
+    "torchview>=0.2",
 ]
 
 [[tool.uv.index]]
