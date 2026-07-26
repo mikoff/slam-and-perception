@@ -12,6 +12,10 @@ def test_normalization_and_ids(taxonomy):
 
 def test_ignore_and_unmapped(taxonomy):
     assert taxonomy.map("bdd100k_images_100k", "drivable area").ignored
+    ignore_region = taxonomy.map("woodscape_rgb_fisheye", "grouped vehicles")
+    assert not ignore_region.ignored
+    assert ignore_region.ignore_region
+    assert ignore_region.category_id == taxonomy.ignore_region_category_id
     with pytest.raises(UnmappedCategoryError):
         taxonomy.map("bdd100k_images_100k", "hovercraft")
 

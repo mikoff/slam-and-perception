@@ -19,29 +19,30 @@ uv run --group dev pytest -q tests/student_detector
 uv run python scripts/verify_phase2.py
 ```
 
+## Phase 3 proposal training
+
+Phase 3 trains the Phase-2 HBB detector as a class-agnostic proposal generator.
+Its data policy, ATSS/loss rationale, commands, measured audits, and remaining
+gates are documented in [`docs/phase3.md`](docs/phase3.md).
+
+Useful entry points:
+
+```bash
+uv run pytest -q tests
+uv run python scripts/audit_phase3_data.py --samples 300
+uv run python scripts/train_phase3.py --overfit-images 50 --epochs 20
+uv run python scripts/train_phase3.py --config configs/phase3.yaml
+```
+
 ## Phase 1 dataset preparation
 
-This project prepares four Dataset Ninja datasets for object-detection experiments:
+The nested `dataset-pipeline` project prepares four Dataset Ninja datasets:
 nuImages, WoodScape RGB Fisheye, BDD100K Images 100K, and COCO 2017.
 
-Run the complete workflow from this directory:
+Its environment and commands are documented in
+[`dataset-pipeline/README.md`](dataset-pipeline/README.md). Run its tests with:
 
 ```bash
-uv run scripts/prepare_datasets.py
+cd dataset-pipeline
+uv run pytest -q
 ```
-
-It downloads the datasets into `datasets/supervisely/`, discovers projects by
-`meta.json`, converts them to detection projects, exports each project to COCO,
-merges the exports into `datasets/coco_merged/`, validates the result with
-`pycocotools`, and writes previews under `datasets/coco_merged/previews/`.
-
-To reuse already-downloaded datasets:
-
-```bash
-uv run scripts/prepare_datasets.py --skip-download
-```
-
-The downloader now checks that each response is a real tar archive. If Dataset
-Ninja's Dropbox link is temporarily disabled, download the Supervisely archive
-from the corresponding Dataset Ninja page, place/extract it under
-`datasets/supervisely/`, and rerun with `--skip-download`.

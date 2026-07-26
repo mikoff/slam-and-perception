@@ -30,7 +30,13 @@ class SharedDetectionHead(nn.Module):
     ) -> None:
         super().__init__()
         self.object_tower = DepthwiseSeparableConv(channels, channels)
-        self.regression_tower = DepthwiseSeparableConv(channels, channels)
+        # Stage-0 diagnostics isolated localization as the primary recall
+        # ceiling. Keep the shared, quantization-friendly design but give the
+        # regression path one additional lightweight nonlinear refinement.
+        self.regression_tower = nn.Sequential(
+            DepthwiseSeparableConv(channels, channels),
+            DepthwiseSeparableConv(channels, channels),
+        )
         self.objectness = nn.Conv2d(channels, 1, kernel_size=1)
         self.box_regression = nn.Conv2d(channels, 4, kernel_size=1)
         self.centerness = nn.Conv2d(channels, 1, kernel_size=1)
@@ -39,6 +45,11 @@ class SharedDetectionHead(nn.Module):
 
         objectness_bias = -math.log((1.0 - prior_probability) / prior_probability)
         nn.init.constant_(self.objectness.bias, objectness_bias)
+        # ReLU distance decoding needs a positive starting point. Unlike FCOS's
+        # exponential transform, a default near-zero logit can create zero-area
+        # boxes and block the gradient on negative regression outputs.
+        nn.init.constant_(self.box_regression.bias, 1.0)
+        nn.init.zeros_(self.centerness.bias)
 
     def _forward_level(self, feature: Tensor, level: int) -> tuple[Tensor, Tensor, Tensor]:
         object_feature = self.object_tower(feature)

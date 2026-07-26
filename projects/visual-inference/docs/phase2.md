@@ -534,27 +534,30 @@ Current status:
 | saved Model Explorer `.pt2` | pass | flattened export artifact saves and reloads, 694 nodes |
 | profiling entry point | pass locally | target Pi measurement still required |
 
-The suite currently contains 16 passing tests. The CUDA/NVML warning seen on a
+The original Phase-2 suite contained 16 passing tests. Phase 3 extends the
+combined detector suite to 29 tests. The CUDA/NVML warning seen on a
 CPU-only test runner is environmental and does not indicate a model failure.
 
 ## 13. Known limitations and next decisions
 
-1. **Tiny boxes:** quantify `unrepresentable_gt_indices` after the real 384 resize
-   and decide whether filtering is acceptable or P2 is necessary.
-2. **Training losses:** define the objectness, box regression, and centerness
-   losses, their normalizers and weights, and how empty-positive images behave.
-3. **BatchNorm:** choose a physical batch/BN policy and validate running
-   statistics before quantization.
-4. **Preprocessing contract:** training, inspection, export validation, and Pi
-   inference must share resize/letterbox, RGB ordering, normalization, and box
-   coordinate conventions.
-5. **Proposal quality:** evaluate class-agnostic recall at proposal counts such as
-   10, 50, and 100, not only training loss.
-6. **Quantization:** fuse where supported, calibrate on representative images,
+Phase 3 has now implemented the preprocessing, losses, mask policy, optimizer,
+BN policy, proposal metrics, and real-data audit described as open decisions in
+the original Phase-2 handoff. See [`phase3.md`](phase3.md) for the rationale,
+commands, and measured results.
+
+Remaining architecture-level decisions are:
+
+1. **Tiny boxes:** the real audit reports 1.63% grid-unrepresentable GTs after
+   the tiny-object policy.
+2. **ATSS fallback:** the real audit reports 9.20% fallback, concentrated in
+   nuImages; inspect Stage-0 examples before changing agreed priors.
+3. **Proposal quality:** the production training run has not occurred because
+   this workstation has no usable CUDA device.
+4. **Quantization:** fuse where supported, calibrate on representative images,
    compare FP32 versus INT8 proposal recall and box error, and inspect delegation.
-7. **Target environment:** create a separate ARM/CPU dependency and deployment
+5. **Target environment:** create a separate ARM/CPU dependency and deployment
    path after selecting the exact Raspberry Pi model and OS.
-8. **Semantic head:** attach and train the future 256-D branch only after the
+6. **Semantic head:** attach and train the future 256-D branch only after the
    localization baseline is stable.
 
 ## 14. Code map

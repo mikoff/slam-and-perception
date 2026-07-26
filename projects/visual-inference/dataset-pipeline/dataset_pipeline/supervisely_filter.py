@@ -14,6 +14,20 @@ from .reports import read_json, write_json
 from .taxonomy import MappingResult, Taxonomy
 
 
+def _tag_attributes(tags: Any) -> dict[str, Any]:
+    """Normalize Supervisely object tags into stable JSON attributes."""
+    attributes: dict[str, Any] = {}
+    if not isinstance(tags, list):
+        return attributes
+    for index, tag in enumerate(tags):
+        if not isinstance(tag, dict):
+            continue
+        name = str(tag.get("name") or tag.get("tagName") or f"tag_{index}")
+        value = tag.get("value")
+        attributes[name] = True if value is None or value == "" else value
+    return attributes
+
+
 def iter_project_images(project: Path) -> Iterator[tuple[str, Path, Path]]:
     for split in sorted(project.iterdir()):
         if not split.is_dir() or not (split / "img").is_dir() or not (split / "ann").is_dir():
@@ -52,7 +66,11 @@ def filtering_plan(dataset: DatasetConfig, source: Path, taxonomy: Taxonomy, lim
         "dataset": dataset.name,
         "limit_images": limit_images,
         "source_classes": sorted(classes),
-        "retained_classes": sorted({m.canonical for m in mappings.values() if not m.ignored}),
+        "retained_classes": sorted({
+            m.canonical for m in mappings.values()
+            if not m.ignored and not m.ignore_region and m.canonical is not None
+        }),
+        "has_ignore_regions": any(m.ignore_region for m in mappings.values()),
         "ignored_classes": sorted(m.source_category for m in mappings.values() if m.ignored),
         "source_annotation_count": source_annotations,
         "retained_annotation_count": retained,
@@ -94,6 +112,12 @@ def _filter_batch(batch: _FilterBatch) -> tuple[int, dict[str, int]]:
             converted["classTitle"] = mapping.canonical
             converted["sourceCategory"] = mapping.source_category
             converted["sourceAnnotationId"] = str(obj.get("id", obj.get("key", "")))
+            converted["attributes"] = {
+                **_tag_attributes(obj.get("tags")),
+                **dict(obj.get("attributes") or {}),
+            }
+            if mapping.ignore_region:
+                converted["ignoreRegion"] = True
             output_objects.append(converted)
         annotation["objects"] = output_objects
         write_json(out_ann, annotation, compact=True)
@@ -140,6 +164,13 @@ def filter_project(
                 "title": canonical, "shape": "any", "geometryType": "any",
                 "color": "#%06x" % ((taxonomy.category_ids[canonical] * 2654435761) & 0xFFFFFF),
             })
+    if plan["has_ignore_regions"]:
+        canonical_classes.append({
+            "title": taxonomy.ignore_region_token,
+            "shape": "any",
+            "geometryType": "any",
+            "color": "#808080",
+        })
     destination.mkdir(parents=True)
     try:
         new_meta = dict(meta)

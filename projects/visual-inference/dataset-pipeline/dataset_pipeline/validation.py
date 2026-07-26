@@ -34,7 +34,7 @@ def validate_coco(
         errors.append({"file": str(path), "error": "duplicate image IDs"})
     if len({item.get("id") for item in annotations}) != len(annotations):
         errors.append({"file": str(path), "error": "duplicate annotation IDs"})
-    configured_ids = set(taxonomy.category_ids.values())
+    configured_ids = taxonomy.configured_category_ids
     present_categories = {item.get("id") for item in data.get("categories", [])}
     if not present_categories.issubset(configured_ids):
         errors.append({"file": str(path), "error": "unconfigured categories in categories list"})

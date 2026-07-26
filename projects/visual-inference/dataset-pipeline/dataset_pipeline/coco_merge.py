@@ -33,6 +33,23 @@ def _fallback_split(dataset: str, source_id: str, fraction: float, seed: int) ->
     return "val" if value < fraction else "train"
 
 
+def prune_unreferenced_image_links(
+    image_root: Path, referenced: set[str]
+) -> int:
+    """Remove stale derived symlinks while never touching real image files."""
+    removed = 0
+    if not image_root.exists():
+        return removed
+    for path in image_root.rglob("*"):
+        if (
+            path.is_symlink()
+            and path.relative_to(image_root.parent).as_posix() not in referenced
+        ):
+            path.unlink()
+            removed += 1
+    return removed
+
+
 def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> dict[str, Any]:
     records = []
     datasets_with_val: set[str] = set()
@@ -44,6 +61,12 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
         for image in data["images"]:
             source_split = str(image.get("source_split", path.stem.removeprefix("instances_")))
             split = normalize_split(source_split, config.splits)
+            if (
+                split == "test"
+                and image["source_dataset"]
+                in set(config.validation["source_test_as_validation"])
+            ):
+                split = "val"
             if split == "val":
                 datasets_with_val.add(image["source_dataset"])
             records.append({"image": image, "annotations": annotations[image["id"]], "split": split, "source_split": source_split})
@@ -104,6 +127,7 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
             "source_image_id": str(record["image"]["source_image_id"]),
             "source_file_name": record["image"]["source_file_name"],
             "camera_type": camera, "camera_channel": channel,
+            "background_supervision": source_dataset == "coco_2017",
         })
         prepared = record["annotations"]
         for annotation in prepared:
@@ -124,6 +148,16 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
             data,
             compact=True,
         )
+    stale_links_removed = 0
+    if force:
+        referenced = {
+            image["file_name"]
+            for data in output_data.values()
+            for image in data["images"]
+        }
+        stale_links_removed = prune_unreferenced_image_links(
+            config.workspace_root / "output" / "images", referenced
+        )
     write_json(config.reports / "split_report.json", {key: dict(value) for key, value in split_report.items()})
     write_json(config.reports / "category_mapping.json", {
         name: category_id for name, category_id in taxonomy.category_ids.items()
@@ -140,6 +174,7 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
         "final_new_symlinks": link_counts.get("new_symlink", 0),
         "final_reused_symlinks": link_counts.get("reused_symlink", 0),
         "final_storage_saved": final_saved,
+        "stale_final_links_removed": stale_links_removed,
         "estimated_storage_saved": previous.get("intermediate_storage_saved", 0) + final_saved,
     })
     return {split: {"images": len(data["images"]), "annotations": len(data["annotations"])} for split, data in output_data.items()}

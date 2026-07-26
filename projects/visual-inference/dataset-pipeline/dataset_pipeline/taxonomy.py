@@ -19,18 +19,23 @@ class MappingResult:
     canonical: str | None
     category_id: int | None
     ignored: bool
+    ignore_region: bool
 
 
 class Taxonomy:
     def __init__(self, data: dict[str, Any]):
         self.data = dict(data)
         self.ignore_token = data.get("ignore_token", "__ignore__")
+        self.ignore_region_token = data.get("tokens", {}).get(
+            "ignore_region", "__ignore_region__"
+        )
         self.ignore_tokens = set(data.get("tokens", {}).values()) | {self.ignore_token}
         order = data.get("canonical_id_order") or data["semantic_category_id_order"]
         self.data["canonical_id_order"] = order
         if len(order) != len(set(order)):
             raise ValueError("canonical_id_order contains duplicates")
         self.category_ids = {name: index + 1 for index, name in enumerate(order)}
+        self.ignore_region_category_id = len(self.category_ids) + 1
         self.identity_datasets = set(data.get("identity_datasets", []))
         guards = data.get("mapping_guards", {})
         required_guard_terms = {
@@ -62,10 +67,21 @@ class Taxonomy:
 
     @property
     def categories(self) -> list[dict[str, Any]]:
-        return [
+        categories = [
             {"id": category_id, "name": name, "supercategory": "object"}
             for name, category_id in self.category_ids.items()
         ]
+        categories.append({
+            "id": self.ignore_region_category_id,
+            "name": self.ignore_region_token,
+            "supercategory": "ignore",
+            "ignore_region": True,
+        })
+        return categories
+
+    @property
+    def configured_category_ids(self) -> set[int]:
+        return {*self.category_ids.values(), self.ignore_region_category_id}
 
     def normalize(self, name: str) -> str:
         rules = self.data.get("name_normalization", {})
@@ -88,10 +104,26 @@ class Taxonomy:
             if mapping is None or normalized not in mapping:
                 raise UnmappedCategoryError(f"{dataset}: unmapped category {source_name!r} ({normalized!r})")
             canonical = self._mapping_target(mapping[normalized])
+        if canonical == self.ignore_region_token:
+            return MappingResult(
+                source_name,
+                normalized,
+                self.ignore_region_token,
+                self.ignore_region_category_id,
+                False,
+                True,
+            )
         if canonical in self.ignore_tokens:
-            return MappingResult(source_name, normalized, None, None, True)
+            return MappingResult(source_name, normalized, None, None, True, False)
         self._check_guard(dataset, normalized, description)
-        return MappingResult(source_name, normalized, canonical, self.category_ids[canonical], False)
+        return MappingResult(
+            source_name,
+            normalized,
+            canonical,
+            self.category_ids[canonical],
+            False,
+            False,
+        )
 
     def _check_guard(self, dataset: str, normalized: str, description: str | None) -> None:
         if dataset == "nuimages" and normalized == "other":

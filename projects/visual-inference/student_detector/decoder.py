@@ -6,8 +6,9 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor
+from torchvision.ops import nms as torchvision_nms
 
-from .geometry import box_iou, decode_ltrb, make_grid_points
+from .geometry import decode_ltrb, make_grid_points
 from .head import DetectorOutput
 
 
@@ -18,20 +19,10 @@ class Detection:
 
 
 def class_agnostic_nms(boxes: Tensor, scores: Tensor, iou_threshold: float) -> Tensor:
-    """Pure-PyTorch greedy NMS for the small preselected proposal set."""
-    order = scores.argsort(descending=True)
-    kept: list[Tensor] = []
-    while order.numel() > 0:
-        current = order[0]
-        kept.append(current)
-        if order.numel() == 1:
-            break
-        remaining = order[1:]
-        overlaps = box_iou(boxes[current].unsqueeze(0), boxes[remaining]).squeeze(0)
-        order = remaining[overlaps <= iou_threshold]
-    if not kept:
+    """Use the compiled torchvision kernel outside the exported model graph."""
+    if boxes.numel() == 0:
         return torch.empty((0,), dtype=torch.long, device=boxes.device)
-    return torch.stack(kept)
+    return torchvision_nms(boxes.float(), scores.float(), iou_threshold)
 
 
 class InferenceDecoder:
@@ -44,14 +35,26 @@ class InferenceDecoder:
         top_k: int = 300,
         nms_iou_threshold: float = 0.6,
         max_detections: int = 100,
+        score_mode: str = "objectness_x_centerness",
     ) -> None:
+        if score_mode not in {
+            "objectness", "objectness_x_centerness"
+        }:
+            raise ValueError(
+                "score_mode must be 'objectness' or "
+                "'objectness_x_centerness'"
+            )
         self.strides = strides
         self.top_k = top_k
         self.nms_iou_threshold = nms_iou_threshold
         self.max_detections = max_detections
+        self.score_mode = score_mode
 
     def __call__(
-        self, output: DetectorOutput, image_size: tuple[int, int]
+        self,
+        output: DetectorOutput,
+        image_size: tuple[int, int],
+        valid_point_masks: tuple[Tensor, Tensor, Tensor] | None = None,
     ) -> list[Detection]:
         height, width = image_size
         feature_shapes = tuple(
@@ -63,16 +66,38 @@ class InferenceDecoder:
             device=output.objectness[0].device,
             dtype=output.box_distances[0].dtype,
         )
-        scores = torch.cat(
-            [
-                torch.sigmoid(obj).flatten(start_dim=1)
-                * torch.sigmoid(center).flatten(start_dim=1)
-                for obj, center in zip(
-                    output.objectness, output.centerness, strict=True
+        if self.score_mode == "objectness":
+            scores = torch.cat(
+                [
+                    torch.sigmoid(obj).flatten(start_dim=1)
+                    for obj in output.objectness
+                ],
+                dim=1,
+            )
+        else:
+            scores = torch.cat(
+                [
+                    torch.sigmoid(obj).flatten(start_dim=1)
+                    * torch.sigmoid(center).flatten(start_dim=1)
+                    for obj, center in zip(
+                        output.objectness, output.centerness, strict=True
+                    )
+                ],
+                dim=1,
+            )
+        if valid_point_masks is not None:
+            flattened_masks = torch.cat(
+                [
+                    mask.reshape(mask.shape[0], -1)
+                    for mask in valid_point_masks
+                ],
+                dim=1,
+            ).to(device=scores.device, dtype=torch.bool)
+            if flattened_masks.shape != scores.shape:
+                raise ValueError(
+                    "valid_point_masks must match the batch and P3-P5 shapes"
                 )
-            ],
-            dim=1,
-        )
+            scores = scores.masked_fill(~flattened_masks, -torch.inf)
         distances = torch.cat(
             [
                 distance.permute(0, 2, 3, 1).reshape(distance.shape[0], -1, 4)
@@ -83,7 +108,22 @@ class InferenceDecoder:
 
         detections: list[Detection] = []
         for batch_index in range(scores.shape[0]):
-            count = min(self.top_k, scores.shape[1])
+            count = min(
+                self.top_k,
+                int(torch.isfinite(scores[batch_index]).sum().item()),
+            )
+            if count == 0:
+                detections.append(Detection(
+                    torch.empty(
+                        (0, 4),
+                        dtype=distances.dtype,
+                        device=distances.device,
+                    ),
+                    torch.empty(
+                        (0,), dtype=scores.dtype, device=scores.device
+                    ),
+                ))
+                continue
             selected_scores, selected_indices = torch.topk(
                 scores[batch_index], k=count, largest=True, sorted=True
             )

@@ -3,7 +3,11 @@ from pathlib import Path
 
 from PIL import Image
 
-from dataset_pipeline.coco_merge import merge_exports, normalize_split
+from dataset_pipeline.coco_merge import (
+    merge_exports,
+    normalize_split,
+    prune_unreferenced_image_links,
+)
 from dataset_pipeline.config import ensure_workspace
 
 
@@ -53,3 +57,44 @@ def test_merge_is_deterministic_and_links_raw(config_factory, taxonomy):
     link = config.workspace_root / "output" / data["images"][0]["file_name"]
     assert link.is_symlink()
     assert "/raw/" in str(link.resolve())
+
+
+def test_woodscape_source_test_is_used_as_validation(config_factory, taxonomy):
+    config = config_factory({
+        "woodscape_rgb_fisheye": {"archive": "/tmp/unused.tar"},
+    })
+    ensure_workspace(config)
+    _source_export(
+        config,
+        taxonomy,
+        dataset="woodscape_rgb_fisheye",
+        split="test",
+        filename="fisheye.png",
+    )
+    merge_exports(config, taxonomy)
+    val = json.loads(
+        (config.workspace_root / "output/annotations/instances_val.json").read_text()
+    )
+    assert len(val["images"]) == 1
+    assert val["images"][0]["source_split"] == "test"
+    assert val["images"][0]["background_supervision"] is False
+
+
+def test_prunes_only_unreferenced_symlinks(tmp_path):
+    raw = tmp_path / "raw.jpg"
+    raw.write_bytes(b"image")
+    image_root = tmp_path / "output/images"
+    (image_root / "train").mkdir(parents=True)
+    keep = image_root / "train/keep.jpg"
+    stale = image_root / "train/stale.jpg"
+    keep.symlink_to(raw)
+    stale.symlink_to(raw)
+    regular = image_root / "train/regular.jpg"
+    regular.write_bytes(b"do not delete")
+    removed = prune_unreferenced_image_links(
+        image_root, {"images/train/keep.jpg"}
+    )
+    assert removed == 1
+    assert keep.is_symlink()
+    assert not stale.exists()
+    assert regular.exists()

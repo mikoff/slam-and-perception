@@ -84,6 +84,41 @@ def rectangle_object(obj: dict[str, Any], width: int, height: int, clip: bool) -
     return output, changed
 
 
+def deduplicate_geometry_representations(
+    objects: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Collapse polygon/rectangle duplicates emitted for one source instance.
+
+    Dataset Ninja COCO exports may contain both a polygon and its enclosing
+    rectangle as separate objects. Only a mixed-geometry pair with the same
+    class and exact enclosing box is collapsed; genuine same-geometry instances
+    are retained.
+    """
+    groups: dict[tuple[str, tuple[float, float, float, float]], list[int]] = {}
+    for index, obj in enumerate(objects):
+        try:
+            bbox = tuple(round(value, 6) for value in object_bbox(obj))
+        except GeometryError:
+            continue
+        key = (str(obj.get("classTitle", "")), bbox)
+        groups.setdefault(key, []).append(index)
+
+    discarded: set[int] = set()
+    for indices in groups.values():
+        rectangles = [
+            index for index in indices
+            if str(objects[index].get("geometryType", "")).lower() == "rectangle"
+        ]
+        non_rectangles = [index for index in indices if index not in rectangles]
+        pair_count = min(len(rectangles), len(non_rectangles))
+        for index in non_rectangles[:pair_count]:
+            discarded.add(index)
+    return (
+        [obj for index, obj in enumerate(objects) if index not in discarded],
+        len(discarded),
+    )
+
+
 @dataclass(frozen=True)
 class _ConversionBatch:
     dataset: str
@@ -92,8 +127,11 @@ class _ConversionBatch:
     clip: bool
 
 
-def _convert_batch(batch: _ConversionBatch) -> tuple[int, int, list[dict[str, Any]], list[dict[str, Any]]]:
+def _convert_batch(
+    batch: _ConversionBatch,
+) -> tuple[int, int, int, list[dict[str, Any]], list[dict[str, Any]]]:
     converted_count = 0
+    duplicate_count = 0
     invalid = []
     clipped_rows = []
     for split, image, ann_path in batch.images:
@@ -107,7 +145,11 @@ def _convert_batch(batch: _ConversionBatch) -> tuple[int, int, list[dict[str, An
                 width, height = loaded.size
             annotation["size"] = {"width": width, "height": height}
         objects = []
-        for index, obj in enumerate(annotation.get("objects", [])):
+        source_objects, removed = deduplicate_geometry_representations(
+            annotation.get("objects", [])
+        )
+        duplicate_count += removed
+        for index, obj in enumerate(source_objects):
             row = {"dataset": batch.dataset, "split": split, "image": image.name, "object_index": index}
             try:
                 converted, was_clipped = rectangle_object(obj, width, height, batch.clip)
@@ -123,7 +165,7 @@ def _convert_batch(batch: _ConversionBatch) -> tuple[int, int, list[dict[str, An
             annotation,
             compact=True,
         )
-    return len(batch.images), converted_count, invalid, clipped_rows
+    return len(batch.images), converted_count, duplicate_count, invalid, clipped_rows
 
 
 def convert_all(
@@ -147,6 +189,7 @@ def convert_all(
                 cls["shape"] = cls["geometryType"] = "rectangle"
             write_json(destination / "meta.json", meta, compact=True)
             converted_count = 0
+            duplicate_count = 0
             jobs = (
                 _ConversionBatch(
                     dataset.name, batch, destination,
@@ -155,8 +198,15 @@ def convert_all(
                 for batch in batches(iter_project_images(source))
             )
             progress = Progress(f"Converting {dataset.name}", "images")
-            for batch_size, count, batch_invalid, batch_clipped in process_map(_convert_batch, jobs, workers):
+            for (
+                batch_size,
+                count,
+                batch_duplicates,
+                batch_invalid,
+                batch_clipped,
+            ) in process_map(_convert_batch, jobs, workers):
                 converted_count += count
+                duplicate_count += batch_duplicates
                 invalid.extend(batch_invalid)
                 clipped_rows.extend(batch_clipped)
                 progress.add(batch_size)
@@ -168,7 +218,12 @@ def convert_all(
             shutil.rmtree(destination)
             break
         (destination / ".detection_complete").write_text("complete\n", encoding="utf-8")
-        reports.append({"dataset": dataset.name, "converted_annotations": converted_count, "clipped": sum(r["dataset"] == dataset.name for r in clipped_rows)})
+        reports.append({
+            "dataset": dataset.name,
+            "converted_annotations": converted_count,
+            "deduplicated_geometry_representations": duplicate_count,
+            "clipped": sum(r["dataset"] == dataset.name for r in clipped_rows),
+        })
     write_json(config.reports / "detection_conversion.json", reports)
     fields = ["dataset", "split", "image", "object_index", "error"]
     write_csv(config.reports / "invalid_geometries.csv", fields, invalid)

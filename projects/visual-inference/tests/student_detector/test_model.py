@@ -53,6 +53,11 @@ def test_student_detector_fixed_shapes(
 def test_prediction_towers_are_shared_across_levels() -> None:
     model = StudentDetector(backbone=StubBackbone())
     assert len(model.head.scales) == 3
+    assert len(model.head.regression_tower) == 2
+    torch.testing.assert_close(
+        model.head.box_regression.bias,
+        torch.ones_like(model.head.box_regression.bias),
+    )
     assert sum(1 for name, _ in model.head.named_modules() if name == "object_tower") == 1
     assert sum(1 for name, _ in model.head.named_modules() if name == "regression_tower") == 1
 

@@ -5,8 +5,10 @@ description = "Experiments with neural network distillation and visual inference
 requires-python = ">=3.11"
 dependencies = [
     "dataset-tools",
+    "ijson>=3.4,<4",
     "pillow",
     "pycocotools",
+    "pyyaml>=6,<7",
     "supervisely",
     "timm>=1.0.27,<2",
     "torch",

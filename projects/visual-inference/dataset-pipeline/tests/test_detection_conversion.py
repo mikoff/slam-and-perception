@@ -3,7 +3,14 @@ import math
 import pytest
 
 from dataset_pipeline.config import ensure_workspace
-from dataset_pipeline.detection_conversion import GeometryError, clip_bbox, convert_all, object_bbox, rectangle_object
+from dataset_pipeline.detection_conversion import (
+    GeometryError,
+    clip_bbox,
+    convert_all,
+    deduplicate_geometry_representations,
+    object_bbox,
+    rectangle_object,
+)
 from conftest import make_project
 
 
@@ -45,3 +52,22 @@ def test_parallel_detection_conversion(tmp_path, config_factory):
     output = config.workspace_root / "intermediate/detection/bdd100k_images_100k"
     assert reports[0]["converted_annotations"] == 1
     assert (output / ".detection_complete").exists()
+
+
+def test_deduplicates_mixed_geometry_but_not_two_real_rectangles():
+    rectangle = {
+        "classTitle": "car",
+        "geometryType": "rectangle",
+        "points": {"exterior": [[1, 2], [8, 7]]},
+    }
+    polygon = {
+        "classTitle": "car",
+        "geometryType": "polygon",
+        "points": {"exterior": [[1, 2], [8, 2], [8, 7], [1, 7]]},
+    }
+    other_rectangle = dict(rectangle)
+    retained, removed = deduplicate_geometry_representations(
+        [polygon, rectangle, other_rectangle]
+    )
+    assert removed == 1
+    assert retained == [rectangle, other_rectangle]

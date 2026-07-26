@@ -52,6 +52,7 @@ DEFAULT_VALIDATION = {
     "random_seed": 42,
     "clip_boxes_to_image": True,
     "validation_fraction": 0.1,
+    "source_test_as_validation": ["woodscape_rgb_fisheye"],
 }
 
 
@@ -98,6 +99,11 @@ def load_config(path: str | Path) -> Config:
     fraction = validation["validation_fraction"]
     if not isinstance(fraction, (int, float)) or not 0 < fraction < 1:
         raise ValueError("validation.validation_fraction must be between 0 and 1")
+    if (
+        not isinstance(validation["source_test_as_validation"], list)
+        or any(not isinstance(name, str) for name in validation["source_test_as_validation"])
+    ):
+        raise ValueError("validation.source_test_as_validation must be a list of dataset names")
     if any(
         not isinstance(aliases, list) or not aliases
         or any(not isinstance(alias, str) or not alias for alias in aliases)

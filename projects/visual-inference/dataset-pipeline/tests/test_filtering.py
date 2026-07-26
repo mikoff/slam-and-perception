@@ -30,6 +30,33 @@ def test_ignored_class_removed(tmp_path, taxonomy):
     assert annotation["objects"] == []
 
 
+def test_ignore_region_and_tag_attributes_are_preserved(tmp_path, taxonomy):
+    source = make_project(tmp_path / "source", "grouped vehicles", "polygon")
+    annotation_path = source / "train/ann/one.jpg.json"
+    source_annotation = json.loads(annotation_path.read_text())
+    source_annotation["objects"][0]["tags"] = [
+        {"name": "occlusion", "value": "50-74%"},
+        {"name": "depiction"},
+    ]
+    annotation_path.write_text(json.dumps(source_annotation))
+    dataset = DatasetConfig(
+        "woodscape_rgb_fisheye", tmp_path / "unused.tar", tmp_path / "raw"
+    )
+    destination = tmp_path / "filtered"
+    plan, _ = filter_project(dataset, source, destination, taxonomy)
+    annotation = json.loads(
+        (destination / "train/ann/one.jpg.json").read_text()
+    )
+    obj = annotation["objects"][0]
+    assert plan["has_ignore_regions"]
+    assert obj["classTitle"] == taxonomy.ignore_region_token
+    assert obj["ignoreRegion"] is True
+    assert obj["attributes"] == {
+        "occlusion": "50-74%",
+        "depiction": True,
+    }
+
+
 def test_parallel_filter_matches_sequential_output(tmp_path, taxonomy):
     source = make_project(tmp_path / "source", "car")
     image = (source / "train/img/one.jpg").read_bytes()

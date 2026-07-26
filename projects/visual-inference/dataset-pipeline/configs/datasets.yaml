@@ -34,3 +34,4 @@ validation:
   random_seed: 42
   validation_fraction: 0.1
   clip_boxes_to_image: true
+  source_test_as_validation: [woodscape_rgb_fisheye]

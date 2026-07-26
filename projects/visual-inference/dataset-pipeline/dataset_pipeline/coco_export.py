@@ -56,13 +56,22 @@ def export_project(project: Path, output: Path, dataset: str, taxonomy: Taxonomy
         })
         for obj_index, obj in enumerate(annotation.get("objects", [])):
             category = obj["classTitle"]
-            if category not in taxonomy.category_ids:
+            ignore_region = bool(obj.get("ignoreRegion"))
+            if not ignore_region and category not in taxonomy.category_ids:
                 raise ValueError(f"Detection project contains noncanonical class {category!r}")
             bbox = _bbox(obj)
             data["annotations"].append({
                 "id": len(data["annotations"]) + 1, "image_id": image_id,
-                "category_id": taxonomy.category_ids[category], "bbox": bbox,
-                "area": bbox[2] * bbox[3], "iscrowd": 0, "segmentation": [],
+                "category_id": (
+                    taxonomy.ignore_region_category_id
+                    if ignore_region
+                    else taxonomy.category_ids[category]
+                ),
+                "bbox": bbox,
+                "area": bbox[2] * bbox[3],
+                "iscrowd": int(ignore_region),
+                "ignore_region": ignore_region,
+                "segmentation": [],
                 "source_dataset": dataset,
                 "source_annotation_id": str(obj.get("sourceAnnotationId") or obj.get("id") or obj_index),
                 "source_category": obj.get("sourceCategory", category),

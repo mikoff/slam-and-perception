@@ -40,3 +40,14 @@ def test_overlap_conflict_assigns_each_point_to_one_gt() -> None:
     boxes = torch.tensor([[40.0, 40.0, 160.0, 160.0], [60.0, 60.0, 180.0, 180.0]])
     assignment = ATSSAssigner().assign(boxes, FEATURE_SHAPES, (384, 384))
     assert set(assignment.matched_gt_indices[assignment.positive_mask].tolist()) == {0, 1}
+
+
+def test_invalid_locations_are_never_assigned():
+    boxes = torch.tensor([[40.0, 40.0, 160.0, 160.0]])
+    valid = torch.ones(48 * 48 + 24 * 24 + 12 * 12, dtype=torch.bool)
+    valid[: 48 * 48] = False
+    assignment = ATSSAssigner().assign(
+        boxes, FEATURE_SHAPES, (384, 384), valid
+    )
+    assert not assignment.positive_mask[: 48 * 48].any()
+    assert assignment.positive_mask.any()
