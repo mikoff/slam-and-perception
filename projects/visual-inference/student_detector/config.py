@@ -119,6 +119,7 @@ class ScheduleConfig:
     amp: bool = True
     seed: int = 42
     checkpoint_every_epochs: int = 1
+    checkpoint_every_steps: int = 500
 
 
 @dataclass(frozen=True)
@@ -193,6 +194,8 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("box_weighting must be 'uniform' or 'centerness'")
     if config.loss.ltrb_weight < 0:
         raise ValueError("ltrb_weight must be non-negative")
+    if config.schedule.checkpoint_every_steps < 0:
+        raise ValueError("checkpoint_every_steps must be non-negative")
     if config.inference.score_mode not in {
         "objectness", "objectness_x_centerness"
     }:

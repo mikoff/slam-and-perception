@@ -27,6 +27,46 @@ class TrainingTargets:
     unrepresentable_count: Tensor
     positive_counts_per_level: Tensor
 
+    def to(self, device: torch.device, *, non_blocking: bool = False) -> TrainingTargets:
+        """Move the fixed-shape target batch to an accelerator.
+
+        ATSS intentionally runs on the CPU for XLA training because assignment
+        contains variable-length candidate selection and Python control flow.
+        The resulting dense tensors are safe to transfer to either CUDA or XLA.
+        """
+        return TrainingTargets(
+            objectness=self.objectness.to(device, non_blocking=non_blocking),
+            objectness_mask=self.objectness_mask.to(
+                device, non_blocking=non_blocking
+            ),
+            objectness_weights=self.objectness_weights.to(
+                device, non_blocking=non_blocking
+            ),
+            box_distances=self.box_distances.to(
+                device, non_blocking=non_blocking
+            ),
+            centerness=self.centerness.to(device, non_blocking=non_blocking),
+            positive_mask=self.positive_mask.to(
+                device, non_blocking=non_blocking
+            ),
+            valid_point_masks=tuple(
+                mask.to(device, non_blocking=non_blocking)
+                for mask in self.valid_point_masks
+            ),  # type: ignore[arg-type]
+            valid_gt_count=self.valid_gt_count.to(
+                device, non_blocking=non_blocking
+            ),
+            fallback_count=self.fallback_count.to(
+                device, non_blocking=non_blocking
+            ),
+            unrepresentable_count=self.unrepresentable_count.to(
+                device, non_blocking=non_blocking
+            ),
+            positive_counts_per_level=self.positive_counts_per_level.to(
+                device, non_blocking=non_blocking
+            ),
+        )
+
 
 def points_inside_boxes(points: Tensor, boxes: Tensor) -> Tensor:
     """Return a point mask covering the union of xyxy boxes."""

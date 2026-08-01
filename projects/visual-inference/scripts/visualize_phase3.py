@@ -28,6 +28,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--count", type=int, default=12)
     parser.add_argument("--score-threshold", type=float, default=0.05)
+    parser.add_argument(
+        "--weights",
+        choices=("model", "ema"),
+        default="ema",
+        help=(
+            "Checkpoint weights to visualize. Stage-0 overfit validation uses "
+            "'model'; production validation normally uses 'ema'."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -54,7 +63,10 @@ def main() -> None:
     )
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     model = StudentDetector(pretrained_backbone=False).eval()
-    model.load_state_dict(checkpoint.get("ema_model", checkpoint["model"]))
+    state_key = "ema_model" if args.weights == "ema" else "model"
+    if state_key not in checkpoint:
+        raise KeyError(f"Checkpoint does not contain {state_key!r}")
+    model.load_state_dict(checkpoint[state_key], strict=False)
     decoder = InferenceDecoder(
         strides=config.assignment.strides,
         top_k=config.inference.pre_nms_top_k,
@@ -108,12 +120,15 @@ def main() -> None:
             draw.rectangle(tuple(map(float, box)), outline="yellow", width=1)
         for box in sample.boxes:
             draw.rectangle(tuple(map(float, box)), outline="lime", width=1)
-        for box, score in zip(detection.boxes, detection.scores, strict=True):
+        for box, score in zip(
+            detection.boxes, detection.scores, strict=True
+        ):
             if score < args.score_threshold:
                 continue
-            draw.rectangle(tuple(map(float, box)), outline="red", width=2)
+            coordinates = tuple(map(float, box))
+            draw.rectangle(coordinates, outline="red", width=2)
             draw.text(
-                (float(box[0]), float(box[1])),
+                (coordinates[0], coordinates[1]),
                 f"{float(score):.2f}",
                 fill="red",
             )

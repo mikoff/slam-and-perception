@@ -51,7 +51,9 @@ class SharedDetectionHead(nn.Module):
         nn.init.constant_(self.box_regression.bias, 1.0)
         nn.init.zeros_(self.centerness.bias)
 
-    def _forward_level(self, feature: Tensor, level: int) -> tuple[Tensor, Tensor, Tensor]:
+    def _forward_level(
+        self, feature: Tensor, level: int
+    ) -> tuple[Tensor, Tensor, Tensor]:
         object_feature = self.object_tower(feature)
         regression_feature = self.regression_tower(feature)
         objectness = self.objectness(object_feature)

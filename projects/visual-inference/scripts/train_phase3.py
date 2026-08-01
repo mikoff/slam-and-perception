@@ -121,6 +121,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force-index", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", type=Path)
+    parser.add_argument(
+        "--checkpoint-every-steps",
+        type=int,
+        help=(
+            "Write a resumable mid-epoch last.pt every N optimizer steps; "
+            "0 disables step checkpoints"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -137,7 +145,11 @@ def main() -> None:
                 else config.data.workers
             ),
         ))
-    if args.epochs is not None or args.freeze_backbone_epochs is not None:
+    if (
+        args.epochs is not None
+        or args.freeze_backbone_epochs is not None
+        or args.checkpoint_every_steps is not None
+    ):
         config = replace(
             config,
             schedule=replace(
@@ -151,6 +163,11 @@ def main() -> None:
                     args.freeze_backbone_epochs
                     if args.freeze_backbone_epochs is not None
                     else config.schedule.freeze_backbone_epochs
+                ),
+                checkpoint_every_steps=(
+                    args.checkpoint_every_steps
+                    if args.checkpoint_every_steps is not None
+                    else config.schedule.checkpoint_every_steps
                 ),
             ),
         )
@@ -237,12 +254,11 @@ def main() -> None:
         )
     if args.output_dir is not None:
         config = replace(config, output_dir=args.output_dir.resolve())
-    device_name = (
+    device = torch.device(
         "cuda" if args.device == "auto" and torch.cuda.is_available()
         else "cpu" if args.device == "auto"
         else args.device
     )
-    device = torch.device(device_name)
     set_reproducibility_seed(config.schedule.seed)
     train_dataset = IndexedCocoProposalDataset(
         config.data.train_annotations,
@@ -301,7 +317,9 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_proposal_samples,
         pin_memory=device.type == "cuda",
-        persistent_workers=config.data.workers > 0,
+        # Worker-local dataset copies otherwise retain epoch zero forever and
+        # repeat the same deterministic augmentation sequence every epoch.
+        persistent_workers=False,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -310,7 +328,7 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_proposal_samples,
         pin_memory=device.type == "cuda",
-        persistent_workers=config.data.workers > 0,
+        persistent_workers=False,
     )
     if args.overfit_images:
         optimizer_steps_per_epoch = math.ceil(

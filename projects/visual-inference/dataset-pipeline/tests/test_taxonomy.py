@@ -20,6 +20,12 @@ def test_ignore_and_unmapped(taxonomy):
         taxonomy.map("bdd100k_images_100k", "hovercraft")
 
 
+def test_woodscape_construction_is_an_ignored_static_region(taxonomy):
+    result = taxonomy.map("woodscape_rgb_fisheye", "construction")
+    assert result.ignore_region
+    assert result.canonical == taxonomy.ignore_region_token
+
+
 def test_nuimages_other_guard(taxonomy):
     with pytest.raises(ValueError, match="guard"):
         taxonomy.map("nuimages", "other", "other vehicle")

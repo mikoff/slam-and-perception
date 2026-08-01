@@ -22,11 +22,9 @@ predict semantic classes yet.
 
 This separation is important. Proposal generation can be trained and evaluated
 as a conventional localization problem before adding the more expensive semantic
-matching stage. Later, a semantic head will produce 256-dimensional visual
-descriptors that can be compared with text-derived descriptors. That future
-interface is compatible with the general idea behind vision-language models such
-as [CLIP](https://proceedings.mlr.press/v139/radford21a.html), but no CLIP model,
-semantic loss, or text encoder is part of Phase 2.
+matching stage. A future semantic stage will produce per-region descriptors
+that can be compared with text-derived descriptors. No vision-language model,
+semantic loss, or text encoder is part of the current detector.
 
 The implemented phase contains:
 
@@ -36,12 +34,11 @@ The implemented phase contains:
 - point-grid geometry and FCOS-style box encoding;
 - an ATSS target assigner;
 - a class-agnostic inference decoder and NMS;
-- `torch.export` verification, inspection utilities, tests, and a CPU profiling
-  harness.
+- `torch.export` verification, inspection utilities, and tests.
 
-It does **not** yet contain the training loop, losses, dataloader, optimizer,
-distillation, quantization calibration, the semantic head, or an ExecuTorch
-lowering pipeline. Those are subsequent phases.
+Training and data preparation are maintained separately in Phase 3. DQCO,
+region embeddings, SigLIP distillation, quantization calibration, and
+ExecuTorch lowering are future work.
 
 ## 2. Architecture at a glance
 
@@ -399,21 +396,11 @@ when comparing experiments.
 
 Implementation: [`student_detector/decoder.py`](../student_detector/decoder.py).
 
-## 9. Semantic compatibility
+## 9. Future semantic stage
 
-`StudentDetector` owns `semantic_head = None` and exposes:
-
-```text
-forward_semantics((P3, P4, P5)) -> optional semantic outputs
-```
-
-A semantic module can be attached later without replacing or changing the
-backbone and FPN. It does not participate in the Phase-2 `forward()` call, which
-keeps the raw detector signature fixed and prevents an untrained branch from
-entering the export graph. A unit test verifies that a module can be attached and
-receives all three pyramid features.
-
-Implementation: [`student_detector/model.py`](../student_detector/model.py).
+The current model intentionally exposes no semantic extension API. The future
+open-vocabulary stage will define its own per-region embedding contract after
+the localization geometry and crop policy are selected.
 
 ## 10. Export and quantization boundary
 
@@ -492,20 +479,6 @@ and caveats. Random-weight activation maps validate plumbing but have no learned
 semantic meaning. With an ImageNet-pretrained backbone but an untrained FPN,
 C3-C5 are pretrained while P3-P5 are still random.
 
-The raw CPU profiling harness is:
-
-```bash
-uv run python scripts/profile_phase2.py \
-  --image-size 384 --threads 4 --warmup 5 --iterations 50
-```
-
-It measures only the raw model; image loading, preprocessing, decoding, and NMS
-are excluded. Record the Pi model, OS, architecture, PyTorch build, thread count,
-power configuration, temperature/throttling state, input size, and warm-up policy
-with every latency result. The current workstation `uv.lock` selects CUDA 12.4
-PyTorch for x86 development and must not be assumed to be the correct ARM/CPU
-environment for the Pi.
-
 ## 12. Verification status
 
 Run the full Phase-2 checks from `projects/visual-inference`:
@@ -524,7 +497,6 @@ Current status:
 | fixed raw outputs | pass | nine dense P3-P5 tensors in a fixed named tuple |
 | non-negative predicted distances | pass | tested after ReLU/stride scaling |
 | shared prediction head | pass | one object tower and one regression tower, tested |
-| semantic extension point | pass | attachability test covers P3-P5 interface |
 | ATSS positive per representable GT | pass | normal assignment and fallback tested |
 | unrepresentable tiny GT reporting | pass | sub-grid box test checks reported index |
 | overlapping-GT conflict resolution | pass | assignment test covers competing boxes |
@@ -535,8 +507,8 @@ Current status:
 | profiling entry point | pass locally | target Pi measurement still required |
 
 The original Phase-2 suite contained 16 passing tests. Phase 3 extends the
-combined detector suite to 29 tests. The CUDA/NVML warning seen on a
-CPU-only test runner is environmental and does not indicate a model failure.
+detector suite. The CUDA/NVML warning seen on a CPU-only test runner is
+environmental and does not indicate a model failure.
 
 ## 13. Known limitations and next decisions
 
@@ -557,8 +529,8 @@ Remaining architecture-level decisions are:
    compare FP32 versus INT8 proposal recall and box error, and inspect delegation.
 5. **Target environment:** create a separate ARM/CPU dependency and deployment
    path after selecting the exact Raspberry Pi model and OS.
-6. **Semantic head:** attach and train the future 256-D branch only after the
-   localization baseline is stable.
+6. **Open-vocabulary stage:** define the per-region embedding and SigLIP
+   distillation contract only after the localization baseline is stable.
 
 ## 14. Code map
 
@@ -567,12 +539,11 @@ Remaining architecture-level decisions are:
 | [`backbone.py`](../student_detector/backbone.py) | `timm` feature discovery and guarded C5 pruning |
 | [`neck.py`](../student_detector/neck.py) | DSConv and 96-channel Lite FPN |
 | [`head.py`](../student_detector/head.py) | shared decoupled head and fixed output contract |
-| [`model.py`](../student_detector/model.py) | end-to-end raw detector and semantic extension point |
+| [`model.py`](../student_detector/model.py) | end-to-end raw detector |
 | [`geometry.py`](../student_detector/geometry.py) | grid points, IoU, encode/decode |
 | [`assigner.py`](../student_detector/assigner.py) | ATSS and representability reporting |
 | [`decoder.py`](../student_detector/decoder.py) | scoring, top-K, clipping and class-agnostic NMS |
 | [`verify_phase2.py`](../scripts/verify_phase2.py) | completion-criteria smoke checks |
-| [`profile_phase2.py`](../scripts/profile_phase2.py) | target CPU latency harness |
 | [`inspect_phase2.py`](../scripts/inspect_phase2.py) | summaries, graphs, activations and TensorBoard |
 
 ## 15. References

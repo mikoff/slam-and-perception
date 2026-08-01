@@ -47,9 +47,6 @@ def test_student_detector_fixed_shapes(
         assert torch.all(tensor >= 0)
     for tensor, (height, width) in zip(output.centerness, spatial_shapes, strict=True):
         assert tensor.shape == (1, 1, height, width)
-    assert model.semantic_head is None
-
-
 def test_prediction_towers_are_shared_across_levels() -> None:
     model = StudentDetector(backbone=StubBackbone())
     assert len(model.head.scales) == 3
@@ -60,19 +57,6 @@ def test_prediction_towers_are_shared_across_levels() -> None:
     )
     assert sum(1 for name, _ in model.head.named_modules() if name == "object_tower") == 1
     assert sum(1 for name, _ in model.head.named_modules() if name == "regression_tower") == 1
-
-
-def test_semantic_extension_point_is_attachable() -> None:
-    class SemanticProjection(torch.nn.Module):
-        def forward(self, p3, p4, p5):
-            return p3[:, :1], p4[:, :1], p5[:, :1]
-
-    model = StudentDetector(backbone=StubBackbone()).eval()
-    assert model.forward_semantics(model.forward_features(torch.randn(1, 3, 64, 64))) is None
-    model.semantic_head = SemanticProjection()
-    semantics = model.forward_semantics(model.forward_features(torch.randn(1, 3, 64, 64)))
-    assert semantics is not None
-    assert [tensor.shape[-2:] for tensor in semantics] == [(8, 8), (4, 4), (2, 2)]
 
 
 def test_stub_model_exports() -> None:

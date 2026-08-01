@@ -59,6 +59,45 @@ def decode_ltrb(points: Tensor, distances: Tensor) -> Tensor:
     )
 
 
+def quadrilateral_signed_area(quadrilaterals: Tensor) -> Tensor:
+    """Signed shoelace area for ordered ``[..., 4, 2]`` vertices.
+
+    Image coordinates have a downward-positive y axis, so clockwise
+    top-left → top-right → bottom-right → bottom-left vertices have positive
+    signed area.
+    """
+    if quadrilaterals.shape[-2:] != (4, 2):
+        raise ValueError("quadrilaterals must have shape [..., 4, 2]")
+    x = quadrilaterals[..., :, 0]
+    y = quadrilaterals[..., :, 1]
+    return 0.5 * (
+        (x * torch.roll(y, shifts=-1, dims=-1)).sum(dim=-1)
+        - (y * torch.roll(x, shifts=-1, dims=-1)).sum(dim=-1)
+    )
+
+
+def valid_quadrilateral_mask(
+    quadrilaterals: Tensor,
+    *,
+    epsilon: float = 1e-4,
+) -> Tensor:
+    """Check finite, clockwise, strictly convex, non-degenerate quads."""
+    if quadrilaterals.shape[-2:] != (4, 2):
+        raise ValueError("quadrilaterals must have shape [..., 4, 2]")
+    edge = torch.roll(quadrilaterals, shifts=-1, dims=-2) - quadrilaterals
+    following = torch.roll(edge, shifts=-1, dims=-2)
+    cross = edge[..., :, 0] * following[..., :, 1] - (
+        edge[..., :, 1] * following[..., :, 0]
+    )
+    finite = torch.isfinite(quadrilaterals).all(dim=-1).all(dim=-1)
+    clockwise_convex = (cross > epsilon).all(dim=-1)
+    return (
+        finite
+        & clockwise_convex
+        & (quadrilateral_signed_area(quadrilaterals) > epsilon)
+    )
+
+
 def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     """Pairwise IoU for xyxy boxes."""
     top_left = torch.maximum(boxes1[:, None, :2], boxes2[None, :, :2])

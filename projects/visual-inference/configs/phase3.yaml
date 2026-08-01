@@ -4,7 +4,7 @@ data:
   image_root: ../../../data/visual-inference-datasets/output
   index_dir: ../artifacts/phase3/index
   input_size: 384
-  batch_size: 10
+  batch_size: 20
   workers: 4
   empty_fraction: 0.075
   domain_weights:
@@ -89,6 +89,7 @@ schedule:
   amp: true
   seed: 42
   checkpoint_every_epochs: 1
+  checkpoint_every_steps: 500
 
 pretrained_backbone: true
 output_dir: ../artifacts/phase3/runs/baseline

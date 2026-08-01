@@ -164,7 +164,7 @@
     "woodscape_rgb_fisheye": {
       "road_surface": "__ignore__",
       "ego_vehicle": "__ignore__",
-      "construction": "construction_vehicle",
+      "construction": "__ignore_region__",
       "car": "car",
       "pole": "pole",
       "curb": "__ignore__",
@@ -270,7 +270,7 @@
     "nuimages.other": "Verify this means human.pedestrian.other.",
     "nuimages.rigid": "Verify this means vehicle.bus.rigid.",
     "nuimages.bendy": "Verify this means vehicle.bus.bendy.",
-    "woodscape_rgb_fisheye.construction": "Verify this is the construction-vehicle class.",
+    "woodscape_rgb_fisheye.construction": "Verify this is a static construction/fence semantic region, not a vehicle instance.",
     "woodscape_rgb_fisheye.train_tram": "Preserve as rail_vehicle because the source class is ambiguous."
   },
   "conversion_policy": {

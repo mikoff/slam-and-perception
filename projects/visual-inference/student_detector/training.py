@@ -151,13 +151,14 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     scheduler: WarmupCosine,
     epoch: int,
+    batch_in_epoch: int,
+    epoch_complete: bool,
     global_step: int,
     config: Phase3Config,
     metrics: dict[str, float],
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({
-        "format_version": 1,
+    payload = {
+        "format_version": 2,
         "phase": 3,
         "architecture": (
             "mobilenetv4_conv_medium_lite_fpn96_fcos_atss_reg2"
@@ -167,10 +168,52 @@ def save_checkpoint(
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
         "epoch": epoch,
+        "batch_in_epoch": batch_in_epoch,
+        "epoch_complete": epoch_complete,
         "global_step": global_step,
         "config": asdict(config),
         "metrics": metrics,
-    }, path)
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
+
+
+def _optimizer_to(
+    optimizer: torch.optim.Optimizer, device: torch.device
+) -> None:
+    """Move optimizer tensor state after loading a CPU checkpoint."""
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, Tensor):
+                state[key] = value.to(device)
+
+
+class TensorMetricAccumulator:
+    """Accumulate scalar metrics on the active training device."""
+
+    def __init__(self, device: torch.device) -> None:
+        self.device = device
+        self.values: dict[str, Tensor] = {}
+
+    def add(self, key: str, value: Tensor | float | int) -> None:
+        tensor = (
+            value.detach().to(device=self.device, dtype=torch.float32)
+            if isinstance(value, Tensor)
+            else torch.tensor(float(value), device=self.device)
+        )
+        self.values[key] = self.values.get(key, torch.zeros_like(tensor)) + tensor
+
+    def as_floats(self, divisor: float = 1.0) -> dict[str, float]:
+        if not self.values:
+            return {}
+        keys = list(self.values)
+        stacked = torch.stack([self.values[key] for key in keys]).cpu()
+        return {
+            key: float(value) / divisor
+            for key, value in zip(keys, stacked, strict=True)
+        }
 
 
 def _feature_shapes(output) -> tuple[tuple[int, int], ...]:
@@ -179,7 +222,7 @@ def _feature_shapes(output) -> tuple[tuple[int, int], ...]:
     )
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def validate(
     model: StudentDetector,
     loader: Iterable[tuple[Tensor, list[ProposalSample]]],
@@ -199,7 +242,9 @@ def validate(
         shapes = _feature_shapes(output)
         valid_by_sample = [
             point_validity_from_pixel_mask(
-                sample.valid_mask.to(device),
+                sample.valid_mask.to(
+                    output.objectness[0].device
+                ),
                 shapes,
                 decoder.strides,
             )[1]
@@ -224,7 +269,8 @@ def validate(
                 sample.boxes.cpu(),
                 sample.ignore_boxes.cpu(),
                 type(detection)(
-                    detection.boxes.cpu(), detection.scores.cpu()
+                    detection.boxes.cpu(),
+                    detection.scores.cpu(),
                 ),
             ))
     return evaluate_proposals(evaluated)
@@ -277,18 +323,25 @@ def train_phase3(
     progress_path = output_dir / "progress.jsonl"
     global_step = 0
     start_epoch = 0
+    resume_batch = 0
     best_score = -1.0
     last_metrics: dict[str, float] = {}
     optimizer.zero_grad(set_to_none=True)
     if resume is not None:
         checkpoint = torch.load(
-            resume, map_location=device, weights_only=False
+            resume, map_location="cpu", weights_only=False
         )
         model.load_state_dict(checkpoint["model"])
         ema.module.load_state_dict(checkpoint["ema_model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
+        _optimizer_to(optimizer, device)
         scheduler.load_state_dict(checkpoint["scheduler"])
-        start_epoch = int(checkpoint["epoch"]) + 1
+        epoch_complete = bool(checkpoint.get("epoch_complete", True))
+        start_epoch = int(checkpoint["epoch"]) + int(epoch_complete)
+        resume_batch = (
+            0 if epoch_complete
+            else int(checkpoint.get("batch_in_epoch", 0))
+        )
         global_step = int(checkpoint["global_step"])
         best_score = float(
             checkpoint.get("metrics", {}).get(
@@ -310,10 +363,30 @@ def train_phase3(
             train_loader.dataset.set_epoch(epoch)
         if hasattr(train_loader.batch_sampler, "set_epoch"):
             train_loader.batch_sampler.set_epoch(epoch)
-        running: dict[str, float] = defaultdict_float()
-        interval_running: dict[str, float] = defaultdict_float()
+        epoch_resume_batch = (
+            resume_batch if epoch == start_epoch else 0
+        )
+        sampler_skips_batches = hasattr(
+            train_loader.batch_sampler, "set_start_batch"
+        )
+        if sampler_skips_batches:
+            train_loader.batch_sampler.set_start_batch(epoch_resume_batch)
+        running = TensorMetricAccumulator(device)
+        interval_running = TensorMetricAccumulator(device)
         batches = 0
-        for batch_index, (images, samples) in enumerate(train_loader):
+        interval_batches = 0
+        last_batch_in_epoch = resume_batch if epoch == start_epoch else 0
+        enumerate_start = epoch_resume_batch if sampler_skips_batches else 0
+        for batch_index, (images, samples) in enumerate(
+            train_loader, start=enumerate_start
+        ):
+            batch_in_epoch = batch_index + 1
+            if (
+                not sampler_skips_batches
+                and epoch == start_epoch
+                and batch_in_epoch <= resume_batch
+            ):
+                continue
             images = images.to(device, non_blocking=device.type == "cuda")
             with torch.autocast(
                 device_type=device.type,
@@ -330,91 +403,100 @@ def train_phase3(
                 )
             scaler.scale(scaled_loss).backward()
             should_step = (
-                (batch_index + 1) % config.schedule.accumulation_steps == 0
-                or batch_index + 1 == len(train_loader)
+                batch_in_epoch % config.schedule.accumulation_steps == 0
+                or batch_in_epoch == len(train_loader)
             )
             if should_step:
-                scaler.unscale_(optimizer)
+                if use_amp:
+                    scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     model.parameters(), config.schedule.gradient_clip_norm
                 )
-                scaler.step(optimizer)
-                scaler.update()
+                if use_amp:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step()
                 ema.update(model)
                 global_step += 1
-            running["loss/total"] += float(losses.total.detach())
-            running["loss/objectness"] += float(losses.objectness.detach())
-            running["loss/box_ciou"] += float(losses.box_ciou.detach())
-            running["loss/box_ltrb"] += float(losses.box_ltrb.detach())
-            running["loss/centerness"] += float(losses.centerness.detach())
-            running["number_positive"] += float(losses.number_positive)
-            running["number_gt"] += float(targets.valid_gt_count)
-            running["number_fallback"] += float(targets.fallback_count)
-            running["number_unrepresentable"] += float(
-                targets.unrepresentable_count
-            )
-            interval_running["loss/total"] += float(losses.total.detach())
-            interval_running["loss/objectness"] += float(
-                losses.objectness.detach()
-            )
-            interval_running["loss/box_ciou"] += float(
-                losses.box_ciou.detach()
-            )
-            interval_running["loss/box_ltrb"] += float(
-                losses.box_ltrb.detach()
-            )
-            interval_running["loss/centerness"] += float(
-                losses.centerness.detach()
-            )
-            interval_running["number_positive"] += float(
-                losses.number_positive
-            )
+            values = {
+                "loss/total": losses.total,
+                "loss/objectness": losses.objectness,
+                "loss/box_ciou": losses.box_ciou,
+                "loss/box_ltrb": losses.box_ltrb,
+                "loss/centerness": losses.centerness,
+                "number_positive": losses.number_positive,
+                "number_gt": targets.valid_gt_count,
+                "number_fallback": targets.fallback_count,
+                "number_unrepresentable": targets.unrepresentable_count,
+            }
+            for key, value in values.items():
+                running.add(key, value)
+                if key in {
+                    "loss/total",
+                    "loss/objectness",
+                    "loss/box_ciou",
+                    "loss/box_ltrb",
+                    "loss/centerness",
+                    "number_positive",
+                }:
+                    interval_running.add(key, value)
             interval_images += images.shape[0]
-            for level, count in enumerate(
-                targets.positive_counts_per_level, start=3
+            for level_index in range(
+                targets.positive_counts_per_level.shape[0]
             ):
-                running[f"positive/P{level}"] += float(count)
+                running.add(
+                    f"positive/P{level_index + 3}",
+                    targets.positive_counts_per_level[level_index],
+                )
             batches += 1
+            interval_batches += 1
+            last_batch_in_epoch = batch_in_epoch
+            checkpoint_interval = config.schedule.checkpoint_every_steps
+            if (
+                should_step
+                and checkpoint_interval > 0
+                and global_step % checkpoint_interval == 0
+            ):
+                step_metrics = {
+                    **last_metrics,
+                    "epoch": float(epoch),
+                    "global_step": float(global_step),
+                }
+                save_checkpoint(
+                    output_dir / "last.pt",
+                    model=model,
+                    ema=ema,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    epoch=epoch,
+                    batch_in_epoch=batch_in_epoch,
+                    epoch_complete=False,
+                    global_step=global_step,
+                    config=config,
+                    metrics=step_metrics,
+                )
             should_log = log_interval > 0 and (
-                batches % log_interval == 0
-                or batch_index + 1 == len(train_loader)
+                interval_batches >= log_interval
+                or batch_in_epoch == len(train_loader)
                 or (max_steps is not None and global_step >= max_steps)
             )
             if should_log:
                 now = time.perf_counter()
-                interval_batches = (
-                    batches % log_interval or min(log_interval, batches)
-                )
                 elapsed = max(now - interval_started, 1e-9)
+                interval_metrics = interval_running.as_floats(
+                    max(interval_batches, 1)
+                )
                 progress = {
                     "event": "train_progress",
                     "epoch": epoch,
-                    "batch": batches,
+                    "batch": batch_in_epoch,
                     "batches_per_epoch": len(train_loader),
                     "global_step": global_step,
                     "backbone_trainable": backbone_trainable,
-                    "loss/total": (
-                        interval_running["loss/total"] / interval_batches
-                    ),
-                    "loss/objectness": (
-                        interval_running["loss/objectness"] / interval_batches
-                    ),
-                    "loss/box_ciou": (
-                        interval_running["loss/box_ciou"] / interval_batches
-                    ),
-                    "loss/box_ltrb": (
-                        interval_running["loss/box_ltrb"] / interval_batches
-                    ),
-                    "loss/centerness": (
-                        interval_running["loss/centerness"]
-                        / interval_batches
-                    ),
-                    "number_positive": (
-                        interval_running["number_positive"]
-                        / interval_batches
-                    ),
+                    **interval_metrics,
                     "lr/backbone": float(optimizer.param_groups[0]["lr"]),
                     "lr/fpn_head": float(optimizer.param_groups[1]["lr"]),
                     "images_per_second": interval_images / elapsed,
@@ -430,15 +512,19 @@ def train_phase3(
                     stream.write(serialized + "\n")
                 interval_started = now
                 interval_images = 0
-                interval_running = defaultdict_float()
+                interval_batches = 0
+                interval_running = TensorMetricAccumulator(device)
             if max_steps is not None and global_step >= max_steps:
                 break
 
+        running_totals = running.as_floats()
         train_metrics = {
-            key: value / max(batches, 1) for key, value in running.items()
+            key: value / max(batches, 1)
+            for key, value in running_totals.items()
         }
         train_metrics["fallback_rate_per_gt"] = (
-            running["number_fallback"] / max(running["number_gt"], 1)
+            running_totals.get("number_fallback", 0.0)
+            / max(running_totals.get("number_gt", 0.0), 1)
         )
         should_validate = (
             (epoch + 1) % validation_interval == 0
@@ -465,6 +551,7 @@ def train_phase3(
             "lr/backbone": float(optimizer.param_groups[0]["lr"]),
             "lr/fpn_head": float(optimizer.param_groups[1]["lr"]),
         }
+        epoch_complete = last_batch_in_epoch >= len(train_loader)
         with log_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(last_metrics, sort_keys=True) + "\n")
         save_checkpoint(
@@ -474,6 +561,8 @@ def train_phase3(
             optimizer=optimizer,
             scheduler=scheduler,
             epoch=epoch,
+            batch_in_epoch=last_batch_in_epoch,
+            epoch_complete=epoch_complete,
             global_step=global_step,
             config=config,
             metrics=last_metrics,
@@ -488,6 +577,8 @@ def train_phase3(
                 optimizer=optimizer,
                 scheduler=scheduler,
                 epoch=epoch,
+                batch_in_epoch=last_batch_in_epoch,
+                epoch_complete=epoch_complete,
                 global_step=global_step,
                 config=config,
                 metrics=last_metrics,
@@ -499,10 +590,3 @@ def train_phase3(
         "best_selection_score": best_score,
         "metrics": last_metrics,
     }
-
-
-def defaultdict_float() -> dict[str, float]:
-    """A typed small helper avoiding defaultdict in checkpoint-visible state."""
-    from collections import defaultdict
-
-    return defaultdict(float)

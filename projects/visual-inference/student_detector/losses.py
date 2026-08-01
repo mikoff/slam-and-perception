@@ -196,92 +196,99 @@ class ProposalLoss(nn.Module):
     def forward(
         self, output: DetectorOutput, targets: TrainingTargets
     ) -> LossOutput:
-        objectness_logits, predicted_distances, centerness_logits = (
+        (
+            objectness_logits,
+            predicted_distances,
+            centerness_logits,
+        ) = (
             flatten_detector_output(output)
         )
         positive_count = targets.positive_mask.sum().to(
             dtype=objectness_logits.dtype
         )
         positive_normalizer = _distributed_average_normalizer(positive_count)
-
+        # Keep the loss graph shape independent of the number of positives.
+        # Dynamic boolean indexing is harmless on CUDA but causes recompilation
+        # and synchronization on PyTorch/XLA. Computing aligned losses for every
+        # location and applying a dense mask is mathematically equivalent.
         positive = targets.positive_mask
-        if torch.any(positive):
-            feature_shapes = tuple(
-                (tensor.shape[-2], tensor.shape[-1])
-                for tensor in output.objectness
+        positive_float = positive.to(dtype=torch.float32)
+        feature_shapes = tuple(
+            (tensor.shape[-2], tensor.shape[-1])
+            for tensor in output.objectness
+        )
+        points, level_slices = make_grid_points(
+            feature_shapes,
+            self.strides,
+            device=predicted_distances.device,
+            dtype=predicted_distances.dtype,
+        )
+        batch_points = points.unsqueeze(0).expand(
+            predicted_distances.shape[0], -1, -1
+        )
+        flat_predicted_boxes = decode_ltrb(
+            batch_points.reshape(-1, 2),
+            predicted_distances.reshape(-1, 4),
+        ).float()
+        flat_target_boxes = decode_ltrb(
+            batch_points.reshape(-1, 2),
+            targets.box_distances.reshape(-1, 4),
+        ).float()
+        box_losses = (
+            aligned_ciou_loss(flat_predicted_boxes, flat_target_boxes)
+            if self.box_loss == "ciou"
+            else aligned_giou_loss(flat_predicted_boxes, flat_target_boxes)
+        ).reshape_as(positive_float)
+        if self.box_weighting == "centerness":
+            center_weights = targets.centerness.float() * positive_float
+            box_normalizer = _distributed_average_normalizer(
+                center_weights.sum()
             )
-            points, level_slices = make_grid_points(
-                feature_shapes,
-                self.strides,
-                device=predicted_distances.device,
-                dtype=predicted_distances.dtype,
-            )
-            batch_points = points.unsqueeze(0).expand(
-                predicted_distances.shape[0], -1, -1
-            )
-            predicted_boxes = decode_ltrb(
-                batch_points[positive], predicted_distances[positive]
-            ).float()
-            target_boxes = decode_ltrb(
-                batch_points[positive], targets.box_distances[positive]
-            ).float()
-            center_weights = targets.centerness[positive].float()
-            box_losses = (
-                aligned_ciou_loss(predicted_boxes, target_boxes)
-                if self.box_loss == "ciou"
-                else aligned_giou_loss(predicted_boxes, target_boxes)
-            )
-            if self.box_weighting == "centerness":
-                box_normalizer = _distributed_average_normalizer(
-                    center_weights.sum()
-                )
-                box_loss = (
-                    box_losses * center_weights
-                ).sum() / box_normalizer
-            else:
-                box_loss = box_losses.sum() / positive_normalizer
-
-            if self.ltrb_weight:
-                location_strides = predicted_distances.new_empty(
-                    points.shape[0]
-                )
-                for level_slice, stride in zip(
-                    level_slices, self.strides, strict=True
-                ):
-                    location_strides[level_slice] = stride
-                batch_strides = location_strides.unsqueeze(0).expand(
-                    predicted_distances.shape[0], -1
-                )
-                positive_strides = batch_strides[positive].float().unsqueeze(1)
-                ltrb_loss = functional.smooth_l1_loss(
-                    predicted_distances[positive].float() / positive_strides,
-                    targets.box_distances[positive].float() / positive_strides,
-                    reduction="sum",
-                ) / (positive_normalizer * 4)
-            else:
-                ltrb_loss = predicted_distances.sum() * 0
-
-            if self.centerness_weight:
-                centerness_loss = (
-                    functional.binary_cross_entropy_with_logits(
-                        centerness_logits[positive],
-                        center_weights,
-                        reduction="sum",
-                    )
-                    / positive_normalizer
-                )
-            else:
-                centerness_loss = objectness_logits.sum() * 0
-
-            quality_targets = torch.zeros_like(targets.objectness)
-            quality_targets[positive] = aligned_iou(
-                predicted_boxes, target_boxes
-            ).detach().to(dtype=quality_targets.dtype)
+            box_loss = (box_losses * center_weights).sum() / box_normalizer
         else:
-            box_loss = predicted_distances.sum() * 0
-            ltrb_loss = predicted_distances.sum() * 0
-            centerness_loss = objectness_logits.sum() * 0
-            quality_targets = torch.zeros_like(targets.objectness)
+            box_loss = (
+                box_losses * positive_float
+            ).sum() / positive_normalizer
+
+        if self.ltrb_weight:
+            location_strides = predicted_distances.new_empty(points.shape[0])
+            for level_slice, stride in zip(
+                level_slices, self.strides, strict=True
+            ):
+                location_strides[level_slice] = stride
+            batch_strides = location_strides.view(1, -1, 1)
+            component_losses = functional.smooth_l1_loss(
+                predicted_distances.float() / batch_strides,
+                targets.box_distances.float() / batch_strides,
+                reduction="none",
+            )
+            ltrb_loss = (
+                component_losses * positive_float.unsqueeze(-1)
+            ).sum() / (positive_normalizer * 4)
+        else:
+            # Reduce in FP32: an FP16 sum over all dense locations can overflow
+            # to inf, and ``inf * 0`` is NaN even for a disabled branch.
+            ltrb_loss = predicted_distances.float().mean() * 0
+
+        if self.centerness_weight:
+            centerness_losses = functional.binary_cross_entropy_with_logits(
+                centerness_logits,
+                targets.centerness.float(),
+                reduction="none",
+            )
+            centerness_loss = (
+                centerness_losses * positive_float
+            ).sum() / positive_normalizer
+        else:
+            centerness_loss = objectness_logits.float().mean() * 0
+
+        quality_targets = (
+            aligned_iou(flat_predicted_boxes, flat_target_boxes)
+            .reshape_as(targets.objectness)
+            .detach()
+            .to(dtype=targets.objectness.dtype)
+            * positive_float
+        )
 
         if self.objectness_loss == "quality_focal":
             classification_losses = quality_focal_loss(

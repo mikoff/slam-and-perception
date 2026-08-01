@@ -40,7 +40,7 @@ class Taxonomy:
         guards = data.get("mapping_guards", {})
         required_guard_terms = {
             "nuimages.other": ("pedestrian",),
-            "woodscape_rgb_fisheye.construction": ("construction", "vehicle"),
+            "woodscape_rgb_fisheye.construction": ("construction",),
         }
         for guard, terms in required_guard_terms.items():
             statement = str(guards.get(guard, "")).lower()

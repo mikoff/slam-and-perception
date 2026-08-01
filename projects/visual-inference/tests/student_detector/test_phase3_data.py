@@ -59,7 +59,7 @@ def _dataset(tmp_path):
     annotation_path.write_text(json.dumps({
         "images": images,
         "annotations": annotations,
-        "categories": [],
+        "categories": [{"id": 1, "name": "car"}],
     }))
     config = DataConfig(
         annotation_path,

@@ -219,6 +219,34 @@ def test_empty_positive_batch_losses_are_finite():
     assert losses.box_ciou.item() == 0
     assert losses.box_ltrb.item() == 0
     assert losses.centerness.item() == 0
+def test_disabled_dense_branch_is_finite_in_float16():
+    model = StudentDetector(backbone=StubBackbone()).eval()
+    sample = _sample()
+    output = model(sample.image.unsqueeze(0))
+    output = type(output)(
+        objectness=tuple(
+            torch.full_like(tensor, -20.0).half()
+            for tensor in output.objectness
+        ),
+        box_distances=tuple(
+            tensor.half() for tensor in output.box_distances
+        ),
+        centerness=tuple(tensor.half() for tensor in output.centerness),
+    )
+    shapes = tuple(
+        (tensor.shape[-2], tensor.shape[-1])
+        for tensor in output.objectness
+    )
+    targets = TargetBuilder(ATSSAssigner())(
+        [sample], shapes, device=torch.device("cpu")
+    )
+    losses = ProposalLoss(
+        objectness_loss="quality_focal",
+        ltrb_weight=0.5,
+        centerness_weight=0.0,
+    )(output, targets)
+    assert torch.isfinite(losses.total)
+    assert losses.centerness.item() == 0
 
 
 def test_ltrb_auxiliary_loss_is_stride_normalized_and_component_averaged():
@@ -360,3 +388,86 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
         resume=config.output_dir / "last.pt",
     )
     assert resumed["global_step"] == 2
+
+
+def test_mid_epoch_checkpoint_resumes_the_same_epoch(tmp_path):
+    class Samples(Dataset):
+        def __init__(self):
+            self.values = [_sample() for _ in range(4)]
+            self.epoch = 0
+
+        def __len__(self):
+            return len(self.values)
+
+        def __getitem__(self, index):
+            return self.values[index]
+
+        def set_epoch(self, epoch):
+            self.epoch = epoch
+
+    loader = DataLoader(
+        Samples(),
+        batch_size=1,
+        collate_fn=collate_proposal_samples,
+    )
+    placeholder = tmp_path / "unused.json"
+    config = Phase3Config(
+        data=DataConfig(
+            placeholder,
+            placeholder,
+            tmp_path,
+            tmp_path,
+            input_size=64,
+            batch_size=1,
+            workers=0,
+        ),
+        schedule=ScheduleConfig(
+            epochs=1,
+            freeze_backbone_epochs=1,
+            warmup_steps=1,
+            amp=False,
+            checkpoint_every_steps=1,
+        ),
+        output_dir=tmp_path / "run",
+        pretrained_backbone=False,
+    )
+    common = (
+        loader,
+        loader,
+        TargetBuilder(ATSSAssigner()),
+        ProposalLoss(),
+        config,
+        torch.device("cpu"),
+    )
+    first = train_phase3(
+        StudentDetector(backbone=StubBackbone()),
+        *common,
+        max_steps=1,
+        max_val_batches=1,
+    )
+    checkpoint = torch.load(
+        config.output_dir / "last.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert first["global_step"] == 1
+    assert checkpoint["epoch"] == 0
+    assert checkpoint["batch_in_epoch"] == 1
+    assert checkpoint["epoch_complete"] is False
+
+    resumed = train_phase3(
+        StudentDetector(backbone=StubBackbone()),
+        *common,
+        max_steps=2,
+        max_val_batches=1,
+        resume=config.output_dir / "last.pt",
+    )
+    checkpoint = torch.load(
+        config.output_dir / "last.pt",
+        map_location="cpu",
+        weights_only=False,
+    )
+    assert resumed["global_step"] == 2
+    assert checkpoint["epoch"] == 0
+    assert checkpoint["batch_in_epoch"] == 2
+    assert checkpoint["epoch_complete"] is False

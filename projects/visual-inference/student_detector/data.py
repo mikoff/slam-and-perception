@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import json
 import math
 import os
 import random
@@ -60,7 +59,9 @@ class ProposalSample:
 
 def _source_signature(path: Path) -> str:
     stat = path.stat()
-    return f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
+    # Do not include the absolute path: cloud archives preserve size and mtime
+    # but are extracted under /content rather than the workstation path.
+    return f"{stat.st_size}:{stat.st_mtime_ns}"
 
 
 def build_coco_sqlite_index(
@@ -120,17 +121,19 @@ def build_coco_sqlite_index(
                 CREATE INDEX annotations_by_image ON annotations(image_id);
                 """
             )
+            image_sources: dict[int, tuple[str, str]] = {}
             with source.open("rb") as stream:
                 for row_index, image in enumerate(
                     ijson.items(stream, "images.item")
                 ):
+                    image_id = int(image["id"])
                     connection.execute(
                         """
                         INSERT INTO images VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
                         """,
                         (
                             row_index,
-                            int(image["id"]),
+                            image_id,
                             str(image["file_name"]),
                             int(image["width"]),
                             int(image["height"]),
@@ -138,6 +141,10 @@ def build_coco_sqlite_index(
                             str(image.get("camera_type", "perspective")),
                             int(bool(image.get("background_supervision", False))),
                         ),
+                    )
+                    image_sources[image_id] = (
+                        str(image.get("source_dataset", "unknown")),
+                        str(image.get("source_image_id", "")),
                     )
             positive_counts: dict[int, int] = defaultdict(int)
             categories: dict[int, str] = {}
@@ -148,11 +155,27 @@ def build_coco_sqlite_index(
                 rows = []
                 for annotation in ijson.items(stream, "annotations.item"):
                     x, y, width, height = map(float, annotation["bbox"])
+                    image_id = int(annotation["image_id"])
+                    source_dataset = image_sources.get(
+                        image_id, ("", "")
+                    )[0]
+                    # Existing merged artifacts predate the WoodScape
+                    # taxonomy correction. Exclude its old canonical name as
+                    # a static region until those artifacts are regenerated.
+                    legacy_static_construction = (
+                        source_dataset == "woodscape_rgb_fisheye"
+                        and categories.get(
+                            int(annotation.get("category_id", -1)), "unknown"
+                        ) == "construction_vehicle"
+                    )
                     ignore = bool(
                         annotation.get("ignore_region")
                         or annotation.get("iscrowd")
+                        or legacy_static_construction
                     )
-                    image_id = int(annotation["image_id"])
+                    category_name = categories.get(
+                        int(annotation.get("category_id", -1)), "unknown"
+                    )
                     rows.append((
                         image_id,
                         x,
@@ -160,9 +183,7 @@ def build_coco_sqlite_index(
                         x + width,
                         y + height,
                         int(ignore),
-                        categories.get(
-                            int(annotation.get("category_id", -1)), "unknown"
-                        ),
+                        category_name,
                     ))
                     if not ignore:
                         positive_counts[image_id] += 1
@@ -191,7 +212,7 @@ def build_coco_sqlite_index(
             )
             connection.commit()
         os.replace(staged, destination)
-    except Exception:
+    except BaseException:
         staged.unlink(missing_ok=True)
         raise
     return destination
@@ -396,7 +417,9 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
         self.annotations = Path(annotations).resolve()
         self.image_root = Path(image_root).resolve()
         self.index_path = build_coco_sqlite_index(
-            self.annotations, index_path, force=force_index
+            self.annotations,
+            index_path,
+            force=force_index,
         )
         self.data_config = data_config
         self.training = training
@@ -462,11 +485,11 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
         positive_rows = [row for row in rows if not row[4]]
         ignore_rows = [row for row in rows if row[4]]
         component_indices = self._contained_component_indices(positive_rows)
-        boxes = _boxes_tensor([
-            row[:4]
-            for row_index, row in enumerate(positive_rows)
+        retained_positive_rows = [
+            row for row_index, row in enumerate(positive_rows)
             if row_index not in component_indices
-        ])
+        ]
+        boxes = _boxes_tensor([row[:4] for row in retained_positive_rows])
         ignore_boxes = _boxes_tensor([
             row[:4] for row in ignore_rows
         ] + [
@@ -476,7 +499,13 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
         ])
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
-        image_tensor, boxes, ignore_boxes, valid_mask, transform = self.transform(
+        (
+            image_tensor,
+            boxes,
+            ignore_boxes,
+            valid_mask,
+            transform,
+        ) = self.transform(
             image,
             boxes,
             ignore_boxes,
@@ -610,6 +639,7 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
         self.empty_fraction = empty_fraction
         self.seed = seed
         self.epoch = 0
+        self.start_batch = 0
         self.batches_per_epoch = batches_per_epoch or math.ceil(
             len(dataset) / batch_size
         )
@@ -632,6 +662,13 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
+
+    def set_start_batch(self, start_batch: int) -> None:
+        if not 0 <= start_batch <= self.batches_per_epoch:
+            raise ValueError(
+                f"start_batch must be in [0, {self.batches_per_epoch}]"
+            )
+        self.start_batch = start_batch
 
     def __len__(self) -> int:
         return self.batches_per_epoch
@@ -658,7 +695,7 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
             return value
 
         quotas = _integer_quotas(self.domain_weights, self.batch_size)
-        for _ in range(self.batches_per_epoch):
+        for batch_index in range(self.batches_per_epoch):
             batch: list[int] = []
             for domain, count in quotas.items():
                 sources = self.domain_sources[domain]
@@ -669,4 +706,5 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
                         draw(source, generator.random() < self.empty_fraction)
                     )
             generator.shuffle(batch)
-            yield batch
+            if batch_index >= self.start_batch:
+                yield batch

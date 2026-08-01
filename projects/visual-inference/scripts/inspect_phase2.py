@@ -25,7 +25,11 @@ class ExportView(torch.nn.Module):
 
     def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, ...]:
         output = self.model(images)
-        return (*output.objectness, *output.box_distances, *output.centerness)
+        return (
+            *output.objectness,
+            *output.box_distances,
+            *output.centerness,
+        )
 
 
 def add_model_arguments(parser: argparse.ArgumentParser) -> None:

@@ -105,7 +105,6 @@ class InferenceDecoder:
             ],
             dim=1,
         )
-
         detections: list[Detection] = []
         for batch_index in range(scores.shape[0]):
             count = min(
@@ -135,5 +134,8 @@ class InferenceDecoder:
             keep = class_agnostic_nms(
                 selected_boxes, selected_scores, self.nms_iou_threshold
             )[: self.max_detections]
-            detections.append(Detection(selected_boxes[keep], selected_scores[keep]))
+            detections.append(Detection(
+                selected_boxes[keep],
+                selected_scores[keep],
+            ))
         return detections
