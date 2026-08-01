@@ -90,7 +90,7 @@ are Python-only, so CMake, Docker, and Pybind11 rules do not apply to them.
 
 `codebase-memory-mcp` is available and indexes this repo. Route by question type:
 
-- *Structural* questions — who calls this, what imports that, what breaks if I change this signature — use the graph (`search_graph`, `trace_call_path`, `query_graph`, `get_code_snippet`).
+- *Structural* questions — who calls this, what imports that, what breaks if I change this signature — use the graph (`search_graph`, `trace_path`, `query_graph`, `get_code_snippet`).
 - *Textual* questions — find this literal, this config key, this error string — use ordinary search and file reads. Grep is the right tool here.
 - Before non-trivial structural work in an unfamiliar area, `get_architecture` is a cheap orientation step. Recommended, not required.
 - A clean graph result is not proof of absence. Dynamic dispatch, string-built names, and unindexed files are invisible to it. Confirm with a text search before concluding something is unused.
