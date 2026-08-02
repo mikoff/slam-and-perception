@@ -26,6 +26,7 @@ class QuadTrainingTargets:
     fallback_count: Tensor
     unrepresentable_count: Tensor
     positive_counts_per_level: Tensor
+    matched_gt_indices: Tensor
 
     def to(self, device: torch.device, *, non_blocking: bool = False) -> "QuadTrainingTargets":
         return QuadTrainingTargets(
@@ -40,6 +41,7 @@ class QuadTrainingTargets:
             self.fallback_count.to(device, non_blocking=non_blocking),
             self.unrepresentable_count.to(device, non_blocking=non_blocking),
             self.positive_counts_per_level.to(device, non_blocking=non_blocking),
+            self.matched_gt_indices.to(device, non_blocking=non_blocking),
         )
 
 
@@ -99,6 +101,7 @@ class QuadTargetBuilder:
             feature_shapes, self.assigner.strides, device=device, dtype=torch.float32
         )
         quality, corner_offsets, positive_masks = [], [], []
+        matched_gt_indices = []
         trusted_background_masks, weak_background_masks = [], []
         valid_levels_by_batch: list[tuple[Tensor, ...]] = []
         valid_gt_count = torch.zeros((), device=device)
@@ -128,6 +131,7 @@ class QuadTargetBuilder:
             quality.append(assignment.quality_targets)
             corner_offsets.append(assignment.corner_targets)
             positive_masks.append(assignment.positive_mask)
+            matched_gt_indices.append(assignment.matched_gt_indices)
             trusted_background_masks.append(background if trusted else torch.zeros_like(background))
             weak_background_masks.append(background if not trusted else torch.zeros_like(background))
             valid_levels_by_batch.append(valid_levels)
@@ -152,4 +156,5 @@ class QuadTargetBuilder:
             fallback_count,
             unrepresentable_count,
             positive_counts,
+            torch.stack(matched_gt_indices),
         )

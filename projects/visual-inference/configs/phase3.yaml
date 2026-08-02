@@ -92,6 +92,10 @@ quad:
   quality_focal_beta: 2.0
   quality_target_mode: centerness
   quality_blend: 0.0
+  # G5 on RTX 3060: exact IoU added 502.8% median step time and 0% memory.
+  # Use the approved cyclic/reversed corner proxy for training score targets;
+  # exact polygon IoU remains the validation metric.
+  geometry_quality_target: corner_proxy
 
 schedule:
   epochs: 40

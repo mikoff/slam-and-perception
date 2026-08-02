@@ -206,7 +206,13 @@ def aligned_quad_iou(first: Tensor, second: Tensor) -> Tensor:
     ]) if first_value.shape[0] else first_value.new_empty((0,))
 
 
-def polygon_nms(quads: Tensor, scores: Tensor, iou_threshold: float) -> Tensor:
+def polygon_nms(
+    quads: Tensor,
+    scores: Tensor,
+    iou_threshold: float,
+    *,
+    max_output: int | None = None,
+) -> Tensor:
     """Reference class-agnostic NMS for convex quadrilaterals."""
     value = _quad_tensor(quads)
     if value.shape[0] != scores.shape[0]:
@@ -241,6 +247,10 @@ def polygon_nms(quads: Tensor, scores: Tensor, iou_threshold: float) -> Tensor:
                 break
         if not suppressed:
             kept.append(index)
+            # Scores are visited in descending order. Once the requested output
+            # budget is full, later candidates cannot enter that prefix.
+            if max_output is not None and len(kept) >= max_output:
+                break
     return torch.tensor(kept, dtype=torch.long, device=value.device)
 
 

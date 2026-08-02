@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -13,10 +12,9 @@ import torch
 from torch import Tensor
 
 from .config import Phase3Config
-from .quad_assigner import QuadAssigner
-from .quad_data import QuadProposalSample
-from .quad_decoder import QuadInferenceDecoder
+from .quad_decoder import QuadDetection, QuadInferenceDecoder, decode_dense_quad_output
 from .quad_evaluation import QuadEvaluationImage, evaluate_quad_proposals
+from .quad_geometry import quad_validity
 from .quad_losses import QuadProposalLoss
 from .quad_targets import QuadTargetBuilder
 from .training import (
@@ -47,6 +45,7 @@ def validate_quad(
     device: torch.device,
     *,
     max_batches: int | None = None,
+    include_dense_diagnostics: bool = False,
 ) -> dict[str, float]:
     model.eval()
     evaluated: list[QuadEvaluationImage] = []
@@ -56,8 +55,41 @@ def validate_quad(
         images = images.to(device, non_blocking=device.type == "cuda")
         output = model(images)
         targets = target_builder(samples, _feature_shapes(output), device=device)
-        detections = decoder(output, (images.shape[-2], images.shape[-1]), targets.valid_point_masks)
-        for sample, detection in zip(samples, detections, strict=True):
+        detections = decoder(
+            output,
+            (images.shape[-2], images.shape[-1]),
+            targets.valid_point_masks,
+        )
+        dense_quads, dense_scores = decode_dense_quad_output(output, decoder.strides)
+        valid_points = torch.cat(
+            [mask.reshape(mask.shape[0], -1) for mask in targets.valid_point_masks], dim=1
+        )
+        for sample_index, (sample, detection) in enumerate(
+            zip(samples, detections, strict=True)
+        ):
+            assigned_mask = targets.positive_mask[sample_index]
+            assigned = QuadDetection(
+                dense_quads[sample_index, assigned_mask].detach().cpu(),
+                dense_scores[sample_index, assigned_mask].detach().cpu(),
+            )
+            dense_detection = None
+            if include_dense_diagnostics:
+                candidate_quads = dense_quads[sample_index]
+                in_bounds = (
+                    (candidate_quads[..., 0] >= 0).all(dim=1)
+                    & (candidate_quads[..., 0] <= images.shape[-1]).all(dim=1)
+                    & (candidate_quads[..., 1] >= 0).all(dim=1)
+                    & (candidate_quads[..., 1] <= images.shape[-2]).all(dim=1)
+                )
+                keep_dense = (
+                    valid_points[sample_index]
+                    & in_bounds
+                    & quad_validity(candidate_quads)
+                )
+                dense_detection = QuadDetection(
+                    candidate_quads[keep_dense].detach().cpu(),
+                    dense_scores[sample_index, keep_dense].detach().cpu(),
+                )
             evaluated.append(QuadEvaluationImage(
                 image_id=sample.image_id,
                 domain=sample.domain,
@@ -65,7 +97,12 @@ def validate_quad(
                 image_size=(images.shape[-2], images.shape[-1]),
                 ground_truth=sample.quads.cpu(),
                 ignore_quads=sample.ignore_quads.cpu(),
-                detection=type(detection)(detection.quads.cpu(), detection.scores.cpu()),
+                detection=type(detection)(
+                    detection.quads.cpu(),
+                    detection.scores.cpu(),
+                    candidate_count=detection.candidate_count,
+                    invalid_candidate_count=detection.invalid_candidate_count,
+                ),
                 pre_nms_detection=(
                     type(detection)(
                         detection.pre_nms_quads.cpu(), detection.pre_nms_scores.cpu()
@@ -75,6 +112,27 @@ def validate_quad(
                     else None
                 ),
                 geometry_tiers=sample.geometry_tiers,
+                object_conditions=sample.object_conditions,
+                dense_detection=dense_detection,
+                assigned_detection=assigned,
+                assigned_gt_indices=targets.matched_gt_indices[sample_index, assigned_mask]
+                .detach()
+                .cpu(),
+                positive_scores=dense_scores[
+                    sample_index, targets.positive_mask[sample_index]
+                ]
+                .detach()
+                .cpu(),
+                trusted_background_scores=dense_scores[
+                    sample_index, targets.trusted_background_mask[sample_index]
+                ]
+                .detach()
+                .cpu(),
+                weak_background_scores=dense_scores[
+                    sample_index, targets.weak_background_mask[sample_index]
+                ]
+                .detach()
+                .cpu(),
             ))
     return evaluate_quad_proposals(evaluated)
 
@@ -86,11 +144,66 @@ def _build_optimizer(model: torch.nn.Module, config: Phase3Config) -> torch.opti
     )
     return torch.optim.AdamW(
         [
-            {"params": list(model.backbone.parameters()), "lr": scaled_lr * config.schedule.backbone_lr_multiplier},
+            {
+                "params": list(model.backbone.parameters()),
+                "lr": scaled_lr * config.schedule.backbone_lr_multiplier,
+            },
             {"params": [*model.fpn.parameters(), *model.head.parameters()], "lr": scaled_lr},
         ],
         weight_decay=config.schedule.weight_decay,
     )
+
+
+def _optimizer_to(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if isinstance(value, Tensor):
+                state[key] = value.to(device)
+
+
+def _save_checkpoint(
+    path: Path,
+    *,
+    model: torch.nn.Module,
+    ema: ExponentialMovingAverage,
+    optimizer: torch.optim.Optimizer,
+    scheduler: WarmupCosine,
+    scaler: torch.amp.GradScaler,
+    epoch: int,
+    batch_in_epoch: int,
+    epoch_complete: bool,
+    global_step: int,
+    best_score: float,
+    config: Phase3Config,
+    metrics: dict[str, Any],
+    criterion: QuadProposalLoss,
+) -> None:
+    payload = {
+        "format_version": 2,
+        "phase": "quad_proposals",
+        "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
+        "model": model.state_dict(),
+        "ema_model": ema.module.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "scaler": scaler.state_dict(),
+        "epoch": epoch,
+        "batch_in_epoch": batch_in_epoch,
+        "epoch_complete": epoch_complete,
+        "global_step": global_step,
+        "best_score": best_score,
+        "config": asdict(config),
+        "metrics": metrics,
+        "quality_curriculum": {
+            "mode": criterion.quality_target_mode,
+            "blend": criterion.quality_blend,
+            "geometry_quality_target": criterion.geometry_quality_target,
+        },
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
 
 
 def train_quad_proposals(
@@ -106,35 +219,72 @@ def train_quad_proposals(
     max_val_batches: int | None = None,
     log_interval: int = 50,
     use_ema_for_validation: bool = True,
+    resume: Path | None = None,
+    validation_interval: int = 1,
 ) -> dict[str, Any]:
     """Train the quad detector and write checkpoints plus machine-readable logs."""
+    if validation_interval < 1:
+        raise ValueError("validation_interval must be positive")
     set_reproducibility_seed(config.schedule.seed)
     output_dir = config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     model.to(device)
     optimizer = _build_optimizer(model, config)
-    steps_per_epoch = max(math.ceil(len(train_loader) / config.schedule.accumulation_steps), 1)
+    steps_per_epoch = max(
+        math.ceil(len(train_loader) / config.schedule.accumulation_steps), 1
+    )
     scheduler = WarmupCosine(
         optimizer,
         total_steps=steps_per_epoch * config.schedule.epochs,
         warmup_steps=config.schedule.warmup_steps,
         min_ratio=config.schedule.min_lr_ratio,
     )
-    scaler = torch.amp.GradScaler("cuda", enabled=config.schedule.amp and device.type == "cuda")
+    scaler = torch.amp.GradScaler(
+        "cuda", enabled=config.schedule.amp and device.type == "cuda"
+    )
     ema = ExponentialMovingAverage(model, config.schedule.ema_decay)
     decoder = QuadInferenceDecoder(
         strides=config.assignment.strides,
         pre_nms_top_k=config.inference.pre_nms_top_k,
         nms_iou_threshold=config.inference.nms_iou_threshold,
-        # Validation retains the full 300-candidate diagnostic ceiling; metric
-        # budgets slice this same ranked post-NMS list at 50, 100, and 300.
-        max_proposals=config.inference.pre_nms_top_k,
+        # Frequent training validation uses the deployment budget. The final
+        # gate report separately retains the full 300-proposal diagnostic list.
+        max_proposals=config.inference.max_proposals,
     )
     best_score = -1.0
     global_step = 0
+    start_epoch = 0
+    resume_batch = 0
+    metrics: dict[str, Any] = {}
     log_path = output_dir / "quad_metrics.jsonl"
     optimizer.zero_grad(set_to_none=True)
-    for epoch in range(config.schedule.epochs):
+    if resume is not None:
+        checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
+        model.load_state_dict(checkpoint["model"])
+        ema.module.load_state_dict(checkpoint["ema_model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        _optimizer_to(optimizer, device)
+        scheduler.load_state_dict(checkpoint["scheduler"])
+        if checkpoint.get("scaler"):
+            scaler.load_state_dict(checkpoint["scaler"])
+        epoch_complete = bool(checkpoint.get("epoch_complete", True))
+        start_epoch = int(checkpoint["epoch"]) + int(epoch_complete)
+        resume_batch = (
+            0 if epoch_complete else int(checkpoint.get("batch_in_epoch", 0))
+        )
+        global_step = int(checkpoint["global_step"])
+        best_score = float(checkpoint.get("best_score", -1.0))
+        metrics = dict(checkpoint.get("metrics", {}))
+        curriculum = checkpoint.get("quality_curriculum", {})
+        criterion.quality_target_mode = str(
+            curriculum.get("mode", criterion.quality_target_mode)
+        )
+        criterion.quality_blend = float(
+            curriculum.get("blend", criterion.quality_blend)
+        )
+    if max_steps is not None and global_step >= max_steps:
+        return {"global_step": global_step, "best_score": best_score, "metrics": metrics}
+    for epoch in range(start_epoch, config.schedule.epochs):
         if hasattr(train_loader.dataset, "set_epoch"):
             train_loader.dataset.set_epoch(epoch)
         if hasattr(train_loader.batch_sampler, "set_epoch"):
@@ -143,9 +293,17 @@ def train_quad_proposals(
         model.train()
         if config.pretrained_backbone:
             freeze_backbone_batch_norm(model.backbone)
+        last_batch_in_epoch = resume_batch if epoch == start_epoch else 0
         for batch_index, (images, samples) in enumerate(train_loader):
+            batch_in_epoch = batch_index + 1
+            if epoch == start_epoch and batch_in_epoch <= resume_batch:
+                continue
             images = images.to(device, non_blocking=device.type == "cuda")
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=scaler.is_enabled()):
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.float16,
+                enabled=scaler.is_enabled(),
+            ):
                 output = model(images)
             if not all(
                 torch.isfinite(tensor).all()
@@ -162,7 +320,11 @@ def train_quad_proposals(
             # Target assignment contains float32-only geometric eigensolvers
             # and is independent of model gradients; keep it outside AMP.
             targets = target_builder(samples, _feature_shapes(output), device=device)
-            with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=scaler.is_enabled()):
+            with torch.autocast(
+                device_type=device.type,
+                dtype=torch.float16,
+                enabled=scaler.is_enabled(),
+            ):
                 losses = criterion(output, targets)
                 loss = losses.total / config.schedule.accumulation_steps
             if not torch.isfinite(losses.total):
@@ -179,13 +341,34 @@ def train_quad_proposals(
             )
             if should_step:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), config.schedule.gradient_clip_norm)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), config.schedule.gradient_clip_norm
+                )
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step()
                 ema.update(model)
                 global_step += 1
+                checkpoint_interval = config.schedule.checkpoint_every_steps
+                if checkpoint_interval > 0 and global_step % checkpoint_interval == 0:
+                    _save_checkpoint(
+                        output_dir / "last.pt",
+                        model=model,
+                        ema=ema,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        epoch=epoch,
+                        batch_in_epoch=batch_in_epoch,
+                        epoch_complete=False,
+                        global_step=global_step,
+                        best_score=best_score,
+                        config=config,
+                        metrics=metrics,
+                        criterion=criterion,
+                    )
+            last_batch_in_epoch = batch_in_epoch
             if log_interval and (batch_index + 1) % log_interval == 0:
                 _write_jsonl(log_path, {
                     "kind": "train",
@@ -208,6 +391,7 @@ def train_quad_proposals(
                     "fallback_count": float(targets.fallback_count.cpu()),
                     "unrepresentable_count": float(targets.unrepresentable_count.cpu()),
                     "quality_target_mode": criterion.quality_target_mode,
+                    "geometry_quality_target": criterion.geometry_quality_target,
                 })
             if max_steps is not None and global_step >= max_steps:
                 break
@@ -222,34 +406,53 @@ def train_quad_proposals(
         else:
             criterion.quality_target_mode = "iou"
             criterion.quality_blend = 1.0
-        validation_model = ema.module if use_ema_for_validation else model
-        metrics = validate_quad(
-            validation_model, val_loader, target_builder, decoder, device,
-            max_batches=max_val_batches,
+        should_validate = (
+            (epoch + 1) % validation_interval == 0
+            or epoch + 1 == config.schedule.epochs
+            or (max_steps is not None and global_step >= max_steps)
         )
-        metrics.update({"epoch": epoch, "step": global_step, "quality_target_mode": criterion.quality_target_mode})
-        _write_jsonl(log_path, {"kind": "validation", **metrics})
-        score = metrics.get("ar/100", 0.0)
-        payload = {
-            "format_version": 1,
-            "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
-            "model": model.state_dict(),
-            "ema_model": ema.module.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
+        if should_validate:
+            validation_model = ema.module if use_ema_for_validation else model
+            metrics = validate_quad(
+                validation_model,
+                val_loader,
+                target_builder,
+                decoder,
+                device,
+                max_batches=max_val_batches,
+                # The all-dense exact-IoU oracle is deliberately final-report
+                # only. Repeating it during training makes reference polygon
+                # clipping dominate the overfit loop.
+                include_dense_diagnostics=False,
+            )
+        metrics.update({
             "epoch": epoch,
-            "global_step": global_step,
-            "config": asdict(config),
-            "metrics": metrics,
-            "quality_curriculum": {
-                "mode": criterion.quality_target_mode,
-                "blend": criterion.quality_blend,
-            },
-        }
-        torch.save(payload, output_dir / "last.pt")
-        if score > best_score:
+            "step": global_step,
+            "quality_target_mode": criterion.quality_target_mode,
+            "geometry_quality_target": criterion.geometry_quality_target,
+        })
+        if should_validate:
+            _write_jsonl(log_path, {"kind": "validation", **metrics})
+        score = metrics.get("ar/100", 0.0)
+        epoch_complete = last_batch_in_epoch >= len(train_loader)
+        is_best = should_validate and score > best_score
+        if is_best:
             best_score = score
-            torch.save(payload, output_dir / "best.pt")
+        _save_checkpoint(
+            output_dir / "last.pt", model=model, ema=ema, optimizer=optimizer,
+            scheduler=scheduler, scaler=scaler, epoch=epoch,
+            batch_in_epoch=last_batch_in_epoch, epoch_complete=epoch_complete,
+            global_step=global_step, best_score=best_score, config=config,
+            metrics=metrics, criterion=criterion,
+        )
+        if is_best:
+            _save_checkpoint(
+                output_dir / "best.pt", model=model, ema=ema, optimizer=optimizer,
+                scheduler=scheduler, scaler=scaler, epoch=epoch,
+                batch_in_epoch=last_batch_in_epoch, epoch_complete=epoch_complete,
+                global_step=global_step, best_score=best_score, config=config,
+                metrics=metrics, criterion=criterion,
+            )
         if max_steps is not None and global_step >= max_steps:
             break
     return {"global_step": global_step, "best_score": best_score, "metrics": metrics}

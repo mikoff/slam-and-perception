@@ -14,10 +14,11 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 - MobileNetV4 and LiteFPN emit P3/P4/P5 `[B, 96, H/s, W/s]` at strides 8/16/32.
 - `QuadDetectorOutput.quality` has one logit per location; `corner_offsets` has
   eight unmasked signed, stride-normalized values per location.
-- Training targets are `[B, S]` quality/masks and `[B, S, 8]` corner offsets,
-  where `S` is the flattened sum of all P3-P5 spatial locations.
+- Training targets are `[B, S]` quality/masks/GT-owner indices and `[B, S, 8]`
+  corner offsets, where `S` is the flattened sum of P3-P5 locations.
 - Dataset samples carry positive `[N, 4, 2]` and ignore `[M, 4, 2]` quads plus
-  a pixel-validity mask. Compact manifests are indexed through SQLite.
+  a pixel-validity mask, geometry tiers, and object-condition labels. Compact
+  manifests are indexed through SQLite schema version 4.
 - The decoder returns canonical `[K, 4, 2]` quads and `[K]` quality scores,
   with at most 100 deployed proposals after reference polygon NMS.
 
@@ -26,7 +27,7 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 - Static assignment uses full-quad inclusion, area centroid, PCA local axes,
   normalized elliptical center distance, and smooth FPN scale compatibility.
 - Scale compatibility selects locations only. Rotated centerness supervises
-  proposal quality before transition to detached aligned polygon IoU.
+  proposal quality before transition to detached geometry quality.
 - Direct-corner Smooth-L1 minimizes over four cyclic starts and both windings;
   predicted corners are never sorted inside the training graph.
 - Validity loss is computed in stride-normalized coordinates and penalizes
@@ -38,17 +39,24 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 - Micro-overfit mode disables augmentation and EMA validation, uses fixed image
   IDs, repeats every fixture image per optimizer batch, and stores curriculum
   state in checkpoints.
+- Quad checkpoints contain model/EMA, optimizer, scheduler, AMP scaler, complete
+  config, curriculum, epoch/batch position, and support deterministic resume.
+- Validation caches each GT/proposal IoU matrix. It logs assigned and final
+  recall, corner error, matched score, NMS delta, slice recall, and score groups;
+  the expensive all-dense oracle runs only in final gate reports.
 
 # Local Constraints & Gotchas
 
-- Exact aligned polygon IoU is a detached score target only, never an assigner.
-  It uses a clear reference implementation with Python control flow and must be
-  benchmarked against the approved corner-quality proxy before production.
+- G5 selected the aspect-aware cyclic/reversed corner-quality proxy for training
+  score targets: exact IoU cost 502.8% extra median step time and 0% extra memory
+  on the RTX 3060. Exact polygon IoU remains mandatory for validation.
 - Reference polygon NMS copies candidates to CPU and is correctness-first; time
-  neural inference and NMS separately.
+  neural inference and NMS separately. It stops once the requested ranked output
+  budget is full because later lower-score candidates cannot enter that prefix.
 - The primary regular target floor is a 16-pixel shortest side after resizing;
   thin objects use the explicit major-axis/aspect/area exception.
 - `uv` CUDA works only with host GPU device access in the managed sandbox. The
   verified runtime is PyTorch 2.6.0+cu124 on an RTX 3060 with a CUDA 13 driver.
-- The two-object control passes recall at IoU .50/.75; the mixed-geometry G6
-  fixture still needs a longer/tuned run before full training is authorized.
+- The selected proxy and deterministic six-positive G6 fixture pass R@100 at
+  IoU .50/.75 from saved step-150 `best.pt`. Later checkpoints can drift on the
+  thin .75 boundary, so AR-based selection is required; G0/G1 still block.

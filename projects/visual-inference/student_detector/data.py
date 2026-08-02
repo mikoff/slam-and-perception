@@ -27,7 +27,7 @@ from .config import AugmentationConfig, DataConfig
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 PADDING_RGB = tuple(round(channel * 255) for channel in IMAGENET_MEAN)
-INDEX_SCHEMA_VERSION = "3"
+INDEX_SCHEMA_VERSION = "4"
 PROPOSAL_MANIFEST_SCHEMA = "quad-proposal-manifest.v1"
 
 
@@ -127,6 +127,7 @@ def build_coco_sqlite_index(
                     y2 REAL NOT NULL,
                     ignore_region INTEGER NOT NULL,
                     category_name TEXT NOT NULL,
+                    object_condition TEXT NOT NULL,
                     quad_json TEXT NOT NULL,
                     geometry_tier TEXT NOT NULL,
                     fit_coverage REAL NOT NULL,
@@ -198,6 +199,7 @@ def build_coco_sqlite_index(
                         y + height,
                         int(ignore),
                         category_name,
+                        str(annotation.get("object_condition", "whole_object")),
                         json.dumps(
                             annotation.get("quad")
                             or [[x, y], [x + width, y], [x + width, y + height], [x, y + height]],
@@ -211,13 +213,13 @@ def build_coco_sqlite_index(
                         positive_counts[image_id] += 1
                     if len(rows) >= 10_000:
                         connection.executemany(
-                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rows,
                         )
                         rows.clear()
                 if rows:
                     connection.executemany(
-                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
             connection.executemany(
@@ -286,6 +288,7 @@ def build_proposal_manifest_sqlite_index(
                     x2 REAL NOT NULL, y2 REAL NOT NULL,
                     ignore_region INTEGER NOT NULL,
                     category_name TEXT NOT NULL,
+                    object_condition TEXT NOT NULL,
                     quad_json TEXT NOT NULL,
                     geometry_tier TEXT NOT NULL,
                     fit_coverage REAL NOT NULL,
@@ -318,13 +321,14 @@ def build_proposal_manifest_sqlite_index(
                             rows.append((
                                 image_id, x, y, x + width, y + height,
                                 int(ignored), str(record.get("source_category", "unknown")),
+                                str(record.get("object_condition", "whole_object")),
                                 json.dumps(quad, separators=(",", ":")),
                                 str(record.get("geometry_tier", "source_hbb")),
                                 float(record.get("fit_coverage", 1.0)),
                                 float(record.get("fit_tightness", 0.0)),
                             ))
                     if rows:
-                        connection.executemany("INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                        connection.executemany("INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
             connection.execute("INSERT INTO metadata VALUES ('source_signature', ?)", (signature,))
             connection.execute("INSERT INTO metadata VALUES ('schema_version', ?)", (schema_version,))
             connection.commit()

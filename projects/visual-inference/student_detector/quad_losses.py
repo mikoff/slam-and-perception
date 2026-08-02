@@ -58,12 +58,17 @@ class QuadProposalLoss(nn.Module):
         quality_focal_beta: float = 2.0,
         quality_target_mode: str = "centerness",
         quality_blend: float = 0.0,
+        geometry_quality_target: str = "corner_proxy",
     ) -> None:
         super().__init__()
         if quality_target_mode not in {"centerness", "blend", "iou"}:
             raise ValueError("quality_target_mode must be centerness, blend, or iou")
         if not 0 <= quality_blend <= 1:
             raise ValueError("quality_blend must be in [0, 1]")
+        if geometry_quality_target not in {"exact_iou", "corner_proxy"}:
+            raise ValueError(
+                "geometry_quality_target must be exact_iou or corner_proxy"
+            )
         self.strides = strides
         self.quality_weight = quality_weight
         self.corner_weight = corner_weight
@@ -71,6 +76,7 @@ class QuadProposalLoss(nn.Module):
         self.quality_focal_beta = quality_focal_beta
         self.quality_target_mode = quality_target_mode
         self.quality_blend = quality_blend
+        self.geometry_quality_target = geometry_quality_target
 
     def _decoded_quads(self, offsets: Tensor, feature_shapes: tuple[tuple[int, int], ...]) -> Tensor:
         points, level_slices = make_grid_points(
@@ -124,6 +130,32 @@ class QuadProposalLoss(nn.Module):
         selected = values[mask]
         return selected.mean() if selected.numel() else values.mean() * 0
 
+    @staticmethod
+    def _corner_quality_proxy(predicted: Tensor, target: Tensor) -> Tensor:
+        """Return an aspect-aware cyclic/reversed corner quality in [0, 1]."""
+        forward = torch.stack(
+            [torch.roll(target, -index, dims=1) for index in range(4)], dim=1
+        )
+        reverse = torch.flip(target, dims=(1,))
+        backward = torch.stack(
+            [torch.roll(reverse, -index, dims=1) for index in range(4)], dim=1
+        )
+        traversals = torch.cat((forward, backward), dim=1)
+        centered = target - target.mean(dim=1, keepdim=True)
+        covariance = centered.transpose(1, 2) @ centered / 4.0
+        _, eigenvectors = torch.linalg.eigh(covariance)
+        # Columns are the minor and major principal axes. Project errors into
+        # that local frame and normalize each direction independently so a
+        # one-pixel error across a thin object is not hidden by its long axis.
+        local_target = centered @ eigenvectors
+        half_extents = local_target.abs().amax(dim=1).clamp(min=1e-4)
+        local_error = (predicted[:, None] - traversals) @ eigenvectors[:, None]
+        normalized_vertex_error = torch.linalg.vector_norm(
+            local_error / half_extents[:, None, None], dim=-1
+        )
+        normalized = normalized_vertex_error.mean(dim=-1).amin(dim=1)
+        return torch.exp(-2.0 * normalized).clamp(0, 1)
+
     def forward(self, output: QuadDetectorOutput, targets: QuadTrainingTargets) -> QuadLossOutput:
         quality_logits, predicted_offsets = flatten_quad_output(output)
         positive = targets.positive_mask
@@ -140,16 +172,27 @@ class QuadProposalLoss(nn.Module):
         if self.quality_target_mode in {"blend", "iou"} and positive.any():
             selected_pred = predicted_quads.reshape(-1, 4, 2)[positive.reshape(-1)].detach()
             selected_target = target_quads.reshape(-1, 4, 2)[positive.reshape(-1)].detach()
-            with torch.no_grad():
-                iou = aligned_quad_iou(selected_pred.float(), selected_target.float())
+            # CUDA eigensolvers used by the proxy and reference polygon geometry
+            # are float32-only; explicitly leave the surrounding AMP region.
+            with torch.no_grad(), torch.autocast(
+                device_type=selected_pred.device.type, enabled=False
+            ):
+                if self.geometry_quality_target == "exact_iou":
+                    geometry_quality = aligned_quad_iou(
+                        selected_pred.float(), selected_target.float()
+                    )
+                else:
+                    geometry_quality = self._corner_quality_proxy(
+                        selected_pred.float(), selected_target.float()
+                    )
             if self.quality_target_mode == "iou":
                 quality_target = quality_target.clone()
-                quality_target[positive.reshape(-1)] = iou
+                quality_target[positive.reshape(-1)] = geometry_quality
             else:
                 quality_target = quality_target.clone()
                 quality_target[positive.reshape(-1)] = (
                     (1 - self.quality_blend) * quality_target[positive.reshape(-1)]
-                    + self.quality_blend * iou
+                    + self.quality_blend * geometry_quality
                 )
         per_location_quality = _quality_focal_loss(
             quality_logits.reshape(-1), quality_target.to(quality_logits.dtype), self.quality_focal_beta

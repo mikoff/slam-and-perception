@@ -67,3 +67,21 @@ def test_quality_groups_are_normalized_independently() -> None:
     targets = builder([sample], shapes, device=torch.device("cpu"))
     assert targets.trusted_background_mask.any()
     assert not targets.weak_background_mask.any()
+
+
+def test_corner_quality_proxy_is_scale_invariant_and_detached() -> None:
+    target = torch.tensor([[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]])
+    predicted = target + 1.0
+    first = QuadProposalLoss._corner_quality_proxy(predicted, target)
+    second = QuadProposalLoss._corner_quality_proxy(predicted * 2, target * 2)
+    torch.testing.assert_close(first, second)
+    assert 0 < float(first) < 1
+
+
+def test_corner_quality_proxy_is_sensitive_to_thin_minor_axis_error() -> None:
+    target = torch.tensor([[[0.0, 0.0], [100.0, 0.0], [100.0, 10.0], [0.0, 10.0]]])
+    major_error = target + torch.tensor([1.0, 0.0])
+    minor_error = target + torch.tensor([0.0, 1.0])
+    major_quality = QuadProposalLoss._corner_quality_proxy(major_error, target)
+    minor_quality = QuadProposalLoss._corner_quality_proxy(minor_error, target)
+    assert minor_quality < major_quality

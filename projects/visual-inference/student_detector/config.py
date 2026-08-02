@@ -124,6 +124,7 @@ class QuadConfig:
     quality_focal_beta: float = 2.0
     quality_target_mode: str = "centerness"
     quality_blend: float = 0.0
+    geometry_quality_target: str = "corner_proxy"
 
 
 @dataclass(frozen=True)
@@ -248,4 +249,8 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("quad quality_target_mode must be centerness, blend, or iou")
     if not 0 <= config.quad.quality_blend <= 1:
         raise ValueError("quad quality_blend must be in [0, 1]")
+    if config.quad.geometry_quality_target not in {"exact_iou", "corner_proxy"}:
+        raise ValueError(
+            "quad geometry_quality_target must be exact_iou or corner_proxy"
+        )
     return config

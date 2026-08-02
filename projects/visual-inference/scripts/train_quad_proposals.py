@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=10)
     parser.add_argument("--no-pretrained", action="store_true")
     parser.add_argument("--no-amp", action="store_true")
+    parser.add_argument(
+        "--geometry-quality-target",
+        choices=("exact_iou", "corner_proxy"),
+    )
+    parser.add_argument("--resume", type=Path)
+    parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--force-index", action="store_true")
     return parser.parse_args()
 
@@ -72,6 +78,14 @@ def main() -> None:
         config = replace(config, output_dir=args.output_dir.resolve())
     if args.no_pretrained:
         config = replace(config, pretrained_backbone=False)
+    if args.geometry_quality_target is not None:
+        config = replace(
+            config,
+            quad=replace(
+                config.quad,
+                geometry_quality_target=args.geometry_quality_target,
+            ),
+        )
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -183,12 +197,15 @@ def main() -> None:
         quality_focal_beta=config.quad.quality_focal_beta,
         quality_target_mode=config.quad.quality_target_mode,
         quality_blend=config.quad.quality_blend,
+        geometry_quality_target=config.quad.geometry_quality_target,
     )
     result = train_quad_proposals(
         model, train_loader, val_loader, target_builder, criterion, config, device,
         max_steps=args.max_steps, max_val_batches=args.max_val_batches,
         log_interval=args.log_interval,
         use_ema_for_validation=not overfit,
+        resume=args.resume,
+        validation_interval=args.validation_interval,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

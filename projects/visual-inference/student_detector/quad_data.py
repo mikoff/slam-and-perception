@@ -46,6 +46,7 @@ class QuadProposalSample:
     original_size: tuple[int, int]
     transform: tuple[float, float, float]
     geometry_tiers: tuple[str, ...] = ()
+    object_conditions: tuple[str, ...] = ()
 
 
 def _quad_tensor(rows: Sequence[Sequence[Sequence[float]]]) -> Tensor:
@@ -215,12 +216,14 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
     def __getitem__(self, index: int) -> QuadProposalSample:
         record = self.records[index]
         rows = self._db().execute(
-            "SELECT quad_json, ignore_region, geometry_tier FROM annotations WHERE image_id=?",
+            "SELECT quad_json, ignore_region, geometry_tier, object_condition "
+            "FROM annotations WHERE image_id=?",
             (record.image_id,),
         ).fetchall()
         positive = [json.loads(row[0]) for row in rows if not row[1]]
         ignore = [json.loads(row[0]) for row in rows if row[1]]
         tiers = tuple(str(row[2]) for row in rows if not row[1])
+        conditions = tuple(str(row[3]) for row in rows if not row[1])
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
         transformed = self.transform(
@@ -234,6 +237,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
             record.source_dataset in set(self.data_config.dense_background_sources),
             (record.height, record.width), transformed[4],
             tuple(tiers[index] for index in transformed[5]),
+            tuple(conditions[index] for index in transformed[5]),
         )
 
 
