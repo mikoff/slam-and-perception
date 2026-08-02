@@ -287,9 +287,12 @@ There is no shrunken center polygon, virtual square prior, or assignment IoU.
 
 - The primary supported size tier contains objects whose shortest side is at
   least 16 pixels after detector input resizing. Objects from 8 through 16 pixels
-  form a difficult diagnostic tier. Objects below 8 pixels are excluded from
-  positive training and headline recall, become ignore rather than background,
-  and still have their prevalence reported.
+  form a difficult diagnostic tier. A genuinely thin, elongated object may
+  have a shorter minor axis: it remains positive when its major axis is at
+  least 8 pixels, aspect ratio is at least 3:1, and area is at least 16 square
+  pixels. Objects failing both the regular and thin-object gates are excluded
+  from positive training and headline recall, become ignore rather than
+  background, and still have their prevalence reported.
 
 - The initial data scope is limited to the four installed sources: COCO 2017,
   nuImages, BDD100K, and WoodScape RGB Fisheye. Additional general, automotive,

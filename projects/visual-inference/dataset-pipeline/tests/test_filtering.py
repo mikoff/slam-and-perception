@@ -84,6 +84,21 @@ def test_filter_marker_rejects_a_different_image_limit(tmp_path, taxonomy):
         filter_project(dataset, source, destination, taxonomy)
 
 
+def test_bounded_filter_prefers_retained_images(tmp_path, taxonomy):
+    source = make_project(tmp_path / "source", "car")
+    image = (source / "train/img/one.jpg").read_bytes()
+    (source / "train/img/aaa.jpg").write_bytes(image)
+    (source / "train/ann/aaa.jpg.json").write_text(
+        json.dumps({"size": {"width": 32, "height": 24}, "objects": []})
+    )
+    dataset = DatasetConfig("bdd100k_images_100k", tmp_path / "unused.tar", tmp_path / "raw")
+    destination = tmp_path / "filtered"
+    plan, _ = filter_project(dataset, source, destination, taxonomy, limit_images=1)
+    assert plan["selected_positive_image_count"] == 1
+    assert (destination / "train/ann/one.jpg.json").exists()
+    assert not (destination / "train/ann/aaa.jpg.json").exists()
+
+
 def test_filter_failure_removes_partial_output(tmp_path, taxonomy, monkeypatch):
     source = make_project(tmp_path / "source", "car")
     dataset = DatasetConfig("bdd100k_images_100k", tmp_path / "unused.tar", tmp_path / "raw")

@@ -9,7 +9,7 @@ from student_detector.backbone import (
     StubBackbone,
     locate_pyramid_levels,
 )
-from student_detector.model import StudentDetector
+from student_detector.model import QuadProposalDetector, StudentDetector
 
 
 def test_locate_pyramid_levels_uses_reductions_not_fixed_indices() -> None:
@@ -65,6 +65,14 @@ def test_stub_model_exports() -> None:
     exported = torch.export.export(model, (example,))
     result = exported.module()(example)
     assert result.objectness[0].shape == (1, 1, 48, 48)
+
+
+def test_quad_model_has_one_quality_and_eight_geometry_channels() -> None:
+    model = QuadProposalDetector(backbone=StubBackbone()).eval()
+    with torch.inference_mode():
+        output = model(torch.randn(2, 3, 64, 64))
+    assert [tensor.shape[1] for tensor in output.quality] == [1, 1, 1]
+    assert [tensor.shape[1] for tensor in output.corner_offsets] == [8, 8, 8]
 
 
 @pytest.mark.slow

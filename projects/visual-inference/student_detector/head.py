@@ -19,6 +19,13 @@ class DetectorOutput(NamedTuple):
     centerness: tuple[Tensor, Tensor, Tensor]
 
 
+class QuadDetectorOutput(NamedTuple):
+    """Raw fixed-shape outputs for the class-agnostic quad detector."""
+
+    quality: tuple[Tensor, Tensor, Tensor]
+    corner_offsets: tuple[Tensor, Tensor, Tensor]
+
+
 class SharedDetectionHead(nn.Module):
     """One shared object tower and one shared regression tower."""
 
@@ -70,4 +77,41 @@ class SharedDetectionHead(nn.Module):
             objectness=(level3[0], level4[0], level5[0]),
             box_distances=(level3[1], level4[1], level5[1]),
             centerness=(level3[2], level4[2], level5[2]),
+        )
+
+
+class SharedQuadProposalHead(nn.Module):
+    """One shared quality tower and one unmasked eight-coordinate tower."""
+
+    def __init__(
+        self,
+        channels: int = 96,
+        strides: tuple[int, int, int] = (8, 16, 32),
+        prior_probability: float = 0.01,
+    ) -> None:
+        super().__init__()
+        self.quality_tower = DepthwiseSeparableConv(channels, channels)
+        self.geometry_tower = nn.Sequential(
+            DepthwiseSeparableConv(channels, channels),
+            DepthwiseSeparableConv(channels, channels),
+        )
+        self.quality = nn.Conv2d(channels, 1, kernel_size=1)
+        self.corner_offsets = nn.Conv2d(channels, 8, kernel_size=1)
+        self.strides = strides
+        quality_bias = -math.log((1.0 - prior_probability) / prior_probability)
+        nn.init.constant_(self.quality.bias, quality_bias)
+        nn.init.zeros_(self.corner_offsets.bias)
+
+    def _forward_level(self, feature: Tensor) -> tuple[Tensor, Tensor]:
+        quality = self.quality(self.quality_tower(feature))
+        # These are signed, stride-normalized offsets. Deliberately do not apply
+        # ReLU, clipping, sorting, or a geometry mask in the exported head.
+        offsets = self.corner_offsets(self.geometry_tower(feature))
+        return quality, offsets
+
+    def forward(self, features: tuple[Tensor, Tensor, Tensor]) -> QuadDetectorOutput:
+        levels = tuple(self._forward_level(feature) for feature in features)
+        return QuadDetectorOutput(
+            quality=tuple(level[0] for level in levels),
+            corner_offsets=tuple(level[1] for level in levels),
         )

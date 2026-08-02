@@ -15,6 +15,8 @@ class DataConfig:
     val_annotations: Path
     image_root: Path
     index_dir: Path
+    quad_train_annotations: Path | None = None
+    quad_val_annotations: Path | None = None
     input_size: int = 384
     batch_size: int = 10
     workers: int = 4
@@ -42,6 +44,10 @@ class DataConfig:
     })
     tiny_area: float = 100.0
     tiny_min_side: float = 4.0
+    quad_regular_min_side: float = 16.0
+    thin_major_axis_min: float = 8.0
+    thin_aspect_ratio_min: float = 3.0
+    thin_area: float = 16.0
     component_categories: tuple[str, ...] = (
         "face", "head", "hand", "arm", "leg", "foot", "shoe",
         "wheel", "tire", "license_plate", "mirror", "door",
@@ -98,9 +104,26 @@ class LossConfig:
 @dataclass(frozen=True)
 class InferenceConfig:
     pre_nms_top_k: int = 300
-    nms_iou_threshold: float = 0.6
+    # Proposal recall is the primary objective; leave duplicate suppression
+    # conservative and let the fixed 100-proposal cap control output size.
+    nms_iou_threshold: float = 0.9
     max_proposals: int = 100
     score_mode: str = "objectness"
+
+
+@dataclass(frozen=True)
+class QuadConfig:
+    top_k: int = 9
+    gamma: float = 2.0
+    scale_sigma: float = 0.75
+    eligible_levels: int = 2
+    weak_negative_weight: float = 0.0
+    quality_weight: float = 1.0
+    corner_weight: float = 2.0
+    validity_weight: float = 0.05
+    quality_focal_beta: float = 2.0
+    quality_target_mode: str = "centerness"
+    quality_blend: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -129,6 +152,7 @@ class Phase3Config:
     assignment: AssignmentConfig = field(default_factory=AssignmentConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
+    quad: QuadConfig = field(default_factory=QuadConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     output_dir: Path = Path("runs/phase3")
     pretrained_backbone: bool = True
@@ -154,6 +178,9 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError(f"Phase 3 data config is missing: {sorted(missing)}")
     for key in required:
         data_raw[key] = _resolve(config_path.parent, data_raw[key])
+    for key in ("quad_train_annotations", "quad_val_annotations"):
+        if data_raw.get(key) is not None:
+            data_raw[key] = _resolve(config_path.parent, data_raw[key])
     for key in (
         "dense_background_sources",
         "component_categories",
@@ -171,6 +198,7 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         assignment=AssignmentConfig(**assignment_raw),
         loss=_construct(LossConfig, raw.get("loss")),
         inference=_construct(InferenceConfig, raw.get("inference")),
+        quad=_construct(QuadConfig, raw.get("quad")),
         schedule=_construct(ScheduleConfig, raw.get("schedule")),
         output_dir=_resolve(config_path.parent, raw.get("output_dir", "runs/phase3")),
         pretrained_backbone=bool(raw.get("pretrained_backbone", True)),
@@ -203,4 +231,21 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
             "score_mode must be 'objectness' or "
             "'objectness_x_centerness'"
         )
+    if config.quad.top_k < 1 or config.quad.eligible_levels < 1:
+        raise ValueError("quad top_k and eligible_levels must be positive")
+    if (
+        config.data.tiny_area <= 0
+        or config.data.tiny_min_side <= 0
+        or config.data.quad_regular_min_side <= 0
+        or config.data.thin_major_axis_min <= 0
+        or config.data.thin_aspect_ratio_min < 1
+        or config.data.thin_area <= 0
+    ):
+        raise ValueError("quad size thresholds must be positive and aspect ratio must be at least 1")
+    if not 0 <= config.quad.weak_negative_weight <= 1:
+        raise ValueError("quad weak_negative_weight must be in [0, 1]")
+    if config.quad.quality_target_mode not in {"centerness", "blend", "iou"}:
+        raise ValueError("quad quality_target_mode must be centerness, blend, or iou")
+    if not 0 <= config.quad.quality_blend <= 1:
+        raise ValueError("quad quality_blend must be in [0, 1]")
     return config

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 import os
 import random
@@ -26,7 +27,8 @@ from .config import AugmentationConfig, DataConfig
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 PADDING_RGB = tuple(round(channel * 255) for channel in IMAGENET_MEAN)
-INDEX_SCHEMA_VERSION = "2"
+INDEX_SCHEMA_VERSION = "3"
+PROPOSAL_MANIFEST_SCHEMA = "quad-proposal-manifest.v1"
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,14 @@ def build_coco_sqlite_index(
 ) -> Path:
     """Build a compact random-access index without loading COCO JSON into RAM."""
     source = Path(annotations).resolve()
+    # JSON is emitted with sorted keys, so the manifest's top-level schema
+    # field may appear after the first (large) images array.  Inspect only the
+    # first streamed image record: manifests use `image_id`, while COCO uses
+    # `id`, and this avoids loading the annotation document.
+    with source.open("rb") as stream:
+        first_image = next(ijson.items(stream, "images.item"), None)
+    if isinstance(first_image, dict) and "image_id" in first_image:
+        return build_proposal_manifest_sqlite_index(source, index_path, force=force)
     destination = Path(index_path).resolve()
     signature = _source_signature(source)
     if destination.exists() and not force:
@@ -116,7 +126,11 @@ def build_coco_sqlite_index(
                     x2 REAL NOT NULL,
                     y2 REAL NOT NULL,
                     ignore_region INTEGER NOT NULL,
-                    category_name TEXT NOT NULL
+                    category_name TEXT NOT NULL,
+                    quad_json TEXT NOT NULL,
+                    geometry_tier TEXT NOT NULL,
+                    fit_coverage REAL NOT NULL,
+                    fit_tightness REAL NOT NULL
                 );
                 CREATE INDEX annotations_by_image ON annotations(image_id);
                 """
@@ -184,18 +198,26 @@ def build_coco_sqlite_index(
                         y + height,
                         int(ignore),
                         category_name,
+                        json.dumps(
+                            annotation.get("quad")
+                            or [[x, y], [x + width, y], [x + width, y + height], [x, y + height]],
+                            separators=(",", ":"),
+                        ),
+                        str(annotation.get("geometry_tier", "source_hbb")),
+                        float(annotation.get("fit_coverage", 1.0)),
+                        float(annotation.get("fit_tightness", 0.0)),
                     ))
                     if not ignore:
                         positive_counts[image_id] += 1
                     if len(rows) >= 10_000:
                         connection.executemany(
-                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rows,
                         )
                         rows.clear()
                 if rows:
                     connection.executemany(
-                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
             connection.executemany(
@@ -210,6 +232,101 @@ def build_coco_sqlite_index(
                 "INSERT INTO metadata VALUES ('schema_version', ?)",
                 (INDEX_SCHEMA_VERSION,),
             )
+            connection.commit()
+        os.replace(staged, destination)
+    except BaseException:
+        staged.unlink(missing_ok=True)
+        raise
+    return destination
+
+
+def build_proposal_manifest_sqlite_index(
+    annotations: str | Path,
+    index_path: str | Path,
+    *,
+    force: bool = False,
+) -> Path:
+    """Index the compact proposal manifest without materializing all images."""
+    source = Path(annotations).resolve()
+    destination = Path(index_path).resolve()
+    signature = _source_signature(source)
+    schema_version = f"{INDEX_SCHEMA_VERSION}:proposal-manifest"
+    if destination.exists() and not force:
+        with sqlite3.connect(destination) as connection:
+            metadata = dict(connection.execute("SELECT key, value FROM metadata").fetchall())
+        if metadata.get("source_signature") == signature and metadata.get("schema_version") == schema_version:
+            return destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor, staged_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    os.close(file_descriptor)
+    staged = Path(staged_name)
+    try:
+        with sqlite3.connect(staged) as connection:
+            connection.executescript(
+                """
+                PRAGMA journal_mode=OFF;
+                PRAGMA synchronous=OFF;
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE images (
+                    row_index INTEGER PRIMARY KEY,
+                    image_id INTEGER UNIQUE NOT NULL,
+                    file_name TEXT NOT NULL,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL,
+                    source_dataset TEXT NOT NULL,
+                    camera_type TEXT NOT NULL,
+                    background_supervision INTEGER NOT NULL,
+                    positive_count INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE annotations (
+                    image_id INTEGER NOT NULL,
+                    x1 REAL NOT NULL, y1 REAL NOT NULL,
+                    x2 REAL NOT NULL, y2 REAL NOT NULL,
+                    ignore_region INTEGER NOT NULL,
+                    category_name TEXT NOT NULL,
+                    quad_json TEXT NOT NULL,
+                    geometry_tier TEXT NOT NULL,
+                    fit_coverage REAL NOT NULL,
+                    fit_tightness REAL NOT NULL
+                );
+                CREATE INDEX annotations_by_image ON annotations(image_id);
+                """
+            )
+            with source.open("rb") as stream:
+                for row_index, image in enumerate(ijson.items(stream, "images.item")):
+                    image_id = int(image["image_id"])
+                    connection.execute(
+                        "INSERT INTO images VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            row_index, image_id, str(image["file_name"]),
+                            int(image["width"]), int(image["height"]),
+                            str(image.get("source_dataset", "unknown")),
+                            str(image.get("camera_type", "perspective")),
+                            int(bool(image.get("background_supervision", False))),
+                            len(image.get("positive", [])),
+                        ),
+                    )
+                    rows = []
+                    for ignored, records in ((False, image.get("positive", [])), (True, image.get("ignore", []))):
+                        for record in records:
+                            if not record.get("valid", True):
+                                continue
+                            x, y, width, height = map(float, record["bbox"])
+                            quad = [[float(point[0]), float(point[1])] for point in record["quad"]]
+                            rows.append((
+                                image_id, x, y, x + width, y + height,
+                                int(ignored), str(record.get("source_category", "unknown")),
+                                json.dumps(quad, separators=(",", ":")),
+                                str(record.get("geometry_tier", "source_hbb")),
+                                float(record.get("fit_coverage", 1.0)),
+                                float(record.get("fit_tightness", 0.0)),
+                            ))
+                    if rows:
+                        connection.executemany("INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            connection.execute("INSERT INTO metadata VALUES ('source_signature', ?)", (signature,))
+            connection.execute("INSERT INTO metadata VALUES ('schema_version', ?)", (schema_version,))
             connection.commit()
         os.replace(staged, destination)
     except BaseException:

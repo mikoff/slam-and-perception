@@ -10,6 +10,7 @@ from PIL import Image
 from .coco_export import discover_exports
 from .config import Config
 from .progress import Progress
+from .proposal_manifest import validate_manifest
 from .reports import read_json, write_csv, write_json
 from .taxonomy import Taxonomy
 
@@ -102,6 +103,10 @@ def validate_all(config: Config, taxonomy: Taxonomy) -> dict[str, Any]:
         (config.workspace_root / "output" / "annotations" / f"instances_{split}.json", config.workspace_root / "output", True)
         for split in ("train", "val")
     )
+    manifest_paths = [
+        config.workspace_root / "output" / "annotations" / f"proposals_{split}.json"
+        for split in ("train", "val")
+    ]
     errors, aggregate = [], {key: Counter() for key in ("category", "source_category", "source_dataset")}
     seen_by_split: dict[str, set[tuple[str, str]]] = {}
     raw_roots = [item.extracted_dir.resolve() for item in config.datasets.values()]
@@ -141,6 +146,22 @@ def validate_all(config: Config, taxonomy: Taxonomy) -> dict[str, Any]:
     )
     if errors:
         raise ValueError(f"Validation failed with {len(errors)} errors; see {config.reports}")
+    manifest_reports = []
+    for path in manifest_paths:
+        if not path.exists():
+            errors.append({"file": str(path), "error": "proposal manifest missing"})
+            continue
+        try:
+            manifest_reports.append(validate_manifest(path, config.workspace_root / "output"))
+        except ValueError as exc:
+            errors.append({"file": str(path), "error": str(exc)})
+    if errors:
+        write_json(config.reports / "proposal_manifest_validation.json", {
+            "valid": False,
+            "errors": errors,
+        })
+        raise ValueError(f"Validation failed with {len(errors)} errors; see {config.reports}")
+    write_json(config.reports / "proposal_manifest_validation.json", manifest_reports)
     return summary
 
 

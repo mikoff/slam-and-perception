@@ -13,11 +13,28 @@ from .taxonomy import Taxonomy
 
 
 def _bbox(obj: dict[str, Any]) -> list[float]:
-    exterior = obj["points"]["exterior"]
-    x1, y1 = map(float, exterior[0])
-    x2, y2 = map(float, exterior[1])
-    # Supervisely rectangle coordinates are inclusive; COCO stores extents.
-    return [x1, y1, x2 - x1 + 1.0, y2 - y1 + 1.0]
+    exterior = obj.get("quad") or obj["points"]["exterior"]
+    points = [[float(point[0]), float(point[1])] for point in exterior]
+    if len(points) < 2:
+        raise ValueError("detection object must contain at least two bbox points")
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    # Supervisely coordinates are inclusive; COCO stores extents.  Computing
+    # min/max over all corners also handles rotated quads whose first two
+    # points are not an axis-aligned diagonal.
+    return [min(xs), min(ys), max(xs) - min(xs) + 1.0, max(ys) - min(ys) + 1.0]
+
+
+def _quad(obj: dict[str, Any]) -> list[list[float]]:
+    exterior = obj.get("quad") or obj.get("points", {}).get("exterior", [])
+    points = [[float(point[0]), float(point[1])] for point in exterior]
+    if len(points) == 2:
+        x1, y1 = points[0]
+        x2, y2 = points[1]
+        points = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+    if len(points) != 4:
+        raise ValueError("detection object must contain four quad points")
+    return points
 
 
 def _replace_directory(staged: Path, destination: Path) -> None:
@@ -60,6 +77,7 @@ def export_project(project: Path, output: Path, dataset: str, taxonomy: Taxonomy
             if not ignore_region and category not in taxonomy.category_ids:
                 raise ValueError(f"Detection project contains noncanonical class {category!r}")
             bbox = _bbox(obj)
+            quad = _quad(obj)
             data["annotations"].append({
                 "id": len(data["annotations"]) + 1, "image_id": image_id,
                 "category_id": (
@@ -72,6 +90,10 @@ def export_project(project: Path, output: Path, dataset: str, taxonomy: Taxonomy
                 "iscrowd": int(ignore_region),
                 "ignore_region": ignore_region,
                 "segmentation": [],
+                "quad": quad,
+                "geometry_tier": obj.get("geometryTier", "source_hbb"),
+                "fit_coverage": float(obj.get("fitCoverage", 1.0)),
+                "fit_tightness": float(obj.get("fitTightness", 0.0)),
                 "source_dataset": dataset,
                 "source_annotation_id": str(obj.get("sourceAnnotationId") or obj.get("id") or obj_index),
                 "source_category": obj.get("sourceCategory", category),

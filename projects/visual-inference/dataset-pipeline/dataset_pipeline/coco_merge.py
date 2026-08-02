@@ -10,6 +10,7 @@ from .coco_export import discover_exports
 from .config import Config
 from .links import link_image
 from .progress import Progress
+from .proposal_manifest import write_manifests
 from .reports import read_json, write_json
 from .taxonomy import Taxonomy
 
@@ -148,6 +149,7 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
             data,
             compact=True,
         )
+    write_manifests(config.workspace_root / "output", output_data)
     stale_links_removed = 0
     if force:
         referenced = {

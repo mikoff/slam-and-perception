@@ -37,6 +37,44 @@ def iter_project_images(project: Path) -> Iterator[tuple[str, Path, Path]]:
                 yield split.name, image, split / "ann" / f"{image.name}.json"
 
 
+def selected_project_images(
+    project: Path,
+    limit_images: int | None,
+    mappings: dict[str, MappingResult],
+) -> list[tuple[str, Path, Path]] | Iterator[tuple[str, Path, Path]]:
+    """Choose a deterministic, positive-aware bounded sample.
+
+    A bounded run is used for data validation and smoke training, so selecting
+    the first filesystem-sorted images can accidentally produce an unlabeled
+    split (for example, a test export).  Prefer images with at least one
+    retained object, then fill the remainder with empty images.  Full runs
+    retain streaming behaviour.
+    """
+    images = iter_project_images(project)
+    if limit_images is None:
+        return images
+    if limit_images <= 0:
+        return []
+    positive: list[tuple[str, Path, Path]] = []
+    empty: list[tuple[str, Path, Path]] = []
+    for item in images:
+        _, _, ann_path = item
+        has_retained = False
+        if ann_path.exists():
+            annotation = read_json(ann_path)
+            for obj in annotation.get("objects", []):
+                mapping = mappings.get(obj.get("classTitle"))
+                if mapping is None:
+                    raise ValueError(
+                        f"annotation references class missing from meta.json: {obj.get('classTitle')!r}"
+                    )
+                if not mapping.ignored:
+                    has_retained = True
+                    break
+        (positive if has_retained else empty).append(item)
+    return (positive + empty)[:limit_images]
+
+
 def filtering_plan(dataset: DatasetConfig, source: Path, taxonomy: Taxonomy, limit_images: int | None = None) -> dict[str, Any]:
     meta = read_json(source / "meta.json")
     classes = {item["title"]: item for item in meta.get("classes", [])}
@@ -45,10 +83,10 @@ def filtering_plan(dataset: DatasetConfig, source: Path, taxonomy: Taxonomy, lim
         for title, item in classes.items()
     }
     source_annotations = retained = 0
+    selected = selected_project_images(source, limit_images, mappings)
+    selected_list = list(selected)
     progress = Progress(f"Planning filter for {dataset.name}", "images")
-    for index, (_, _, ann_path) in enumerate(iter_project_images(source)):
-        if limit_images is not None and index >= limit_images:
-            break
+    for _, _, ann_path in selected_list:
         if not ann_path.exists():
             progress.add()
             continue
@@ -75,6 +113,12 @@ def filtering_plan(dataset: DatasetConfig, source: Path, taxonomy: Taxonomy, lim
         "source_annotation_count": source_annotations,
         "retained_annotation_count": retained,
         "removed_annotation_count": source_annotations - retained,
+        "selection_policy": "retained-positive-first" if limit_images is not None else "all",
+        "selected_image_count": len(selected_list),
+        "selected_positive_image_count": sum(
+            bool(read_json(item[2]).get("objects", [])) if item[2].exists() else False
+            for item in selected_list
+        ),
     }
 
 
@@ -176,10 +220,7 @@ def filter_project(
         new_meta = dict(meta)
         new_meta["classes"] = canonical_classes
         write_json(destination / "meta.json", new_meta, compact=True)
-        images = iter_project_images(source)
-        if limit_images is not None:
-            from itertools import islice
-            images = islice(images, limit_images)
+        images = selected_project_images(source, limit_images, mappings)
         jobs = (
             _FilterBatch(batch, destination, mappings, mode, relative, force)
             for batch in batches(images)

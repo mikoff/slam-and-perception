@@ -1,6 +1,8 @@
 data:
   train_annotations: ../../../data/visual-inference-datasets/output/annotations/instances_train.json
   val_annotations: ../../../data/visual-inference-datasets/output/annotations/instances_val.json
+  quad_train_annotations: ../../../data/visual-inference-datasets/output/annotations/proposals_train.json
+  quad_val_annotations: ../../../data/visual-inference-datasets/output/annotations/proposals_val.json
   image_root: ../../../data/visual-inference-datasets/output
   index_dir: ../artifacts/phase3/index
   input_size: 384
@@ -26,6 +28,10 @@ data:
     woodscape_rgb_fisheye: 0.05
   tiny_area: 100
   tiny_min_side: 4
+  quad_regular_min_side: 16
+  thin_major_axis_min: 8
+  thin_aspect_ratio_min: 3
+  thin_area: 16
   component_categories:
     [face, head, hand, arm, leg, foot, shoe, wheel, tire, license_plate,
      mirror, door, handle, screen, logo]
@@ -70,9 +76,22 @@ loss:
 
 inference:
   pre_nms_top_k: 300
-  nms_iou_threshold: 0.6
+  nms_iou_threshold: 0.9
   max_proposals: 100
   score_mode: objectness
+
+quad:
+  top_k: 9
+  gamma: 2.0
+  scale_sigma: 0.75
+  eligible_levels: 2
+  weak_negative_weight: 0.0
+  quality_weight: 1.0
+  corner_weight: 2.0
+  validity_weight: 0.05
+  quality_focal_beta: 2.0
+  quality_target_mode: centerness
+  quality_blend: 0.0
 
 schedule:
   epochs: 40

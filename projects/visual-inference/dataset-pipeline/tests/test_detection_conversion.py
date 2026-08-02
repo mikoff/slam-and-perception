@@ -9,6 +9,7 @@ from dataset_pipeline.detection_conversion import (
     convert_all,
     deduplicate_geometry_representations,
     object_bbox,
+    quad_object,
     rectangle_object,
 )
 from conftest import make_project
@@ -20,6 +21,53 @@ def test_geometry_enclosing_rectangle(geometry):
     assert object_bbox(obj) == (1.0, 2.0, 8.0, 6.0)
     converted, _ = rectangle_object(obj, 10, 10, True)
     assert converted["geometryType"] == "rectangle"
+
+
+def test_quad_conversion_preserves_source_geometry_and_adds_metrics():
+    obj = {
+        "classTitle": "car",
+        "geometryType": "polygon",
+        "points": {"exterior": [[2, 2], [8, 1], [9, 7], [1, 8]], "interior": []},
+    }
+    converted, changed = quad_object(obj, 20, 10, True)
+    assert not changed
+    assert converted["geometryType"] == "polygon"
+    assert converted["geometryTier"] == "source_quad"
+    assert len(converted["quad"]) == 4
+    assert converted["fitCoverage"] >= 0.98
+    assert 0 <= converted["fitTightness"] <= 1
+
+
+def test_quad_conversion_canonicalizes_counter_clockwise_source() -> None:
+    obj = {
+        "geometryType": "polygon",
+        "points": {"exterior": [[2, 2], [2, 8], [8, 8], [8, 2]], "interior": []},
+    }
+    converted, _ = quad_object(obj, 20, 20, True)
+    quad = converted["quad"]
+    area = 0.5 * sum(
+        quad[index][0] * quad[(index + 1) % 4][1]
+        - quad[index][1] * quad[(index + 1) % 4][0]
+        for index in range(4)
+    )
+    assert area > 0
+
+
+def test_degenerate_geometry_becomes_ignore_in_conversion(tmp_path, config_factory):
+    config = config_factory({"bdd100k_images_100k": {"archive": tmp_path / "unused.tar"}})
+    ensure_workspace(config)
+    source = config.workspace_root / "intermediate/filtered/bdd100k_images_100k"
+    make_project(source, "car", "polygon")
+    annotation_path = next((source / "train/ann").iterdir())
+    import json
+    annotation = json.loads(annotation_path.read_text())
+    annotation["objects"][0]["points"]["exterior"] = [[5, 5], [5, 5], [5, 8], [5, 8]]
+    annotation_path.write_text(json.dumps(annotation))
+    convert_all(config)
+    converted_path = config.workspace_root / "intermediate/detection/bdd100k_images_100k/train/ann" / annotation_path.name
+    converted = json.loads(converted_path.read_text())["objects"][0]
+    assert converted["ignoreRegion"] is True
+    assert converted["geometryTier"] == "hbb_fallback"
 
 
 def test_clips_partial_and_rejects_external():
@@ -70,4 +118,4 @@ def test_deduplicates_mixed_geometry_but_not_two_real_rectangles():
         [polygon, rectangle, other_rectangle]
     )
     assert removed == 1
-    assert retained == [rectangle, other_rectangle]
+    assert retained == [polygon, other_rectangle]
