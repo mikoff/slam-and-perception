@@ -23,9 +23,10 @@ data:
     nuimages: 0.18
     bdd100k_images_100k: 0.12
     woodscape_rgb_fisheye: 0.20
-  dense_background_sources: [coco_2017]
-  background_loss_weights:
-    woodscape_rgb_fisheye: 0.05
+  # Full-strength negatives come only from explicit trusted-background tiles
+  # carried by the proposal manifest. All remaining image space is weak.
+  dense_background_sources: []
+  background_loss_weights: {}
   tiny_area: 100
   tiny_min_side: 4
   quad_regular_min_side: 16

@@ -28,6 +28,10 @@ class QuadEvaluationImage:
     pre_nms_detection: QuadDetection | None = None
     geometry_tiers: tuple[str, ...] = ()
     object_conditions: tuple[str, ...] = ()
+    seen_statuses: tuple[str, ...] = ()
+    size_bins: tuple[str, ...] = ()
+    aspect_bins: tuple[str, ...] = ()
+    radial_bins: tuple[str, ...] = ()
     dense_detection: QuadDetection | None = None
     assigned_detection: QuadDetection | None = None
     assigned_gt_indices: Tensor | None = None
@@ -186,6 +190,10 @@ def evaluate_quad_proposals(images: list[QuadEvaluationImage]) -> dict[str, floa
     for labels_name, prefix in (
         ("geometry_tiers", "geometry_tier"),
         ("object_conditions", "condition"),
+        ("seen_statuses", "seen_status"),
+        ("size_bins", "size"),
+        ("aspect_bins", "aspect"),
+        ("radial_bins", "radial"),
     ):
         labels = sorted({
             label for image in images for label in getattr(image, labels_name)

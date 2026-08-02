@@ -113,6 +113,10 @@ def validate_quad(
                 ),
                 geometry_tiers=sample.geometry_tiers,
                 object_conditions=sample.object_conditions,
+                seen_statuses=sample.seen_statuses,
+                size_bins=sample.size_bins,
+                aspect_bins=sample.aspect_bins,
+                radial_bins=sample.radial_bins,
                 dense_detection=dense_detection,
                 assigned_detection=assigned,
                 assigned_gt_indices=targets.matched_gt_indices[sample_index, assigned_mask]

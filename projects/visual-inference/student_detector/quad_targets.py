@@ -10,7 +10,7 @@ from torch import Tensor
 
 from .geometry import make_grid_points
 from .quad_assigner import QuadAssigner
-from .quad_geometry import points_inside_convex_quad, quad_from_bbox
+from .quad_geometry import quad_from_bbox
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,10 @@ def _sample_quads(sample: object, name: str, box_name: str) -> Tensor:
     value = getattr(sample, name, None)
     if value is not None:
         return torch.as_tensor(value, dtype=torch.float32)
-    boxes = torch.as_tensor(getattr(sample, box_name), dtype=torch.float32)
+    box_value = getattr(sample, box_name, None)
+    if box_value is None:
+        return torch.empty((0, 4, 2), dtype=torch.float32)
+    boxes = torch.as_tensor(box_value, dtype=torch.float32)
     if boxes.numel() == 0:
         return boxes.new_empty((0, 4, 2))
     return torch.stack([quad_from_bbox(box) for box in boxes])
@@ -58,8 +61,17 @@ def _sample_quads(sample: object, name: str, box_name: str) -> Tensor:
 def points_inside_quads(points: Tensor, quads: Tensor) -> Tensor:
     if quads.numel() == 0:
         return torch.zeros(points.shape[0], dtype=torch.bool, device=points.device)
-    masks = [points_inside_convex_quad(points, quad) for quad in quads]
-    return torch.stack(masks).any(dim=0)
+    # All loader quads are canonical convex geometry. Evaluate their four
+    # half-planes in one broadcast instead of launching one GPU kernel per
+    # trusted-background tile.
+    edges = torch.roll(quads, -1, dims=1) - quads
+    relative = points[:, None, None, :] - quads[None, :, :, :]
+    turns = (
+        edges[None, :, :, 0] * relative[..., 1]
+        - edges[None, :, :, 1] * relative[..., 0]
+    )
+    inside = (turns >= -1e-6).all(dim=2) | (turns <= 1e-6).all(dim=2)
+    return inside.any(dim=1)
 
 
 def point_validity_from_pixel_mask(
@@ -126,14 +138,17 @@ class QuadTargetBuilder:
             if assignment.unrepresentable_gt_indices.numel():
                 ignore_quads = torch.cat((ignore_quads, quads[assignment.unrepresentable_gt_indices]))
             ignored = points_inside_quads(points, ignore_quads)
-            trusted = bool(getattr(sample, "background_supervision", False))
+            trusted_quads = _sample_quads(
+                sample, "trusted_background_quads", "trusted_background_boxes"
+            ).to(device)
             background = valid_flat & ~ignored & ~assignment.positive_mask
             quality.append(assignment.quality_targets)
             corner_offsets.append(assignment.corner_targets)
             positive_masks.append(assignment.positive_mask)
             matched_gt_indices.append(assignment.matched_gt_indices)
-            trusted_background_masks.append(background if trusted else torch.zeros_like(background))
-            weak_background_masks.append(background if not trusted else torch.zeros_like(background))
+            trusted_background = background & points_inside_quads(points, trusted_quads)
+            trusted_background_masks.append(trusted_background)
+            weak_background_masks.append(background & ~trusted_background)
             valid_levels_by_batch.append(valid_levels)
             valid_gt_count += assignment.valid_gt_mask.sum()
             fallback_count += assignment.fallback_gt_indices.numel()

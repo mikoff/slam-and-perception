@@ -173,17 +173,20 @@ class TargetBuilder:
                 ))
             ignored_points = points_inside_boxes(points, ignore_boxes)
             positive = assignment.positive_mask
-            background_weight = (
-                1.0
-                if sample.background_supervision
-                else self.background_loss_weights.get(
-                    sample.source_dataset, 0.0
-                )
+            trusted_boxes = sample.trusted_background_boxes
+            trusted_points = points_inside_boxes(
+                points,
+                trusted_boxes.to(device=device)
+                if trusted_boxes is not None
+                else boxes.new_empty((0, 4)),
             )
-            weights = (
-                (valid_flat & ~ignored_points).to(dtype=torch.float32)
-                * background_weight
+            available = valid_flat & ~ignored_points & ~positive
+            weak_weight = self.background_loss_weights.get(
+                sample.source_dataset, 0.0
             )
+            weights = torch.zeros_like(valid_flat, dtype=torch.float32)
+            weights[available & trusted_points] = 1.0
+            weights[available & ~trusted_points] = weak_weight
             # Assigned positives are never weakened, even for a sparse source.
             weights[positive] = 1.0
             supervised = weights > 0

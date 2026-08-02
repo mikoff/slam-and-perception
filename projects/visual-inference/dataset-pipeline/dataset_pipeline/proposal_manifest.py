@@ -83,7 +83,7 @@ def build_manifest(data: dict[str, Any], split: str) -> dict[str, Any]:
             "source_split": str(image.get("source_split", split)),
             "source_image_id": str(image.get("source_image_id", "")),
             "camera_type": str(image.get("camera_type", "perspective")),
-            "background_supervision": bool(image.get("background_supervision", False)),
+            "background_supervision": False,
             "positive": positive,
             "ignore": ignore,
             "trusted_background": [],
@@ -131,7 +131,11 @@ def validate_manifest(path: Path, image_root: Path) -> dict[str, Any]:
             for state in ("positive", "ignore", "trusted_background"):
                 if not isinstance(image.get(state), list):
                     errors.append(f"image {image_id}: {state} must be a list")
-            for state, records in (("positive", image.get("positive", [])), ("ignore", image.get("ignore", []))):
+            for state, records in (
+                ("positive", image.get("positive", [])),
+                ("ignore", image.get("ignore", [])),
+                ("trusted_background", image.get("trusted_background", [])),
+            ):
                 for annotation in records:
                     if annotation.get("state") != state or annotation.get("valid") is not True:
                         errors.append(f"image {image_id}: invalid {state} record state")
@@ -146,7 +150,7 @@ def validate_manifest(path: Path, image_root: Path) -> dict[str, Any]:
                         errors.append(f"image {image_id}: {state} fit coverage is below 0.98")
                     if not math.isfinite(tightness) or not 0.0 <= tightness <= 1.0:
                         errors.append(f"image {image_id}: {state} fit tightness must be in [0, 1]")
-                    if annotation.get("geometry_tier") in {"source_quad", "fitted_quad", "source_hbb", "rotated_rect", "hbb_fallback"}:
+                    if state == "trusted_background" or annotation.get("geometry_tier") in {"source_quad", "fitted_quad", "source_hbb", "rotated_rect", "hbb_fallback"}:
                         accepted_count += 1
                     xs = [point[0] for point in quad]
                     ys = [point[1] for point in quad]

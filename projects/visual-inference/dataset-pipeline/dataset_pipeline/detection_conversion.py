@@ -187,10 +187,13 @@ def quad_object(
         quad = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
         tier = "source_hbb" if source_geometry == "rectangle" else "hbb_fallback"
     elif len(points) == 4:
-        try:
+        # The source tier describes the source traversal, not whether its four
+        # vertices can be repaired by angular sorting. A bow-tie, concave, or
+        # degenerate four-point traversal must therefore be fitted first.
+        if _valid_source_quad(points):
             quad = _canonical_quad(points)
             tier = "source_quad"
-        except GeometryError:
+        else:
             quad = _fit_quad(points)
             tier = "rotated_rect"
     else:

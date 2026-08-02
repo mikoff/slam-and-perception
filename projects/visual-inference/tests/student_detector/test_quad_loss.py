@@ -16,6 +16,9 @@ def _sample() -> SimpleNamespace:
         image=torch.zeros(3, 64, 64),
         quads=torch.stack((quad_from_bbox([8.0, 8.0, 40.0, 40.0]),)),
         ignore_quads=torch.empty((0, 4, 2)),
+        trusted_background_quads=torch.stack((
+            quad_from_bbox([0.0, 0.0, 64.0, 64.0]),
+        )),
         valid_mask=torch.ones(64, 64, dtype=torch.bool),
         background_supervision=True,
     )

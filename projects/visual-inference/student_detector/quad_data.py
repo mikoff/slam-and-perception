@@ -47,6 +47,38 @@ class QuadProposalSample:
     transform: tuple[float, float, float]
     geometry_tiers: tuple[str, ...] = ()
     object_conditions: tuple[str, ...] = ()
+    trusted_background_quads: Tensor | None = None
+    seen_statuses: tuple[str, ...] = ()
+    size_bins: tuple[str, ...] = ()
+    aspect_bins: tuple[str, ...] = ()
+    radial_bins: tuple[str, ...] = ()
+
+
+def _quad_slice_labels(quads: Tensor, size: int) -> tuple[tuple[str, ...], ...]:
+    if not quads.numel():
+        return (), (), ()
+    extent = quads.amax(dim=1) - quads.amin(dim=1)
+    short, _ = extent.sort(dim=1).values.unbind(dim=1)
+    long = extent.amax(dim=1)
+    scale = torch.sqrt(extent.prod(dim=1).clamp(min=0))
+    centers = quads.mean(dim=1)
+    radial = torch.linalg.vector_norm(
+        (centers - size / 2) / max(size / 2, 1), dim=1
+    )
+    size_bins = tuple(
+        "tiny" if value < 16 else "small" if value < 32 else "medium" if value < 96 else "large"
+        for value in scale.tolist()
+    )
+    ratios = long / short.clamp(min=1e-7)
+    aspect_bins = tuple(
+        "extreme" if value >= 8 else "slender" if value >= 3 else "regular"
+        for value in ratios.tolist()
+    )
+    radial_bins = tuple(
+        "center" if value < 0.35 else "mid" if value < 0.7 else "edge"
+        for value in radial.tolist()
+    )
+    return size_bins, aspect_bins, radial_bins
 
 
 def _quad_tensor(rows: Sequence[Sequence[Sequence[float]]]) -> Tensor:
@@ -84,14 +116,24 @@ class QuadProposalTransform:
         image: Image.Image,
         quads: Tensor,
         ignore_quads: Tensor,
+        trusted_background_quads: Tensor | None = None,
         *,
         seed: int,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, tuple[float, float, float], tuple[int, ...]]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, tuple[float, float, float], tuple[int, ...]]:
         generator = random.Random(seed)
         image = image.convert("RGB")
         width, height = image.size
-        all_quads = torch.cat((quads, ignore_quads), dim=0)
-        is_positive = torch.arange(all_quads.shape[0]) < quads.shape[0]
+        trusted_background_quads = (
+            trusted_background_quads
+            if trusted_background_quads is not None
+            else quads.new_empty((0, 4, 2))
+        )
+        all_quads = torch.cat((quads, ignore_quads, trusted_background_quads), dim=0)
+        state = torch.cat((
+            torch.zeros(quads.shape[0], dtype=torch.long),
+            torch.ones(ignore_quads.shape[0], dtype=torch.long),
+            torch.full((trusted_background_quads.shape[0],), 2, dtype=torch.long),
+        ))
         if self.training and generator.random() < self.augmentation.horizontal_flip_probability:
             image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             if all_quads.numel():
@@ -137,7 +179,15 @@ class QuadProposalTransform:
             visibility.append(float(polygon_signed_area(clipped).abs()) / max(original_area, 1e-7))
         if not clipped_rows:
             image_tensor = _pil_to_normalized_tensor(image)
-            return image_tensor, quads.new_empty((0, 4, 2)), ignore_quads.new_empty((0, 4, 2)), _mask_to_tensor(valid), (scale, offset_x, offset_y), ()
+            return (
+                image_tensor,
+                quads.new_empty((0, 4, 2)),
+                ignore_quads.new_empty((0, 4, 2)),
+                trusted_background_quads.new_empty((0, 4, 2)),
+                _mask_to_tensor(valid),
+                (scale, offset_x, offset_y),
+                (),
+            )
         clipped_tensor = torch.stack(clipped_rows)
         visibility_tensor = torch.tensor(visibility)
         areas = polygon_signed_area(clipped_tensor).abs()
@@ -152,15 +202,26 @@ class QuadProposalTransform:
             & (aspect_ratio >= self.thin_aspect_ratio_min)
             & (areas >= self.thin_area)
         )
-        positive = is_positive & geometrically_valid & (
+        positive = (state == 0) & geometrically_valid & (
             visibility_tensor >= self.augmentation.positive_visible_fraction
         ) & (regular_size | thin_size)
-        ignore = geometrically_valid & (visibility_tensor >= self.augmentation.ignore_visible_fraction) & ~positive
+        ignore = (
+            (state != 2)
+            & geometrically_valid
+            & (visibility_tensor >= self.augmentation.ignore_visible_fraction)
+            & ~positive
+        )
+        trusted = (
+            (state == 2)
+            & geometrically_valid
+            & (visibility_tensor >= self.augmentation.ignore_visible_fraction)
+        )
         image_tensor = _pil_to_normalized_tensor(image)
         return (
             image_tensor,
             clipped_tensor[positive],
             clipped_tensor[ignore],
+            clipped_tensor[trusted],
             _mask_to_tensor(valid),
             (scale, offset_x, offset_y),
             tuple(torch.where(positive)[0].tolist()),
@@ -216,28 +277,35 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
     def __getitem__(self, index: int) -> QuadProposalSample:
         record = self.records[index]
         rows = self._db().execute(
-            "SELECT quad_json, ignore_region, geometry_tier, object_condition "
+            "SELECT quad_json, ignore_region, geometry_tier, object_condition, seen_status "
             "FROM annotations WHERE image_id=?",
             (record.image_id,),
         ).fetchall()
-        positive = [json.loads(row[0]) for row in rows if not row[1]]
-        ignore = [json.loads(row[0]) for row in rows if row[1]]
-        tiers = tuple(str(row[2]) for row in rows if not row[1])
-        conditions = tuple(str(row[3]) for row in rows if not row[1])
+        positive = [json.loads(row[0]) for row in rows if row[1] == 0]
+        ignore = [json.loads(row[0]) for row in rows if row[1] == 1]
+        trusted = [json.loads(row[0]) for row in rows if row[1] == 2]
+        tiers = tuple(str(row[2]) for row in rows if row[1] == 0)
+        conditions = tuple(str(row[3]) for row in rows if row[1] == 0)
+        statuses = tuple(str(row[4]) for row in rows if row[1] == 0)
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
         transformed = self.transform(
-            image, _quad_tensor(positive), _quad_tensor(ignore),
+            image, _quad_tensor(positive), _quad_tensor(ignore), _quad_tensor(trusted),
             seed=self.seed + self.epoch * max(len(self), 1) + index,
         )
         domain = self.data_config.source_domains.get(record.source_dataset, "unknown")
+        retained = transformed[6]
+        slice_labels = _quad_slice_labels(transformed[1], self.data_config.input_size)
         return QuadProposalSample(
-            transformed[0], transformed[1], transformed[2], transformed[3],
+            transformed[0], transformed[1], transformed[2], transformed[4],
             record.image_id, record.source_dataset, domain, record.camera_type,
-            record.source_dataset in set(self.data_config.dense_background_sources),
-            (record.height, record.width), transformed[4],
-            tuple(tiers[index] for index in transformed[5]),
-            tuple(conditions[index] for index in transformed[5]),
+            bool(transformed[3].numel()),
+            (record.height, record.width), transformed[5],
+            tuple(tiers[index] for index in retained),
+            tuple(conditions[index] for index in retained),
+            transformed[3],
+            tuple(statuses[index] for index in retained),
+            *slice_labels,
         )
 
 

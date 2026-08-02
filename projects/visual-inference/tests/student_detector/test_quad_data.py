@@ -61,7 +61,13 @@ def test_quad_dataset_reads_compact_proposal_manifest(tmp_path) -> None:
                 "geometry_tier": "source_quad", "fit_coverage": 1.0,
                 "fit_tightness": 0.25, "valid": True,
             }],
-            "ignore": [], "trusted_background": [],
+            "ignore": [],
+            "trusted_background": [{
+                "bbox": [0, 16, 32, 8],
+                "quad": [[0, 16], [32, 16], [32, 24], [0, 24]],
+                "geometry_tier": "trusted_stuff_tile", "fit_coverage": 1.0,
+                "fit_tightness": 1.0, "state": "trusted_background", "valid": True,
+            }],
         }],
     }))
     config = DataConfig(
@@ -76,6 +82,8 @@ def test_quad_dataset_reads_compact_proposal_manifest(tmp_path) -> None:
     sample = dataset[0]
     assert sample.quads.shape == (1, 4, 2)
     assert sample.geometry_tiers == ("source_quad",)
+    assert sample.trusted_background_quads is not None
+    assert sample.trusted_background_quads.shape == (1, 4, 2)
 
 
 def test_thin_long_quad_uses_major_axis_size_tier() -> None:
@@ -92,7 +100,7 @@ def test_thin_long_quad_uses_major_axis_size_tier() -> None:
     # After the 0.3 resize this is approximately 15 x 1.5 px: too thin for
     # the regular gate, but large enough for the explicit thin-object tier.
     quad = torch.tensor([[[100.0, 100.0], [150.0, 100.0], [150.0, 105.0], [100.0, 105.0]]])
-    _, positives, ignores, _, _, _ = transform(
+    _, positives, ignores, _, _, _, _ = transform(
         image, quad, torch.empty((0, 4, 2)), seed=0
     )
     assert positives.shape == (1, 4, 2)
@@ -108,7 +116,7 @@ def test_transform_preserves_unclipped_trapezoid() -> None:
     )
     image = Image.new("RGB", (64, 64), "white")
     trapezoid = torch.tensor([[[8.0, 8.0], [52.0, 12.0], [45.0, 48.0], [14.0, 44.0]]])
-    _, positives, _, _, _, retained = transform(
+    _, positives, _, _, _, _, retained = transform(
         image, trapezoid, torch.empty((0, 4, 2)), seed=0
     )
     assert retained == (0,)

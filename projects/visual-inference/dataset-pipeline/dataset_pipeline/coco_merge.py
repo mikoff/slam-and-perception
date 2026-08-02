@@ -10,9 +10,10 @@ from .coco_export import discover_exports
 from .config import Config
 from .links import link_image
 from .progress import Progress
-from .proposal_manifest import write_manifests
+from .proposal_manifest import build_manifest
 from .reports import read_json, write_json
 from .taxonomy import Taxonomy
+from .trusted_background import derive_trusted_background
 
 
 def normalize_split(name: str, aliases: dict[str, list[str]]) -> str | None:
@@ -149,7 +150,17 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
             data,
             compact=True,
         )
-    write_manifests(config.workspace_root / "output", output_data)
+    manifests = {
+        split: build_manifest(data, split) for split, data in output_data.items()
+    }
+    background_report = derive_trusted_background(config, taxonomy, manifests)
+    for split, manifest in manifests.items():
+        write_json(
+            config.workspace_root / "output" / "annotations" / f"proposals_{split}.json",
+            manifest,
+            compact=True,
+        )
+    write_json(config.reports / "trusted_background.json", background_report)
     stale_links_removed = 0
     if force:
         referenced = {

@@ -132,6 +132,16 @@
   "identity_datasets": [
     "coco_2017"
   ],
+  "trusted_background_categories": {
+    "bdd100k_images_100k": ["drivable_area"],
+    "nuimages": ["driveable_surface"],
+    "woodscape_rgb_fisheye": [
+      "green_strip",
+      "nature",
+      "road_surface",
+      "sky"
+    ]
+  },
   "dataset_mappings": {
     "nuimages": {
       "driveable_surface": "__ignore__",

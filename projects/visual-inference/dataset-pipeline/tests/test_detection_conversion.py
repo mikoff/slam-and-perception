@@ -53,6 +53,21 @@ def test_quad_conversion_canonicalizes_counter_clockwise_source() -> None:
     assert area > 0
 
 
+def test_invalid_four_point_traversal_is_fitted_not_relabelled_as_source_quad() -> None:
+    obj = {
+        "geometryType": "polygon",
+        "points": {
+            "exterior": [[2, 2], [8, 8], [2, 8], [8, 2]],
+            "interior": [],
+        },
+    }
+
+    converted, _ = quad_object(obj, 20, 20, True)
+
+    assert converted["geometryTier"] == "rotated_rect"
+    assert converted["fitCoverage"] >= 0.98
+
+
 def test_degenerate_geometry_becomes_ignore_in_conversion(tmp_path, config_factory):
     config = config_factory({"bdd100k_images_100k": {"archive": tmp_path / "unused.tar"}})
     ensure_workspace(config)

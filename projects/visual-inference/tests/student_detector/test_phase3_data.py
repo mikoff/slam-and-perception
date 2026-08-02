@@ -95,7 +95,8 @@ def test_streaming_index_and_letterbox_preserve_supervision(tmp_path):
     assert sample.boxes.shape == (1, 4)
     assert sample.ignore_boxes.shape == (1, 4)
     assert sample.valid_mask.sum() == 64 * 32
-    assert sample.background_supervision
+    # Image-level COCO completeness is not spatial trusted-background proof.
+    assert not sample.background_supervision
     assert not dataset[1].background_supervision
 
 

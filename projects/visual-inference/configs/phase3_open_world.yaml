@@ -1,0 +1,75 @@
+data:
+  train_annotations: ../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_train.json
+  val_annotations: ../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_val.json
+  quad_train_annotations: ../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_train.json
+  quad_val_annotations: ../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_val.json
+  image_root: ../../../data/visual-inference-datasets/output
+  index_dir: ../artifacts/phase3/open_world/index
+  input_size: 384
+  batch_size: 12
+  workers: 4
+  empty_fraction: 0.075
+  domain_weights:
+    general: 0.50
+    automotive: 0.30
+    fisheye: 0.20
+  source_domains:
+    coco_2017: general
+    nuimages: automotive
+    bdd100k_images_100k: automotive
+    woodscape_rgb_fisheye: fisheye
+  source_weights:
+    coco_2017: 0.50
+    nuimages: 0.18
+    bdd100k_images_100k: 0.12
+    woodscape_rgb_fisheye: 0.20
+  # Only explicit manifest tiles receive a full negative loss. The remaining
+  # image is weak/unlabeled and the frozen initial weak-negative weight is zero.
+  dense_background_sources: []
+  background_loss_weights: {}
+  tiny_area: 100
+  tiny_min_side: 4
+  quad_regular_min_side: 16
+  thin_major_axis_min: 8
+  thin_aspect_ratio_min: 3
+  thin_area: 16
+
+inference:
+  pre_nms_top_k: 300
+  nms_iou_threshold: 0.9
+  max_proposals: 100
+  score_mode: objectness
+
+quad:
+  top_k: 9
+  gamma: 2.0
+  scale_sigma: 0.75
+  eligible_levels: 2
+  weak_negative_weight: 0.0
+  quality_weight: 1.0
+  corner_weight: 2.0
+  validity_weight: 0.05
+  quality_focal_beta: 2.0
+  quality_target_mode: centerness
+  quality_blend: 0.0
+  geometry_quality_target: corner_proxy
+
+schedule:
+  epochs: 40
+  freeze_backbone_epochs: 2
+  head_learning_rate: 0.0003
+  backbone_lr_multiplier: 0.1
+  reference_effective_batch: 64
+  weight_decay: 0.0001
+  warmup_steps: 100
+  min_lr_ratio: 0.01
+  gradient_clip_norm: 10
+  ema_decay: 0.9998
+  accumulation_steps: 1
+  amp: true
+  seed: 42
+  checkpoint_every_epochs: 1
+  checkpoint_every_steps: 500
+
+pretrained_backbone: true
+output_dir: ../artifacts/phase3/open_world/default

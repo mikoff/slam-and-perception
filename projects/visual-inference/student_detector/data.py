@@ -27,7 +27,7 @@ from .config import AugmentationConfig, DataConfig
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 PADDING_RGB = tuple(round(channel * 255) for channel in IMAGENET_MEAN)
-INDEX_SCHEMA_VERSION = "4"
+INDEX_SCHEMA_VERSION = "6"
 PROPOSAL_MANIFEST_SCHEMA = "quad-proposal-manifest.v1"
 
 
@@ -57,6 +57,7 @@ class ProposalSample:
     background_supervision: bool
     original_size: tuple[int, int]
     transform: tuple[float, float, float]
+    trusted_background_boxes: Tensor | None = None
 
 
 def _source_signature(path: Path) -> str:
@@ -131,7 +132,8 @@ def build_coco_sqlite_index(
                     quad_json TEXT NOT NULL,
                     geometry_tier TEXT NOT NULL,
                     fit_coverage REAL NOT NULL,
-                    fit_tightness REAL NOT NULL
+                    fit_tightness REAL NOT NULL,
+                    seen_status TEXT NOT NULL
                 );
                 CREATE INDEX annotations_by_image ON annotations(image_id);
                 """
@@ -208,18 +210,19 @@ def build_coco_sqlite_index(
                         str(annotation.get("geometry_tier", "source_hbb")),
                         float(annotation.get("fit_coverage", 1.0)),
                         float(annotation.get("fit_tightness", 0.0)),
+                        str(annotation.get("seen_status", "auxiliary")),
                     ))
                     if not ignore:
                         positive_counts[image_id] += 1
                     if len(rows) >= 10_000:
                         connection.executemany(
-                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rows,
                         )
                         rows.clear()
                 if rows:
                     connection.executemany(
-                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
             connection.executemany(
@@ -292,7 +295,8 @@ def build_proposal_manifest_sqlite_index(
                     quad_json TEXT NOT NULL,
                     geometry_tier TEXT NOT NULL,
                     fit_coverage REAL NOT NULL,
-                    fit_tightness REAL NOT NULL
+                    fit_tightness REAL NOT NULL,
+                    seen_status TEXT NOT NULL
                 );
                 CREATE INDEX annotations_by_image ON annotations(image_id);
                 """
@@ -312,7 +316,11 @@ def build_proposal_manifest_sqlite_index(
                         ),
                     )
                     rows = []
-                    for ignored, records in ((False, image.get("positive", [])), (True, image.get("ignore", []))):
+                    for state_code, records in (
+                        (0, image.get("positive", [])),
+                        (1, image.get("ignore", [])),
+                        (2, image.get("trusted_background", [])),
+                    ):
                         for record in records:
                             if not record.get("valid", True):
                                 continue
@@ -320,15 +328,16 @@ def build_proposal_manifest_sqlite_index(
                             quad = [[float(point[0]), float(point[1])] for point in record["quad"]]
                             rows.append((
                                 image_id, x, y, x + width, y + height,
-                                int(ignored), str(record.get("source_category", "unknown")),
+                                state_code, str(record.get("source_category", "unknown")),
                                 str(record.get("object_condition", "whole_object")),
                                 json.dumps(quad, separators=(",", ":")),
                                 str(record.get("geometry_tier", "source_hbb")),
                                 float(record.get("fit_coverage", 1.0)),
                                 float(record.get("fit_tightness", 0.0)),
+                                str(record.get("seen_status", "auxiliary")),
                             ))
                     if rows:
-                        connection.executemany("INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                        connection.executemany("INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
             connection.execute("INSERT INTO metadata VALUES ('source_signature', ?)", (signature,))
             connection.execute("INSERT INTO metadata VALUES ('schema_version', ?)", (schema_version,))
             connection.commit()
@@ -412,14 +421,24 @@ class ProposalTransform:
         image: Image.Image,
         boxes: Tensor,
         ignore_boxes: Tensor,
+        trusted_background_boxes: Tensor | None = None,
         *,
         seed: int,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, tuple[float, float, float]]:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, tuple[float, float, float]]:
         generator = random.Random(seed)
         image = image.convert("RGB")
         width, height = image.size
-        all_boxes = torch.cat((boxes, ignore_boxes), dim=0)
-        is_positive = torch.arange(all_boxes.shape[0]) < boxes.shape[0]
+        trusted_background_boxes = (
+            trusted_background_boxes
+            if trusted_background_boxes is not None
+            else boxes.new_empty((0, 4))
+        )
+        all_boxes = torch.cat((boxes, ignore_boxes, trusted_background_boxes), dim=0)
+        state = torch.cat((
+            torch.zeros(boxes.shape[0], dtype=torch.long),
+            torch.ones(ignore_boxes.shape[0], dtype=torch.long),
+            torch.full((trusted_background_boxes.shape[0],), 2, dtype=torch.long),
+        ))
 
         if (
             self.training
@@ -481,6 +500,7 @@ class ProposalTransform:
                 image_tensor,
                 boxes,
                 ignore_boxes,
+                trusted_background_boxes,
                 _mask_to_tensor(valid),
                 (scale, offset_x, offset_y),
             )
@@ -500,21 +520,28 @@ class ProposalTransform:
         visibility = clipped_area / unclipped_area.clamp(min=1e-7)
         geometrically_valid = (clipped_width > 0) & (clipped_height > 0)
         positive = (
-            is_positive
+            (state == 0)
             & geometrically_valid
             & (visibility >= self.augmentation.positive_visible_fraction)
             & (clipped_area >= self.tiny_area)
             & (torch.minimum(clipped_width, clipped_height) >= self.tiny_min_side)
         )
         ignore = (
-            geometrically_valid
+            (state != 2)
+            & geometrically_valid
             & (visibility >= self.augmentation.ignore_visible_fraction)
             & ~positive
+        )
+        trusted = (
+            (state == 2)
+            & geometrically_valid
+            & (visibility >= self.augmentation.ignore_visible_fraction)
         )
         return (
             image_tensor,
             clipped[positive],
             clipped[ignore],
+            clipped[trusted],
             _mask_to_tensor(valid),
             (scale, offset_x, offset_y),
         )
@@ -603,8 +630,9 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             """,
             (record.image_id,),
         ).fetchall()
-        positive_rows = [row for row in rows if not row[4]]
-        ignore_rows = [row for row in rows if row[4]]
+        positive_rows = [row for row in rows if row[4] == 0]
+        ignore_rows = [row for row in rows if row[4] == 1]
+        trusted_rows = [row for row in rows if row[4] == 2]
         component_indices = self._contained_component_indices(positive_rows)
         retained_positive_rows = [
             row for row_index, row in enumerate(positive_rows)
@@ -618,39 +646,33 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             for row_index, row in enumerate(positive_rows)
             if row_index in component_indices
         ])
+        trusted_background_boxes = _boxes_tensor([row[:4] for row in trusted_rows])
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
-        (
-            image_tensor,
-            boxes,
-            ignore_boxes,
-            valid_mask,
-            transform,
-        ) = self.transform(
+        transformed = self.transform(
             image,
             boxes,
             ignore_boxes,
+            trusted_background_boxes,
             seed=self.seed + self.epoch * max(len(self), 1) + index,
         )
         domain = self.data_config.source_domains.get(
             record.source_dataset, "unknown"
         )
-        background_supervision = (
-            record.source_dataset
-            in set(self.data_config.dense_background_sources)
-        )
+        background_supervision = bool(transformed[3].numel())
         return ProposalSample(
-            image_tensor,
-            boxes,
-            ignore_boxes,
-            valid_mask,
+            transformed[0],
+            transformed[1],
+            transformed[2],
+            transformed[4],
             record.image_id,
             record.source_dataset,
             domain,
             record.camera_type,
             background_supervision,
             (record.height, record.width),
-            transform,
+            transformed[5],
+            transformed[3],
         )
 
     def _contained_component_indices(
