@@ -1729,6 +1729,7 @@ dependencies = [
     { name = "ijson" },
     { name = "pillow" },
     { name = "pyyaml" },
+    { name = "tensorboard" },
     { name = "timm" },
     { name = "torch" },
 ]
@@ -1751,6 +1752,7 @@ requires-dist = [
     { name = "ijson", specifier = ">=3.4,<4" },
     { name = "pillow" },
     { name = "pyyaml", specifier = ">=6,<7" },
+    { name = "tensorboard", specifier = ">=2.21.0" },
     { name = "timm", specifier = ">=1.0.27,<2" },
     { name = "torch", index = "https://download.pytorch.org/whl/cu124" },
 ]

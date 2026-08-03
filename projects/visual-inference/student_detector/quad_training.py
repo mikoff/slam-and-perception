@@ -26,7 +26,14 @@ from .training import (
 )
 
 
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+
+
 def _feature_shapes(output: Any) -> tuple[tuple[int, int], ...]:
+
     return tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.quality)
 
 
@@ -211,9 +218,13 @@ def _save_checkpoint(
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary = path.with_name(path.name + ".tmp")
     torch.save(payload, temporary)
-    temporary.replace(path)
+    if temporary.exists():
+        temporary.replace(path)
+    else:
+        torch.save(payload, path)
+
 
 
 def train_quad_proposals(
@@ -269,7 +280,22 @@ def train_quad_proposals(
     resume_batch = 0
     metrics: dict[str, Any] = {}
     log_path = output_dir / "quad_metrics.jsonl"
+    tb_writer = SummaryWriter(log_dir=str(output_dir / "tensorboard")) if SummaryWriter is not None else None
+    if tb_writer is not None:
+        dataset_summary = (
+            "### Training Run Dataset Audit Summary\n\n"
+            f"- **Manifest Path**: `{config.data.quad_train_annotations or config.data.train_annotations}`\n"
+            f"- **Training Dataset Samples**: {len(train_loader.dataset)} images\n"
+            f"- **Validation Dataset Samples**: {len(val_loader.dataset)} images\n"
+            f"- **Batch Size**: {config.data.batch_size}\n"
+            f"- **Total Epochs**: {config.schedule.epochs}\n"
+            f"- **Input Image Size**: {config.data.input_size}x{config.data.input_size}\n"
+            f"- **Centerness Modulation Active**: `True (alpha=0.3)`\n"
+        )
+        tb_writer.add_text("Dataset/Summary", dataset_summary, global_step=0)
     optimizer.zero_grad(set_to_none=True)
+
+
     if resume is not None:
         checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
         model.load_state_dict(checkpoint["model"])
@@ -390,7 +416,7 @@ def train_quad_proposals(
                 (batch_index + 1) % log_interval == 0
                 or batch_index + 1 == len(train_loader)
             ):
-                _write_jsonl(log_path, {
+                train_metrics = {
                     "kind": "train",
                     "epoch": epoch,
                     "step": global_step,
@@ -413,7 +439,14 @@ def train_quad_proposals(
                     "unrepresentable_count": float(targets.unrepresentable_count.cpu()),
                     "quality_target_mode": criterion.quality_target_mode,
                     "geometry_quality_target": criterion.geometry_quality_target,
-                })
+                }
+                _write_jsonl(log_path, train_metrics)
+                if tb_writer is not None:
+                    tb_writer.add_scalar("Train/TotalLoss", train_metrics["loss"], global_step)
+                    tb_writer.add_scalar("Train/QualityLoss", train_metrics["quality_loss"], global_step)
+                    tb_writer.add_scalar("Train/CornerLoss", train_metrics["corner_loss"], global_step)
+                    tb_writer.add_scalar("Train/LearningRate", optimizer.param_groups[0]["lr"], global_step)
+
             if max_steps is not None and global_step >= max_steps:
                 break
         # The curriculum is intentionally epoch-based and deterministic.
@@ -441,9 +474,6 @@ def train_quad_proposals(
                 decoder,
                 device,
                 max_batches=max_val_batches,
-                # The all-dense exact-IoU oracle is deliberately final-report
-                # only. Repeating it during training makes reference polygon
-                # clipping dominate the overfit loop.
                 include_dense_diagnostics=False,
             )
         metrics.update({
@@ -456,6 +486,16 @@ def train_quad_proposals(
         })
         if should_validate:
             _write_jsonl(log_path, {"kind": "validation", **metrics})
+            if tb_writer is not None:
+                if "ar/100" in metrics:
+                    tb_writer.add_scalar("Val/AR100", metrics["ar/100"], epoch)
+                if "recall/100@0.50" in metrics:
+                    tb_writer.add_scalar("Val/Recall50", metrics["recall/100@0.50"], epoch)
+                if "recall/100@0.75" in metrics:
+                    tb_writer.add_scalar("Val/Recall75", metrics["recall/100@0.75"], epoch)
+                if "matched_iou/median" in metrics:
+                    tb_writer.add_scalar("Val/MatchedIoUMedian", metrics["matched_iou/median"], epoch)
+
         score = metrics.get("ar/100", 0.0)
         epoch_complete = last_batch_in_epoch >= len(train_loader)
         is_best = should_validate and score > best_score
@@ -478,4 +518,7 @@ def train_quad_proposals(
             )
         if max_steps is not None and global_step >= max_steps:
             break
+    if tb_writer is not None:
+        tb_writer.close()
     return {"global_step": global_step, "best_score": best_score, "metrics": metrics}
+
