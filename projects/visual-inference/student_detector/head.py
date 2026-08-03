@@ -97,25 +97,26 @@ class SharedQuadProposalHead(nn.Module):
         )
         self.quality = nn.Conv2d(channels, 1, kernel_size=1)
         self.corner_offsets = nn.Conv2d(channels, 8, kernel_size=1)
-        self.scales = nn.Parameter(torch.ones(len(strides)))
         self.strides = strides
         quality_bias = -math.log((1.0 - prior_probability) / prior_probability)
         nn.init.constant_(self.quality.bias, quality_bias)
-        nn.init.zeros_(self.corner_offsets.bias)
-        # Initialize residual projection weights near zero so model starts near HBB baseline
-        nn.init.normal_(self.corner_offsets.weight, std=0.001)
+        # Initialize corner offset bias with explicit HBB grid prior:
+        # P0=(-1,-1), P1=(+1,-1), P2=(+1,+1), P3=(-1,+1) in stride units
+        hbb_prior_bias = torch.tensor([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0])
+        self.corner_offsets.bias.data.copy_(hbb_prior_bias)
+        nn.init.zeros_(self.corner_offsets.weight)
 
-    def _forward_level(self, feature: Tensor, level: int) -> tuple[Tensor, Tensor]:
+    def _forward_level(self, feature: Tensor) -> tuple[Tensor, Tensor]:
         quality = self.quality(self.quality_tower(feature))
-        # These are signed, stride-normalized offsets with per-level scale parameter.
-        raw_offsets = self.corner_offsets(self.geometry_tower(feature))
-        scaled_offsets = raw_offsets * self.scales[level]
-        return quality, scaled_offsets
+        # Direct signed stride-normalized corner offsets relative to grid point.
+        offsets = self.corner_offsets(self.geometry_tower(feature))
+        return quality, offsets
 
     def forward(self, features: tuple[Tensor, Tensor, Tensor]) -> QuadDetectorOutput:
-        levels = tuple(self._forward_level(feature, i) for i, feature in enumerate(features))
+        levels = tuple(self._forward_level(feature) for feature in features)
         return QuadDetectorOutput(
             quality=tuple(level[0] for level in levels),
             corner_offsets=tuple(level[1] for level in levels),
         )
+
 
