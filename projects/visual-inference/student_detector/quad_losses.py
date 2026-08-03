@@ -23,6 +23,7 @@ class QuadLossOutput:
     total: Tensor
     quality: Tensor
     corner: Tensor
+    gwd: Tensor
     validity: Tensor
     quality_positive: Tensor
     quality_trusted_background: Tensor
@@ -54,6 +55,8 @@ class QuadProposalLoss(nn.Module):
         strides: tuple[int, int, int] = (8, 16, 32),
         quality_weight: float = 1.0,
         corner_weight: float = 2.0,
+        corner_smooth_l1_beta: float = 1.0,
+        gwd_weight: float = 0.0,
         validity_weight: float = 0.05,
         quality_focal_beta: float = 2.0,
         quality_target_mode: str = "centerness",
@@ -72,6 +75,8 @@ class QuadProposalLoss(nn.Module):
         self.strides = strides
         self.quality_weight = quality_weight
         self.corner_weight = corner_weight
+        self.corner_smooth_l1_beta = corner_smooth_l1_beta
+        self.gwd_weight = gwd_weight
         self.validity_weight = validity_weight
         self.quality_focal_beta = quality_focal_beta
         self.quality_target_mode = quality_target_mode
@@ -104,7 +109,7 @@ class QuadProposalLoss(nn.Module):
         traversals = torch.cat((forward, backward), dim=1).reshape(-1, 8, 8)
         errors = functional.smooth_l1_loss(
             predicted[positive].float().unsqueeze(1).expand(-1, 8, -1),
-            traversals.float(), reduction="none"
+            traversals.float(), reduction="none", beta=self.corner_smooth_l1_beta
         ).mean(dim=2)
         return errors.min(dim=1).values.mean()
 
@@ -124,6 +129,56 @@ class QuadProposalLoss(nn.Module):
         counter_clockwise = functional.relu(0.01 + turns).mean(dim=1)
         convexity_penalty = torch.minimum(clockwise, counter_clockwise)
         return (edge_penalty + area_penalty + convexity_penalty).mean()
+
+    @staticmethod
+    def _gwd_loss(predicted: Tensor, target: Tensor, positive: Tensor) -> Tensor:
+        """Return a stable, scale-normalized Gaussian Wasserstein auxiliary.
+
+        Each quad is represented by the mean and covariance of its four
+        vertices.  The closed-form 2-D Bures term avoids matrix square roots,
+        while target-trace normalization keeps the auxiliary comparable across
+        FPN levels.  This term is deliberately permutation invariant and cannot
+        replace the vertex-correspondence corner loss.
+        """
+        if not positive.any():
+            return predicted.float().mean() * 0
+        # AMP otherwise recasts covariance products to float16 and dispatches
+        # through an unsupported/fragile LU determinant path on CUDA.
+        with torch.autocast(device_type=predicted.device.type, enabled=False):
+            selected_pred = predicted[positive].float()
+            selected_target = target[positive].float()
+            pred_center = selected_pred.mean(dim=1)
+            target_center = selected_target.mean(dim=1)
+            pred_centered = selected_pred - pred_center[:, None]
+            target_centered = selected_target - target_center[:, None]
+            pred_covariance = pred_centered.transpose(1, 2) @ pred_centered / 4.0
+            target_covariance = target_centered.transpose(1, 2) @ target_centered / 4.0
+
+            pred_trace = pred_covariance.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            target_trace = target_covariance.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            scale = target_trace.clamp(min=1e-4)
+            center_distance = (pred_center - target_center).square().sum(dim=-1) / scale
+
+            covariance_product_trace = (
+                pred_covariance * target_covariance.transpose(-1, -2)
+            ).sum(dim=(-2, -1))
+            pred_determinant = (
+                pred_covariance[:, 0, 0] * pred_covariance[:, 1, 1]
+                - pred_covariance[:, 0, 1] * pred_covariance[:, 1, 0]
+            ).clamp(min=0)
+            target_determinant = (
+                target_covariance[:, 0, 0] * target_covariance[:, 1, 1]
+                - target_covariance[:, 0, 1] * target_covariance[:, 1, 0]
+            ).clamp(min=0)
+            inner = (
+                covariance_product_trace
+                + 2.0 * torch.sqrt(pred_determinant * target_determinant + 1e-12)
+            ).clamp(min=0)
+            covariance_distance = (
+                pred_trace + target_trace - 2.0 * torch.sqrt(inner + 1e-12)
+            ).clamp(min=0) / scale
+            normalized_distance = center_distance + covariance_distance
+            return (normalized_distance / (1.0 + normalized_distance)).mean()
 
     @staticmethod
     def _group_mean(values: Tensor, mask: Tensor) -> Tensor:
@@ -167,6 +222,14 @@ class QuadProposalLoss(nn.Module):
         # Validity thresholds are defined in stride-normalized coordinates so
         # the same shape receives the same penalty on every FPN level.
         validity = self._validity_loss(predicted_offsets.reshape(-1, 4, 2), positive.reshape(-1))
+        if self.gwd_weight > 0:
+            gwd = self._gwd_loss(
+                predicted_offsets.reshape(-1, 4, 2),
+                targets.corner_offsets.reshape(-1, 4, 2),
+                positive.reshape(-1),
+            )
+        else:
+            gwd = predicted_offsets.float().mean() * 0
 
         quality_target = targets.quality.reshape(-1).float()
         if self.quality_target_mode in {"blend", "iou"} and positive.any():
@@ -209,11 +272,17 @@ class QuadProposalLoss(nn.Module):
             + trusted_quality
             + targets.weak_negative_weight * weak_quality
         )
-        total = self.quality_weight * quality_loss + self.corner_weight * corner + self.validity_weight * validity
+        total = (
+            self.quality_weight * quality_loss
+            + self.corner_weight * corner
+            + self.gwd_weight * gwd
+            + self.validity_weight * validity
+        )
         return QuadLossOutput(
             total=total,
             quality=quality_loss,
             corner=corner,
+            gwd=gwd,
             validity=validity,
             quality_positive=positive_quality,
             quality_trusted_background=trusted_quality,

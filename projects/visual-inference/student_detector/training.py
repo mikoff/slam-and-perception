@@ -45,20 +45,35 @@ def set_backbone_trainable(model: StudentDetector, trainable: bool) -> None:
 
 
 class ExponentialMovingAverage:
-    def __init__(self, model: nn.Module, decay: float) -> None:
+    def __init__(self, model: nn.Module, decay: float, ramp_steps: int = 0) -> None:
         self.decay = decay
+        self.ramp_steps = ramp_steps
+        self.updates = 0
+        self.initialization_weight = 1.0
         self.module = copy.deepcopy(model).eval()
         self.module.requires_grad_(False)
 
+    def current_decay(self) -> float:
+        if self.ramp_steps == 0:
+            return self.decay
+        return self.decay * (1 - math.exp(-self.updates / self.ramp_steps))
+
     @torch.no_grad()
     def update(self, model: nn.Module) -> None:
+        self.updates += 1
+        decay = self.current_decay()
+        self.initialization_weight *= decay
         source = model.state_dict()
         for name, value in self.module.state_dict().items():
             current = source[name].detach()
             if value.is_floating_point():
-                value.lerp_(current, 1 - self.decay)
+                value.lerp_(current, 1 - decay)
             else:
                 value.copy_(current)
+
+    def restore_tracking(self, updates: int, initialization_weight: float) -> None:
+        self.updates = updates
+        self.initialization_weight = initialization_weight
 
 
 class WarmupCosine:
@@ -171,6 +186,10 @@ def save_checkpoint(
         "batch_in_epoch": batch_in_epoch,
         "epoch_complete": epoch_complete,
         "global_step": global_step,
+        "ema_decay": ema.decay,
+        "ema_ramp_steps": ema.ramp_steps,
+        "ema_updates": ema.updates,
+        "ema_initialization_weight": ema.initialization_weight,
         "config": asdict(config),
         "metrics": metrics,
     }
@@ -311,7 +330,9 @@ def train_phase3(
     )
     use_amp = config.schedule.amp and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-    ema = ExponentialMovingAverage(model, config.schedule.ema_decay)
+    ema = ExponentialMovingAverage(
+        model, config.schedule.ema_decay, config.schedule.ema_ramp_steps
+    )
     decoder = InferenceDecoder(
         strides=config.assignment.strides,
         top_k=config.inference.pre_nms_top_k,
@@ -333,6 +354,10 @@ def train_phase3(
         )
         model.load_state_dict(checkpoint["model"])
         ema.module.load_state_dict(checkpoint["ema_model"])
+        ema.restore_tracking(
+            int(checkpoint.get("ema_updates", checkpoint.get("global_step", 0))),
+            float(checkpoint.get("ema_initialization_weight", 1.0)),
+        )
         optimizer.load_state_dict(checkpoint["optimizer"])
         _optimizer_to(optimizer, device)
         scheduler.load_state_dict(checkpoint["scheduler"])

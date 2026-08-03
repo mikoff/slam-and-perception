@@ -27,6 +27,8 @@ classification, or equate source consistency with semantic visual correctness.
   when the hosting surface blocks client-side file downloads.
 - `audit-g1-adjudicate` independently recomputes source containment and metrics,
   validates state/tier contracts, and emits a reviewer-confirmable HTML bundle.
+- `audit-g1-apply-policy` applies the owner-accepted automatic rule to every
+  current positive/ignore record and fingerprints accepted manifest copies.
 
 # Active Design Patterns & Decisions
 
@@ -36,19 +38,24 @@ classification, or equate source consistency with semantic visual correctness.
   tolerance reflects raster equivalence. Tightness is source-area occupancy.
 - Valid four-point sources are canonicalized clockwise. Invalid four-point
   sources use a rotated-rectangle tier before the final HBB fallback.
+- Trusted background is tiled conservatively from explicit BDD drivable area,
+  nuImages driveable surface, and WoodScape road/sky/vegetation polygons. A tile
+  is retained only at 100% occupancy after positive and ignore subtraction.
 - Localizable zero-area source geometry becomes a one-pixel ignore HBB and is
   reported; it never becomes a positive or silent negative.
 - Mixed polygon/rectangle duplicates prefer the non-rectangle geometry.
 - Intermediate images are links into raw extraction; final COCO paths remain
   compatibility artifacts, not the proposal loader's source of truth.
-- Open-world benchmark training keeps COCO VOC-20 positives and moves COCO-60
-  instances to ignore; validation retains both and tags them seen/unseen.
+- Open-world benchmark training retains all auxiliary-source positives, keeps
+  COCO VOC-20 positives, and moves COCO-60 instances to ignore. Validation tags
+  COCO seen/unseen and auxiliary records for the common evaluator.
 - Eligible-positive accounting excludes pre-existing source-policy ignore
   regions, but requires geometry failures to remain localized ignore regions.
 - Audit sampling is seeded and round-robin stratified by source, split, state,
   geometry, size, aspect, tightness, and radial-position bins.
-- Automatic adjudication preserves prior decisions: any failed, unresolved, or
-  machine-invalid audit record is recommended for quarantine as ignore.
+- Automatic adjudication is authoritative by owner decision. PASS retains the
+  current state; a failed positive becomes ignore. The current full-corpus run
+  has 9,083 PASS records and zero quarantines.
 - Visualization edges and vertex markers are alpha-composited so the source
   pixels remain visible; CSV review always has a visible copy fallback.
 
@@ -58,14 +65,15 @@ classification, or equate source consistency with semantic visual correctness.
   appropriate for acceptance gates but must report their limits explicitly.
 - Regenerate conversion, export, merge, and validation after geometry changes;
   stale intermediate JSON can otherwise hide schema defects.
-- `--force all` re-hashes roughly 98 GB of source archives; for geometry-only
-  changes rerun `convert-detection`, `export-coco`, `merge`, then `validate`.
+- Determinism hashes the exact bounded raw annotation inputs before and after
+  two rebuilds. Hashing all 465,917 extracted annotations is intentionally not
+  part of a bounded G1 run.
 - Keep the compact manifest schema synchronized with the SQLite streaming index
   in `student_detector.data`.
 - Do not treat a zero-annotation manifest as a successful data gate.
-- `background_supervision: true` is only image metadata; it is not permission to
-  train dense negatives without explicit spatial trusted-background regions.
-- G1 remains pending until all visual decisions are resolved and systematic
-  errors are absent, even when every automated bundle check passes.
+- `background_supervision: true` is derived only when explicit spatial tiles
+  exist. Source identity such as COCO alone never authorizes dense negatives.
+- Owner acceptance replaces further manual annotation for this bounded review;
+  new manifest hashes require reapplying the automatic policy.
 - Automatic PASS proves agreement with stored source geometry, not that the
   source annotation covers the complete visually perceived physical object.

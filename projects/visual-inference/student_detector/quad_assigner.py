@@ -44,6 +44,7 @@ class QuadAssigner:
         gamma: float = 2.0,
         scale_sigma: float = 0.75,
         eligible_levels: int = 2,
+        scale_measure: str = "area",
     ) -> None:
         if len(strides) != 3:
             raise ValueError("the baseline quad assigner expects P3-P5")
@@ -51,11 +52,24 @@ class QuadAssigner:
             raise ValueError("top_k must be positive")
         if gamma <= 0 or scale_sigma <= 0:
             raise ValueError("gamma and scale_sigma must be positive")
+        if scale_measure not in {"area", "maximum_extent"}:
+            raise ValueError("scale_measure must be area or maximum_extent")
         self.strides = strides
         self.top_k = top_k
         self.gamma = gamma
         self.scale_sigma = scale_sigma
         self.eligible_levels = max(1, min(eligible_levels, len(strides)))
+        self.scale_measure = scale_measure
+
+    def _object_scale(self, quad: Tensor) -> Tensor:
+        if self.scale_measure == "area":
+            return torch.sqrt(quad_area(quad).clamp(min=1e-6))
+        center = quad_centroid(quad)
+        centered = quad - center
+        covariance = centered.transpose(0, 1) @ centered / 4.0
+        _, axes = torch.linalg.eigh(covariance)
+        projected = centered @ axes
+        return (projected.amax(dim=0) - projected.amin(dim=0)).amax().clamp(min=1e-6)
 
     def _scale_scores(self, area_scale: Tensor) -> Tensor:
         references = area_scale.new_tensor(self.strides) * 4.0
@@ -139,7 +153,7 @@ class QuadAssigner:
                 continue
             center_quality, _ = self._center_quality(points, quad)
             inside = points_inside_convex_quad(points, quad) & valid_point_mask
-            area_scale = torch.sqrt(quad_area(quad).clamp(min=1e-6))
+            area_scale = self._object_scale(quad)
             scale_quality = self._scale_scores(area_scale)
             level_distance = torch.log(scale_quality.clamp(min=1e-7)).abs()
             eligible_level_order = torch.argsort(level_distance)
@@ -172,7 +186,7 @@ class QuadAssigner:
                 unrepresentable.append(original_index)
                 continue
             center_quality, _ = self._center_quality(points, quad)
-            area_scale = torch.sqrt(quad_area(quad).clamp(min=1e-6))
+            area_scale = self._object_scale(quad)
             scale_quality = self._scale_scores(area_scale)
             score = (center_quality * scale_quality[point_level]).masked_fill(~inside, -1.0)
             fallback_point = score.argmax()

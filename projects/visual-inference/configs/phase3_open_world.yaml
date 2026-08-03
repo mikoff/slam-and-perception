@@ -45,16 +45,27 @@ quad:
   gamma: 2.0
   scale_sigma: 0.75
   eligible_levels: 2
+  # Maximum extent improved assignment coverage but did not improve final AR;
+  # retain the matched area-scale control for the one-variable GWD ablation.
+  scale_measure: area
   weak_negative_weight: 0.0
   quality_weight: 1.0
   corner_weight: 2.0
+  # The beta=0.1 precision ablation failed deterministic G6; retain baseline.
+  corner_smooth_l1_beta: 1.0
+  # GWD weights 0.25 and 0.05 both failed G6 on the thin fitted quad.
+  gwd_weight: 0.0
   validity_weight: 0.05
   quality_focal_beta: 2.0
   quality_target_mode: centerness
   quality_blend: 0.0
+  # G5 cost passed, but the matched learning trial regressed AR and IoU-.75;
+  # retain the approved proxy branch.
   geometry_quality_target: corner_proxy
 
 schedule:
+  # The 60-epoch schedule plateaued and was rejected; restore the matched
+  # 40-epoch control after rejecting registered geometry ablations.
   epochs: 40
   freeze_backbone_epochs: 2
   head_learning_rate: 0.0003
@@ -64,7 +75,12 @@ schedule:
   warmup_steps: 100
   min_lr_ratio: 0.01
   gradient_clip_norm: 10
-  ema_decay: 0.9998
+  # Long-run cap; a warm-up below prevents early random initialization from
+  # dominating. The former fixed 0.9998 retained ~78% after 1,240 updates.
+  ema_decay: 0.9962930409
+  # Avoid averaging the random initialization while approaching the cap once
+  # model updates become incremental.
+  ema_ramp_steps: 200
   accumulation_steps: 1
   amp: true
   seed: 42

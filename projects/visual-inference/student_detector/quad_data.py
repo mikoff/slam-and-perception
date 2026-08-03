@@ -25,6 +25,7 @@ from .data import (
 )
 from .quad_geometry import (
     canonicalize_quad,
+    canonicalize_quads,
     clip_convex_polygon,
     fit_quad_from_points,
     polygon_signed_area,
@@ -160,24 +161,36 @@ class QuadProposalTransform:
         transformed = all_quads * scale
         transformed[..., 0] += offset_x
         transformed[..., 1] += offset_y
-        clipped_rows: list[Tensor] = []
-        visibility: list[float] = []
-        for quad in transformed:
+        clipped_tensor = torch.empty_like(transformed)
+        visibility_tensor = transformed.new_zeros((transformed.shape[0],))
+        inside = (
+            (transformed[..., 0] >= 0)
+            & (transformed[..., 0] <= self.input_size)
+            & (transformed[..., 1] >= 0)
+            & (transformed[..., 1] <= self.input_size)
+        ).all(dim=1)
+        if inside.any():
+            clipped_tensor[inside] = canonicalize_quads(transformed[inside])
+            visibility_tensor[inside] = 1.0
+        boundary_indices = (~inside).nonzero().flatten().tolist()
+        for index in boundary_indices:
+            quad = transformed[index]
             original_area = float(polygon_signed_area(quad).abs())
             clipped = clip_convex_polygon(
                 quad,
                 quad.new_tensor([[0.0, 0.0], [self.input_size, 0.0], [self.input_size, self.input_size], [0.0, self.input_size]]),
             )
             if clipped.shape[0] < 3:
-                clipped_rows.append(quad.new_zeros((4, 2)))
-                visibility.append(0.0)
+                clipped_tensor[index] = 0
                 continue
             if clipped.shape == (4, 2) and bool(quad_validity(clipped)):
-                clipped_rows.append(canonicalize_quad(clipped))
+                clipped_tensor[index] = canonicalize_quad(clipped)
             else:
-                clipped_rows.append(fit_quad_from_points(clipped))
-            visibility.append(float(polygon_signed_area(clipped).abs()) / max(original_area, 1e-7))
-        if not clipped_rows:
+                clipped_tensor[index] = fit_quad_from_points(clipped)
+            visibility_tensor[index] = (
+                float(polygon_signed_area(clipped).abs()) / max(original_area, 1e-7)
+            )
+        if not transformed.shape[0]:
             image_tensor = _pil_to_normalized_tensor(image)
             return (
                 image_tensor,
@@ -188,8 +201,6 @@ class QuadProposalTransform:
                 (scale, offset_x, offset_y),
                 (),
             )
-        clipped_tensor = torch.stack(clipped_rows)
-        visibility_tensor = torch.tensor(visibility)
         areas = polygon_signed_area(clipped_tensor).abs()
         edge_lengths = torch.linalg.vector_norm(torch.roll(clipped_tensor, -1, 1) - clipped_tensor, dim=2)
         side = edge_lengths.amin(dim=1)
@@ -248,7 +259,10 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         self.data_config = data_config
         self.training = training
         self.seed = seed
-        self.epoch = 0
+        # DataLoader workers persist across epochs for throughput. Keep the
+        # epoch in shared memory so their deterministic augmentation seed still
+        # advances when the main process calls set_epoch().
+        self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
         self.transform = QuadProposalTransform(
             data_config.input_size, augmentation, training=training,
             regular_min_side=data_config.quad_regular_min_side,
@@ -272,7 +286,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         return len(self.records)
 
     def set_epoch(self, epoch: int) -> None:
-        self.epoch = epoch
+        self._epoch.fill_(epoch)
 
     def __getitem__(self, index: int) -> QuadProposalSample:
         record = self.records[index]
@@ -291,7 +305,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
             image = loaded.convert("RGB")
         transformed = self.transform(
             image, _quad_tensor(positive), _quad_tensor(ignore), _quad_tensor(trusted),
-            seed=self.seed + self.epoch * max(len(self), 1) + index,
+            seed=self.seed + int(self._epoch.item()) * max(len(self), 1) + index,
         )
         domain = self.data_config.source_domains.get(record.source_dataset, "unknown")
         retained = transformed[6]

@@ -121,6 +121,7 @@ def main() -> None:
         gamma=config.quad.gamma,
         scale_sigma=config.quad.scale_sigma,
         eligible_levels=config.quad.eligible_levels,
+        scale_measure=config.quad.scale_measure,
     )
     builder = QuadTargetBuilder(
         assigner, weak_negative_weight=config.quad.weak_negative_weight

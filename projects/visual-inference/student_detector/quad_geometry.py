@@ -71,25 +71,42 @@ def quad_validity(
     return finite & edge_ok & area_ok & convex
 
 
+def canonicalize_quads(quad: Tensor) -> Tensor:
+    """Canonicalize quads clockwise, starting at each top-left vertex."""
+    value = _quad_tensor(quad)
+    if not torch.isfinite(value).all():
+        raise ValueError("quad contains non-finite coordinates")
+    original_shape = value.shape
+    flat = value.reshape(-1, 4, 2)
+    center = flat.mean(dim=1)
+    angles = torch.atan2(
+        flat[..., 1] - center[:, None, 1],
+        flat[..., 0] - center[:, None, 0],
+    )
+    order = torch.argsort(angles, dim=1, stable=True)
+    ordered = torch.gather(flat, 1, order.unsqueeze(-1).expand(-1, -1, 2))
+    reverse = quad_signed_area(ordered) < 0
+    ordered = torch.where(
+        reverse[:, None, None], torch.flip(ordered, dims=(1,)), ordered
+    )
+    minimum_y = ordered[..., 1].amin(dim=1, keepdim=True)
+    top_x = ordered[..., 0].masked_fill(ordered[..., 1] != minimum_y, torch.inf)
+    start = top_x.argmin(dim=1)
+    indices = (
+        torch.arange(4, device=value.device).unsqueeze(0) + start.unsqueeze(1)
+    ).remainder(4)
+    canonical = torch.gather(
+        ordered, 1, indices.unsqueeze(-1).expand(-1, -1, 2)
+    )
+    return canonical.reshape(original_shape)
+
+
 def canonicalize_quad(quad: Tensor) -> Tensor:
     """Canonicalize one quad clockwise, starting at its top-left vertex."""
     value = _quad_tensor(quad)
     if value.ndim != 2:
         raise ValueError("canonicalize_quad accepts one [4, 2] quad")
-    if not torch.isfinite(value).all():
-        raise ValueError("quad contains non-finite coordinates")
-    center = value.mean(dim=0)
-    angles = torch.atan2(value[:, 1] - center[1], value[:, 0] - center[0])
-    ordered = value[torch.argsort(angles)]
-    if quad_signed_area(ordered) < 0:
-        ordered = torch.flip(ordered, dims=(0,))
-    # Image y points down. The smallest y, then smallest x, is the stable
-    # top-left start for rectangles and the nearest equivalent start for
-    # rotated/perspective quads.
-    start = min(range(4), key=lambda index: (
-        float(ordered[index, 1]), float(ordered[index, 0])
-    ))
-    return torch.roll(ordered, -start, dims=0)
+    return canonicalize_quads(value)
 
 
 def equivalent_quad_traversals(quad: Tensor) -> Tensor:
@@ -195,15 +212,179 @@ def _ordered_convex_polygon_iou(first_value: Tensor, second_value: Tensor) -> Te
     return intersection_area / union.clamp(min=torch.finfo(first_value.dtype).eps)
 
 
+def _points_inside_ordered_quads(points: Tensor, quads: Tensor) -> Tensor:
+    """Test batched points against batched convex, perimeter-ordered quads."""
+    edges = torch.roll(quads, -1, dims=-2) - quads
+    relative = points.unsqueeze(-2) - quads.unsqueeze(-3)
+    turns = _cross(edges.unsqueeze(-3), relative)
+    return (turns >= -_EPS).all(dim=-1) | (turns <= _EPS).all(dim=-1)
+
+
+def _aligned_intersection_area(first: Tensor, second: Tensor) -> Tensor:
+    """Vectorized exact intersection area for aligned convex quad pairs."""
+    if first.shape != second.shape or first.ndim != 3:
+        raise ValueError("quad pairs must both have shape [N, 4, 2]")
+    if first.shape[0] == 0:
+        return first.new_empty((0,))
+
+    first_edges = torch.roll(first, -1, dims=1) - first
+    second_edges = torch.roll(second, -1, dims=1) - second
+    first_start = first[:, :, None, :]
+    second_start = second[:, None, :, :]
+    first_direction = first_edges[:, :, None, :]
+    second_direction = second_edges[:, None, :, :]
+    difference = second_start - first_start
+    denominator = _cross(first_direction, second_direction)
+    nonparallel = denominator.abs() > _EPS
+    safe_denominator = torch.where(
+        nonparallel, denominator, torch.ones_like(denominator)
+    )
+    first_fraction = _cross(difference, second_direction) / safe_denominator
+    second_fraction = _cross(difference, first_direction) / safe_denominator
+    intersects = (
+        nonparallel
+        & (first_fraction >= -_EPS)
+        & (first_fraction <= 1 + _EPS)
+        & (second_fraction >= -_EPS)
+        & (second_fraction <= 1 + _EPS)
+    )
+    intersections = first_start + first_fraction.unsqueeze(-1) * first_direction
+
+    candidates = torch.cat(
+        (first, second, intersections.flatten(start_dim=1, end_dim=2)), dim=1
+    )
+    candidate_mask = torch.cat(
+        (
+            _points_inside_ordered_quads(first, second),
+            _points_inside_ordered_quads(second, first),
+            intersects.flatten(start_dim=1),
+        ),
+        dim=1,
+    )
+    counts = candidate_mask.sum(dim=1)
+    centers = (candidates * candidate_mask.unsqueeze(-1)).sum(dim=1) / counts.clamp(
+        min=1
+    ).unsqueeze(-1)
+    angles = torch.atan2(
+        candidates[..., 1] - centers[:, None, 1],
+        candidates[..., 0] - centers[:, None, 0],
+    )
+    angles = angles.masked_fill(~candidate_mask, torch.inf)
+    order = torch.argsort(angles, dim=1, stable=True)
+    ordered = torch.gather(candidates, 1, order.unsqueeze(-1).expand(-1, -1, 2))
+
+    sequential_cross = _cross(ordered[:, :-1], ordered[:, 1:])
+    positions = torch.arange(
+        sequential_cross.shape[1], device=first.device
+    ).unsqueeze(0)
+    sequential_cross = (
+        sequential_cross * (positions < (counts - 1).unsqueeze(1))
+    ).sum(dim=1)
+    last_index = (counts - 1).clamp(min=0)
+    last = ordered.gather(
+        1, last_index[:, None, None].expand(-1, 1, 2)
+    ).squeeze(1)
+    closing_cross = _cross(last, ordered[:, 0])
+    area = 0.5 * (sequential_cross + closing_cross).abs()
+    return torch.where(counts >= 3, area, torch.zeros_like(area))
+
+
 def aligned_quad_iou(first: Tensor, second: Tensor) -> Tensor:
     """Compute exact IoU for aligned [N, 4, 2] pairs."""
     first_value = _quad_tensor(first)
     second_value = _quad_tensor(second)
     if first_value.shape != second_value.shape:
         raise ValueError("aligned quad tensors must have equal shape")
-    return torch.stack([
-        convex_polygon_iou(a, b) for a, b in zip(first_value, second_value, strict=True)
-    ]) if first_value.shape[0] else first_value.new_empty((0,))
+    intersection = _aligned_intersection_area(first_value, second_value)
+    union = quad_area(first_value) + quad_area(second_value) - intersection
+    return intersection / union.clamp(min=torch.finfo(first_value.dtype).eps)
+
+
+_compiled_aligned_quad_iou = torch.compile(
+    aligned_quad_iou, fullgraph=True, dynamic=False
+)
+
+
+def warmup_compiled_quad_iou(device: torch.device) -> None:
+    """Compile the fixed-size CUDA overlap kernel outside measured inference."""
+    if device.type != "cuda":
+        return
+    sample = torch.tensor(
+        [[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]], device=device
+    ).expand(16_384, -1, -1)
+    _compiled_aligned_quad_iou(sample, sample)
+
+
+def pairwise_quad_iou(
+    first: Tensor,
+    second: Tensor,
+    *,
+    pair_chunk_size: int = 16_384,
+    minimum_iou: float = 0.0,
+) -> Tensor:
+    """Compute an exact [N, M] convex-quad IoU matrix in bounded batches.
+
+    Values that cannot exceed ``minimum_iou`` are safely left at zero. This is
+    useful for NMS, where only threshold crossings matter.
+    """
+    first_value = _quad_tensor(first)
+    second_value = _quad_tensor(second)
+    if first_value.ndim != 3 or second_value.ndim != 3:
+        raise ValueError("quad sets must have shape [N, 4, 2] and [M, 4, 2]")
+    if pair_chunk_size < 1:
+        raise ValueError("pair_chunk_size must be positive")
+    if not 0 <= minimum_iou <= 1:
+        raise ValueError("minimum_iou must be in [0, 1]")
+    rows, columns = first_value.shape[0], second_value.shape[0]
+    if rows == 0 or columns == 0:
+        return first_value.new_zeros((rows, columns))
+    first_min = first_value.amin(dim=1)
+    first_max = first_value.amax(dim=1)
+    second_min = second_value.amin(dim=1)
+    second_max = second_value.amax(dim=1)
+    overlap_width = (
+        torch.minimum(first_max[:, None, 0], second_max[None, :, 0])
+        - torch.maximum(first_min[:, None, 0], second_min[None, :, 0])
+    ).clamp(min=0)
+    overlap_height = (
+        torch.minimum(first_max[:, None, 1], second_max[None, :, 1])
+        - torch.maximum(first_min[:, None, 1], second_min[None, :, 1])
+    ).clamp(min=0)
+    envelope_intersection = overlap_width * overlap_height
+    first_area = quad_area(first_value)
+    second_area = quad_area(second_value)
+    maximum_intersection = torch.minimum(
+        envelope_intersection,
+        torch.minimum(first_area[:, None], second_area[None, :]),
+    )
+    iou_upper_bound = maximum_intersection / (
+        first_area[:, None] + second_area[None, :] - maximum_intersection
+    ).clamp(min=torch.finfo(first_value.dtype).eps)
+    envelope_overlap = iou_upper_bound > minimum_iou
+    flat_indices = envelope_overlap.flatten().nonzero().flatten()
+    result = first_value.new_zeros((rows * columns,))
+    if flat_indices.numel() == 0:
+        return result.reshape(rows, columns)
+    first_indices = torch.div(flat_indices, columns, rounding_mode="floor")
+    second_indices = flat_indices.remainder(columns)
+    values: list[Tensor] = []
+    for start in range(0, flat_indices.shape[0], pair_chunk_size):
+        chunk_first = first_value[first_indices[start : start + pair_chunk_size]]
+        chunk_second = second_value[second_indices[start : start + pair_chunk_size]]
+        chunk_length = chunk_first.shape[0]
+        if first_value.device.type == "cuda":
+            if pair_chunk_size != 16_384:
+                raise ValueError("CUDA pair_chunk_size must remain 16384")
+            if chunk_length < pair_chunk_size:
+                padding = pair_chunk_size - chunk_length
+                chunk_first = torch.cat((chunk_first, chunk_first[:1].expand(padding, -1, -1)))
+                chunk_second = torch.cat((chunk_second, chunk_second[:1].expand(padding, -1, -1)))
+            chunk_iou = _compiled_aligned_quad_iou(chunk_first, chunk_second)[:chunk_length]
+        else:
+            chunk_iou = aligned_quad_iou(chunk_first, chunk_second)
+        values.append(chunk_iou)
+    result[flat_indices] = torch.cat(values)
+    return result.reshape(rows, columns)
 
 
 def polygon_nms(
@@ -213,44 +394,29 @@ def polygon_nms(
     *,
     max_output: int | None = None,
 ) -> Tensor:
-    """Reference class-agnostic NMS for convex quadrilaterals."""
+    """Exact class-agnostic NMS using one batched polygon-overlap matrix."""
     value = _quad_tensor(quads)
     if value.shape[0] != scores.shape[0]:
         raise ValueError("quads and scores must have equal length")
     if value.shape[0] == 0:
         return torch.empty((0,), dtype=torch.long, device=value.device)
-    # Canonicalize once.  Re-canonicalizing inside every pairwise IoU call
-    # makes the reference implementation needlessly quadratic in Python.
-    nms_value = value.detach().cpu()
-    nms_scores = scores.detach().cpu()
-    canonical = torch.stack([canonicalize_quad(item) for item in nms_value])
-    valid = torch.tensor([bool(quad_validity(item)) for item in canonical], dtype=torch.bool)
-    bounds = torch.stack((canonical[..., 0].amin(dim=1), canonical[..., 1].amin(dim=1),
-                          canonical[..., 0].amax(dim=1), canonical[..., 1].amax(dim=1)), dim=1)
-    order = torch.argsort(nms_scores, descending=True, stable=True)
+    valid = quad_validity(value)
+    overlaps = pairwise_quad_iou(
+        value, value, minimum_iou=iou_threshold
+    ).detach().cpu()
+    order = torch.argsort(scores.detach().cpu(), descending=True, stable=True)
+    valid_cpu = valid.detach().cpu()
     kept: list[int] = []
+    suppressed = torch.zeros(value.shape[0], dtype=torch.bool)
     for index in order.tolist():
-        if not valid[index]:
+        if not valid_cpu[index] or suppressed[index]:
             continue
-        suppressed = False
-        for other in kept:
-            # Axis-aligned envelope IoU is an admissible overlap upper bound
-            # only for disjoint boxes (zero means exact polygon IoU is zero).
-            left = max(float(bounds[index, 0]), float(bounds[other, 0]))
-            top = max(float(bounds[index, 1]), float(bounds[other, 1]))
-            right = min(float(bounds[index, 2]), float(bounds[other, 2]))
-            bottom = min(float(bounds[index, 3]), float(bounds[other, 3]))
-            if right <= left or bottom <= top:
-                continue
-            if float(_ordered_convex_polygon_iou(canonical[index], canonical[other])) > iou_threshold:
-                suppressed = True
-                break
-        if not suppressed:
-            kept.append(index)
-            # Scores are visited in descending order. Once the requested output
-            # budget is full, later candidates cannot enter that prefix.
-            if max_output is not None and len(kept) >= max_output:
-                break
+        kept.append(index)
+        suppressed |= overlaps[index] > iou_threshold
+        # Scores are visited in descending order. Once the requested output
+        # budget is full, later candidates cannot enter that prefix.
+        if max_output is not None and len(kept) >= max_output:
+            break
     return torch.tensor(kept, dtype=torch.long, device=value.device)
 
 

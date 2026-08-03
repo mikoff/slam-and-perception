@@ -17,7 +17,7 @@ from student_detector.losses import (
 )
 from student_detector.model import StudentDetector
 from student_detector.targets import TargetBuilder
-from student_detector.training import train_phase3
+from student_detector.training import ExponentialMovingAverage, train_phase3
 
 
 def _sample(*, dense: bool = True, ignore: bool = False) -> ProposalSample:
@@ -43,6 +43,20 @@ def _sample(*, dense: bool = True, ignore: bool = False) -> ProposalSample:
 def test_ciou_is_zero_for_identical_boxes():
     boxes = torch.tensor([[1.0, 2.0, 9.0, 12.0]])
     torch.testing.assert_close(aligned_ciou_loss(boxes, boxes), torch.zeros(1))
+
+
+def test_ema_ramp_tracks_early_update_then_approaches_decay_cap() -> None:
+    model = torch.nn.Linear(1, 1, bias=False)
+    model.weight.data.fill_(0.0)
+    ema = ExponentialMovingAverage(model, decay=0.99, ramp_steps=10)
+    model.weight.data.fill_(1.0)
+    ema.update(model)
+    assert ema.current_decay() < 0.1
+    assert float(ema.module.weight) > 0.9
+    for _ in range(100):
+        ema.update(model)
+    assert 0.98 < ema.current_decay() < 0.99
+    assert ema.initialization_weight < 1e-6
 
 
 def test_giou_is_zero_for_identical_boxes():

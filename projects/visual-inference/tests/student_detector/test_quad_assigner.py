@@ -55,3 +55,16 @@ def test_quality_target_is_centerness_not_scale_compatibility() -> None:
     # The point nearest the object centroid should retain a near-one quality
     # target even though assignment level selection uses scale compatibility.
     assert assignment.quality_targets.max() > 0.95
+
+
+def test_maximum_extent_moves_slender_target_to_coarser_levels() -> None:
+    quad = torch.tensor([
+        [32.0, 100.0], [192.0, 100.0], [192.0, 116.0], [32.0, 116.0]
+    ]).unsqueeze(0)
+    shapes = ((32, 32), (16, 16), (8, 8))
+    area = QuadAssigner(scale_measure="area").assign(quad, shapes, (256, 256))
+    extent = QuadAssigner(scale_measure="maximum_extent").assign(
+        quad, shapes, (256, 256)
+    )
+    assert area.positive_counts_per_level[2] == 0
+    assert extent.positive_counts_per_level[2] > 0

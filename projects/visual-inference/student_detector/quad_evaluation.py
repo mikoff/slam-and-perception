@@ -11,6 +11,7 @@ from .quad_decoder import QuadDetection
 from .quad_geometry import (
     aligned_quad_iou,
     equivalent_quad_traversals,
+    pairwise_quad_iou,
     quad_area,
     quad_validity,
 )
@@ -43,19 +44,13 @@ class QuadEvaluationImage:
 def _best_overlaps(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0],))
-    return torch.stack([
-        aligned_quad_iou(proposals, target.expand_as(proposals)).max()
-        for target in gt
-    ])
+    return pairwise_quad_iou(gt, proposals).max(dim=1).values
 
 
 def _overlap_matrix(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0], proposals.shape[0]))
-    return torch.stack([
-        aligned_quad_iou(proposals, target.expand_as(proposals))
-        for target in gt
-    ])
+    return pairwise_quad_iou(gt, proposals)
 
 
 def _cached_best(matrix: Tensor, top_k: int) -> Tensor:

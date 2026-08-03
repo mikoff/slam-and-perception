@@ -18,7 +18,11 @@ from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.quad_data import QuadProposalDataset, collate_quad_proposal_samples
 from student_detector.quad_decoder import QuadDetection, QuadInferenceDecoder
 from student_detector.quad_evaluation import QuadEvaluationImage, evaluate_quad_proposals
-from student_detector.quad_geometry import polygon_nms, quad_validity
+from student_detector.quad_geometry import (
+    polygon_nms,
+    quad_validity,
+    warmup_compiled_quad_iou,
+)
 from student_detector.quad_targets import point_validity_from_pixel_mask
 
 
@@ -26,9 +30,11 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _checkpoint_model(model: torch.nn.Module, path: Path) -> dict[str, Any]:
+def _checkpoint_model(
+    model: torch.nn.Module, path: Path, state_key: str
+) -> dict[str, Any]:
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model.load_state_dict(checkpoint.get("ema_model", checkpoint["model"]))
+    model.load_state_dict(checkpoint[state_key])
     return checkpoint
 
 
@@ -56,6 +62,7 @@ def _evaluate(
     loader: DataLoader,
     config: Any,
     device: torch.device,
+    state_key: str,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, Any]]:
     model: torch.nn.Module
     if kind == "hbb":
@@ -75,7 +82,7 @@ def _evaluate(
             nms_iou_threshold=config.inference.nms_iou_threshold,
             max_proposals=300,
         )
-    checkpoint = _checkpoint_model(model, checkpoint_path)
+    checkpoint = _checkpoint_model(model, checkpoint_path, state_key)
     model.to(device).eval()
     evaluated: list[QuadEvaluationImage] = []
     forward_seconds = decode_seconds = nms_seconds = 0.0
@@ -157,11 +164,15 @@ def main() -> None:
     parser.add_argument("--quad-checkpoint", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--checkpoint-state", choices=("model", "ema_model"), default="model"
+    )
     args = parser.parse_args()
     config = load_phase3_config(args.config)
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA comparison requested but no CUDA device is visible")
+    warmup_compiled_quad_iou(device)
     manifest = config.data.quad_val_annotations or config.data.val_annotations
     dataset = QuadProposalDataset(
         manifest,
@@ -181,10 +192,12 @@ def main() -> None:
         pin_memory=device.type == "cuda",
     )
     hbb_metrics, hbb_timings, hbb_checkpoint = _evaluate(
-        "hbb", args.hbb_checkpoint.resolve(), loader, config, device
+        "hbb", args.hbb_checkpoint.resolve(), loader, config, device,
+        args.checkpoint_state,
     )
     quad_metrics, quad_timings, quad_checkpoint = _evaluate(
-        "quad", args.quad_checkpoint.resolve(), loader, config, device
+        "quad", args.quad_checkpoint.resolve(), loader, config, device,
+        args.checkpoint_state,
     )
     keys = sorted(set(hbb_metrics) | set(quad_metrics))
     report = {
@@ -195,6 +208,7 @@ def main() -> None:
             "validation_manifest_sha256": _sha256(Path(manifest)),
             "images": len(dataset),
             "proposal_budgets": [50, 100, 300],
+            "checkpoint_state": args.checkpoint_state,
             "iou": "exact convex polygon IoU",
             "nms_iou_threshold": config.inference.nms_iou_threshold,
         },

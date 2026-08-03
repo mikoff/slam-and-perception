@@ -195,6 +195,10 @@ def _save_checkpoint(
         "batch_in_epoch": batch_in_epoch,
         "epoch_complete": epoch_complete,
         "global_step": global_step,
+        "ema_decay": ema.decay,
+        "ema_ramp_steps": ema.ramp_steps,
+        "ema_updates": ema.updates,
+        "ema_initialization_weight": ema.initialization_weight,
         "best_score": best_score,
         "config": asdict(config),
         "metrics": metrics,
@@ -202,6 +206,8 @@ def _save_checkpoint(
             "mode": criterion.quality_target_mode,
             "blend": criterion.quality_blend,
             "geometry_quality_target": criterion.geometry_quality_target,
+            "corner_smooth_l1_beta": criterion.corner_smooth_l1_beta,
+            "gwd_weight": criterion.gwd_weight,
         },
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,7 +252,9 @@ def train_quad_proposals(
     scaler = torch.amp.GradScaler(
         "cuda", enabled=config.schedule.amp and device.type == "cuda"
     )
-    ema = ExponentialMovingAverage(model, config.schedule.ema_decay)
+    ema = ExponentialMovingAverage(
+        model, config.schedule.ema_decay, config.schedule.ema_ramp_steps
+    )
     decoder = QuadInferenceDecoder(
         strides=config.assignment.strides,
         pre_nms_top_k=config.inference.pre_nms_top_k,
@@ -266,6 +274,10 @@ def train_quad_proposals(
         checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
         model.load_state_dict(checkpoint["model"])
         ema.module.load_state_dict(checkpoint["ema_model"])
+        ema.restore_tracking(
+            int(checkpoint.get("ema_updates", checkpoint.get("global_step", 0))),
+            float(checkpoint.get("ema_initialization_weight", 1.0)),
+        )
         optimizer.load_state_dict(checkpoint["optimizer"])
         _optimizer_to(optimizer, device)
         scheduler.load_state_dict(checkpoint["scheduler"])
@@ -336,6 +348,7 @@ def train_quad_proposals(
                     "non-finite quad loss: "
                     f"quality={float(losses.quality.detach().float().cpu())}, "
                     f"corner={float(losses.corner.detach().float().cpu())}, "
+                    f"gwd={float(losses.gwd.detach().float().cpu())}, "
                     f"validity={float(losses.validity.detach().float().cpu())}"
                 )
             scaler.scale(loss).backward()
@@ -373,7 +386,10 @@ def train_quad_proposals(
                         criterion=criterion,
                     )
             last_batch_in_epoch = batch_in_epoch
-            if log_interval and (batch_index + 1) % log_interval == 0:
+            if log_interval and (
+                (batch_index + 1) % log_interval == 0
+                or batch_index + 1 == len(train_loader)
+            ):
                 _write_jsonl(log_path, {
                     "kind": "train",
                     "epoch": epoch,
@@ -389,6 +405,7 @@ def train_quad_proposals(
                     ),
                     "weak_negative_weight": targets.weak_negative_weight,
                     "corner_loss": float(losses.corner.detach().cpu()),
+                    "gwd_loss": float(losses.gwd.detach().cpu()),
                     "validity_loss": float(losses.validity.detach().cpu()),
                     "positive_count": float(losses.number_positive.cpu()),
                     "quality_target_mean": float(losses.quality_target_mean.cpu()),
@@ -434,6 +451,8 @@ def train_quad_proposals(
             "step": global_step,
             "quality_target_mode": criterion.quality_target_mode,
             "geometry_quality_target": criterion.geometry_quality_target,
+            "corner_smooth_l1_beta": criterion.corner_smooth_l1_beta,
+            "gwd_weight": criterion.gwd_weight,
         })
         if should_validate:
             _write_jsonl(log_path, {"kind": "validation", **metrics})

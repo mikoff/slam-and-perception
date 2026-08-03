@@ -19,6 +19,7 @@ from student_detector.quad_data import QuadProposalDataset, collate_quad_proposa
 from student_detector.quad_losses import QuadProposalLoss
 from student_detector.quad_targets import QuadTargetBuilder
 from student_detector.quad_training import train_quad_proposals
+from student_detector.training import set_reproducibility_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +44,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--geometry-quality-target",
         choices=("exact_iou", "corner_proxy"),
+    )
+    parser.add_argument(
+        "--gwd-weight",
+        type=float,
+        help="Override the non-negative GWD auxiliary weight for an ablation",
+    )
+    parser.add_argument(
+        "--corner-smooth-l1-beta",
+        type=float,
+        help="Override the positive Smooth-L1 transition for corner regression",
     )
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--validation-interval", type=int, default=1)
@@ -78,18 +89,44 @@ def main() -> None:
         config = replace(config, output_dir=args.output_dir.resolve())
     if args.no_pretrained:
         config = replace(config, pretrained_backbone=False)
-    if args.geometry_quality_target is not None:
+    if (
+        args.geometry_quality_target is not None
+        or args.gwd_weight is not None
+        or args.corner_smooth_l1_beta is not None
+    ):
+        if args.gwd_weight is not None and args.gwd_weight < 0:
+            raise ValueError("--gwd-weight must be non-negative")
+        if args.corner_smooth_l1_beta is not None and args.corner_smooth_l1_beta <= 0:
+            raise ValueError("--corner-smooth-l1-beta must be positive")
         config = replace(
             config,
             quad=replace(
                 config.quad,
-                geometry_quality_target=args.geometry_quality_target,
+                geometry_quality_target=(
+                    args.geometry_quality_target
+                    if args.geometry_quality_target is not None
+                    else config.quad.geometry_quality_target
+                ),
+                gwd_weight=(
+                    args.gwd_weight
+                    if args.gwd_weight is not None
+                    else config.quad.gwd_weight
+                ),
+                corner_smooth_l1_beta=(
+                    args.corner_smooth_l1_beta
+                    if args.corner_smooth_l1_beta is not None
+                    else config.quad.corner_smooth_l1_beta
+                ),
             ),
         )
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
         device = torch.device(args.device)
+    # Model construction initializes the proposal head, so seed before creating
+    # the dataset, sampler, or model. Seeding only inside the training loop made
+    # nominally identical runs start from different heads.
+    set_reproducibility_seed(config.schedule.seed)
     train_dataset = QuadProposalDataset(
         config.data.quad_train_annotations or config.data.train_annotations,
         config.data.image_root, config.data.index_dir / "quad_train.sqlite",
@@ -171,6 +208,7 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_quad_proposal_samples,
         pin_memory=device.type == "cuda",
+        persistent_workers=config.data.workers > 0,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -179,6 +217,7 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_quad_proposal_samples,
         pin_memory=device.type == "cuda",
+        persistent_workers=config.data.workers > 0,
     )
     assigner = QuadAssigner(
         strides=config.assignment.strides,
@@ -186,6 +225,7 @@ def main() -> None:
         gamma=config.quad.gamma,
         scale_sigma=config.quad.scale_sigma,
         eligible_levels=config.quad.eligible_levels,
+        scale_measure=config.quad.scale_measure,
     )
     model = QuadProposalDetector(pretrained_backbone=config.pretrained_backbone)
     target_builder = QuadTargetBuilder(assigner, weak_negative_weight=config.quad.weak_negative_weight)
@@ -193,6 +233,8 @@ def main() -> None:
         strides=config.assignment.strides,
         quality_weight=config.quad.quality_weight,
         corner_weight=config.quad.corner_weight,
+        corner_smooth_l1_beta=config.quad.corner_smooth_l1_beta,
+        gwd_weight=config.quad.gwd_weight,
         validity_weight=config.quad.validity_weight,
         quality_focal_beta=config.quad.quality_focal_beta,
         quality_target_mode=config.quad.quality_target_mode,

@@ -85,6 +85,8 @@ def test_quad_checkpoint_resumes_and_round_trips_config(tmp_path) -> None:
     assert checkpoint["format_version"] == 2
     assert checkpoint["config"]["data"]["input_size"] == 64
     assert "scaler" in checkpoint
+    assert checkpoint["ema_updates"] == 1
+    assert checkpoint["ema_initialization_weight"] < 1.0
 
     resumed_config = replace(
         config, schedule=replace(config.schedule, epochs=2)

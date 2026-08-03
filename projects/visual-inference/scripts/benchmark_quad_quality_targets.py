@@ -42,6 +42,8 @@ def _run_branch(
         strides=config.assignment.strides,
         quality_weight=config.quad.quality_weight,
         corner_weight=config.quad.corner_weight,
+        corner_smooth_l1_beta=config.quad.corner_smooth_l1_beta,
+        gwd_weight=config.quad.gwd_weight,
         validity_weight=config.quad.validity_weight,
         quality_focal_beta=config.quad.quality_focal_beta,
         quality_target_mode="iou",
@@ -121,6 +123,7 @@ def main() -> None:
             gamma=config.quad.gamma,
             scale_sigma=config.quad.scale_sigma,
             eligible_levels=config.quad.eligible_levels,
+            scale_measure=config.quad.scale_measure,
         ),
         weak_negative_weight=config.quad.weak_negative_weight,
     )

@@ -93,6 +93,7 @@ def main() -> None:
         gamma=config.quad.gamma,
         scale_sigma=config.quad.scale_sigma,
         eligible_levels=config.quad.eligible_levels,
+        scale_measure=config.quad.scale_measure,
     )
     target_builder = QuadTargetBuilder(assigner)
     decoder = QuadInferenceDecoder(

@@ -117,9 +117,12 @@ class QuadConfig:
     gamma: float = 2.0
     scale_sigma: float = 0.75
     eligible_levels: int = 2
+    scale_measure: str = "area"
     weak_negative_weight: float = 0.0
     quality_weight: float = 1.0
     corner_weight: float = 2.0
+    corner_smooth_l1_beta: float = 1.0
+    gwd_weight: float = 0.0
     validity_weight: float = 0.05
     quality_focal_beta: float = 2.0
     quality_target_mode: str = "centerness"
@@ -139,6 +142,7 @@ class ScheduleConfig:
     min_lr_ratio: float = 0.01
     gradient_clip_norm: float = 10.0
     ema_decay: float = 0.9998
+    ema_ramp_steps: int = 0
     accumulation_steps: int = 1
     amp: bool = True
     seed: int = 42
@@ -225,6 +229,10 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("ltrb_weight must be non-negative")
     if config.schedule.checkpoint_every_steps < 0:
         raise ValueError("checkpoint_every_steps must be non-negative")
+    if not 0 <= config.schedule.ema_decay < 1:
+        raise ValueError("ema_decay must be in [0, 1)")
+    if config.schedule.ema_ramp_steps < 0:
+        raise ValueError("ema_ramp_steps must be non-negative")
     if config.inference.score_mode not in {
         "objectness", "objectness_x_centerness"
     }:
@@ -234,6 +242,8 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         )
     if config.quad.top_k < 1 or config.quad.eligible_levels < 1:
         raise ValueError("quad top_k and eligible_levels must be positive")
+    if config.quad.scale_measure not in {"area", "maximum_extent"}:
+        raise ValueError("quad scale_measure must be area or maximum_extent")
     if (
         config.data.tiny_area <= 0
         or config.data.tiny_min_side <= 0
@@ -245,6 +255,10 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("quad size thresholds must be positive and aspect ratio must be at least 1")
     if not 0 <= config.quad.weak_negative_weight <= 1:
         raise ValueError("quad weak_negative_weight must be in [0, 1]")
+    if config.quad.gwd_weight < 0:
+        raise ValueError("quad gwd_weight must be non-negative")
+    if config.quad.corner_smooth_l1_beta <= 0:
+        raise ValueError("quad corner_smooth_l1_beta must be positive")
     if config.quad.quality_target_mode not in {"centerness", "blend", "iou"}:
         raise ValueError("quad quality_target_mode must be centerness, blend, or iou")
     if not 0 <= config.quad.quality_blend <= 1:

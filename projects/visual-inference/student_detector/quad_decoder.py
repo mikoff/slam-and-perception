@@ -10,7 +10,7 @@ from torch import Tensor
 from .geometry import make_grid_points
 from .head import QuadDetectorOutput
 from .quad_geometry import (
-    canonicalize_quad,
+    canonicalize_quads,
     decode_quad_offsets,
     polygon_nms,
     quad_validity,
@@ -130,7 +130,7 @@ class QuadInferenceDecoder:
                     invalid_candidate_count=invalid_count,
                 ))
                 continue
-            canonical = torch.stack([canonicalize_quad(item) for item in decoded])
+            canonical = canonicalize_quads(decoded)
             keep = polygon_nms(
                 canonical,
                 selected_scores,
