@@ -51,19 +51,19 @@ quad:
   # retain the matched area-scale control for the one-variable GWD ablation.
   scale_measure: area
   weak_negative_weight: 0.0
-  quality_weight: 1.0
+  quality_weight: 2.0
   corner_weight: 2.0
   # The beta=0.1 precision ablation failed deterministic G6; retain baseline.
   corner_smooth_l1_beta: 1.0
+
   # GWD weights 0.25 and 0.05 both failed G6 on the thin fitted quad.
   gwd_weight: 0.0
   validity_weight: 0.05
   quality_focal_beta: 2.0
-  quality_target_mode: centerness
-  quality_blend: 0.0
-  # G5 cost passed, but the matched learning trial regressed AR and IoU-.75;
-  # retain the approved proxy branch.
+  quality_target_mode: iou
+  quality_blend: 1.0
   geometry_quality_target: corner_proxy
+
 
 schedule:
   # The 60-epoch schedule plateaued and was rejected; restore the matched

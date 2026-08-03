@@ -44,6 +44,7 @@ def class_agnostic_polygon_nms(quads: Tensor, scores: Tensor, iou_threshold: flo
 def decode_dense_quad_output(
     output: QuadDetectorOutput,
     strides: tuple[int, int, int] = (8, 16, 32),
+    centerness_alpha: float = 0.3,
 ) -> tuple[Tensor, Tensor]:
     """Decode all locations without ranking, validation, clipping, or NMS."""
     feature_shapes = tuple((item.shape[-2], item.shape[-1]) for item in output.quality)
@@ -66,7 +67,21 @@ def decode_dense_quad_output(
     decoded = decode_quad_offsets(
         points.unsqueeze(0), offsets, point_strides.reshape(1, -1, 1)
     )
+    if centerness_alpha > 0:
+        px = decoded[..., 0]
+        py = decoded[..., 1]
+        pts = points.unsqueeze(0)
+        l = (pts[..., 0] - px.min(dim=-1).values).clamp(min=1e-4)
+        r = (px.max(dim=-1).values - pts[..., 0]).clamp(min=1e-4)
+        t = (pts[..., 1] - py.min(dim=-1).values).clamp(min=1e-4)
+        b = (py.max(dim=-1).values - pts[..., 1]).clamp(min=1e-4)
+        centerness = torch.sqrt(
+            (torch.minimum(l, r) / torch.maximum(l, r)) *
+            (torch.minimum(t, b) / torch.maximum(t, b))
+        ).clamp(min=1e-4)
+        scores = (scores ** (1.0 - centerness_alpha)) * (centerness ** centerness_alpha)
     return decoded, scores
+
 
 
 class QuadInferenceDecoder:
