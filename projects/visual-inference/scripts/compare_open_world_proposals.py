@@ -5,11 +5,24 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import pathlib
+import sys
 import time
+import types
 from pathlib import Path
 from typing import Any
 
+# Compatibility shim: Python 3.13 refactored pathlib to pathlib._local.
+# Provide alias when loading 3.13 checkpoints under Python 3.12 environments.
+if not hasattr(pathlib, "_local"):
+    _local_mod = types.ModuleType("pathlib._local")
+    _local_mod.PosixPath = pathlib.PosixPath
+    _local_mod.WindowsPath = pathlib.WindowsPath
+    _local_mod.Path = pathlib.Path
+    sys.modules["pathlib._local"] = _local_mod
+
 import torch
+
 from torch.utils.data import DataLoader
 
 from student_detector.config import load_phase3_config
@@ -34,8 +47,9 @@ def _checkpoint_model(
     model: torch.nn.Module, path: Path, state_key: str
 ) -> dict[str, Any]:
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model.load_state_dict(checkpoint[state_key])
+    model.load_state_dict(checkpoint[state_key], strict=False)
     return checkpoint
+
 
 
 def _box_quads(boxes: torch.Tensor) -> torch.Tensor:

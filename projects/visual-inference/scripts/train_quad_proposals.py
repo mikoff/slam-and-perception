@@ -5,10 +5,23 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import pathlib
+import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 
+# Compatibility shim: Python 3.13 refactored pathlib to pathlib._local.
+# Provide alias when loading 3.13 checkpoints under Python 3.12 environments.
+if not hasattr(pathlib, "_local"):
+    _local_mod = types.ModuleType("pathlib._local")
+    _local_mod.PosixPath = pathlib.PosixPath
+    _local_mod.WindowsPath = pathlib.WindowsPath
+    _local_mod.Path = pathlib.Path
+    sys.modules["pathlib._local"] = _local_mod
+
 import torch
+
 from torch.utils.data import DataLoader
 
 from student_detector.config import load_phase3_config

@@ -99,7 +99,7 @@ class QuadProposalLoss(nn.Module):
         if not positive.any():
             return predicted.float().mean() * 0
         # Stride-normalized offsets preserve the same cyclic/reversed vertex
-        # equivalence as image-space coordinates.  Assignment canonicalizes
+        # equivalence as image-space coordinates. Assignment canonicalizes
         # targets once, so generate all eight traversals directly here without
         # per-positive angle sorting (which is a major GPU training bottleneck).
         target_quads = target[positive].reshape(-1, 4, 2)
@@ -111,7 +111,19 @@ class QuadProposalLoss(nn.Module):
             predicted[positive].float().unsqueeze(1).expand(-1, 8, -1),
             traversals.float(), reduction="none", beta=self.corner_smooth_l1_beta
         ).mean(dim=2)
-        return errors.min(dim=1).values.mean()
+        min_errors = errors.min(dim=1).values
+
+        # Scale loss inverse to GT diagonal length (in stride units) to balance
+        # gradients between small and large objects.
+        xmin = target_quads[..., 0].amin(dim=1)
+        xmax = target_quads[..., 0].amax(dim=1)
+        ymin = target_quads[..., 1].amin(dim=1)
+        ymax = target_quads[..., 1].amax(dim=1)
+        gt_diag = torch.sqrt((xmax - xmin).square() + (ymax - ymin).square()).clamp(min=1.0)
+        # Normalize weights so mean weight stays close to 1.0
+        diag_weights = (gt_diag.median() / gt_diag).clamp(0.2, 5.0)
+        return (min_errors * diag_weights).mean()
+
 
     def _validity_loss(self, quads: Tensor, positive: Tensor) -> Tensor:
         if not positive.any():
