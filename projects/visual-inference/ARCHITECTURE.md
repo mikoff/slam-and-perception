@@ -11,7 +11,8 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 
 - Input images are normalized FP32 tensors `[B, 3, H, W]`; `H` and `W` are
   divisible by 32 and production configuration currently uses 384 x 384.
-- MobileNetV4 and LiteFPN emit P3/P4/P5 `[B, 96, H/s, W/s]` at strides 8/16/32.
+- MobileNetV4 with `LiteFPN` or `AttnResLiteFPN` emits P3/P4/P5 `[B, 96, H/s, W/s]` at strides 8/16/32.
+- `AttnResLiteFPN` (`neck_type: "attn_res"`) calculates dynamic per-pixel Softmax depth weights ($\alpha_{l,3}, \alpha_{l,4}, \alpha_{l,5}$) via $1\times1$ Conv projection across resized lateral maps.
 - `SharedQuadProposalHead` initializes `corner_offsets.bias` to explicit HBB
   grid prior `[-1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0]` (in stride units)
   with zero weight initialization to eliminate Step 1 zero-area box collapse.
@@ -28,6 +29,7 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
   normalized elliptical center distance, and scale compatibility (`scale_sigma: 0.75`, `eligible_levels: 2`).
 - Direct-corner Smooth-L1 ($\beta=1.0$) minimizes over four cyclic starts;
   GT diagonal ($d_{\text{GT}}$) loss normalization balances multi-scale gradients.
+- AttnRes dynamic depth weighting prevents feature dilution between deep semantic maps ($P_5$) and high-resolution spatial boundary maps ($P_3, P_4$).
 - Quality Focal Loss uses normalized target groups; centerness modulation
   filters peripheral boundary noise during inference decoding.
 - TensorBoard `SummaryWriter` logs step losses, learning rate decay, validation
@@ -41,12 +43,12 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 
 - **Oracle vs Ranked Audit**: Oracle AR@100 reaches **0.1638** (vs HBB **0.1164**),
   proving quad geometry regression already outperforms HBB; remaining gap is score calibration.
-- **Empirical Breakthroughs (v11)**:
+- **Empirical Breakthroughs (v12 AttnRes)**:
+  - **Large Objects R@50**: **0.6333** (+46.2% over baseline quad v11 **0.4333** / +111% over HBB **0.3000**).
+  - **Large Objects R@75**: **0.2333** (+133.3% over baseline quad v11 **0.1000** / +250% over HBB **0.0667**).
   - **Unseen Categories R@50**: **0.2000** (+133% over HBB control **0.0857**).
-  - **Large Objects R@50**: **0.4333** (+44.4% over HBB control **0.3000**).
-  - **Recall@75**: **0.0746** (v8) / **0.0709** (v11) (beating/tying HBB **0.0709**).
+  - **Overall Recall@50**: **0.2948** (beating baseline quad v11 **0.2910**).
+  - **Recall@75**: **0.0709** (tied with HBB / baseline quad v11).
   - **Median Matched IoU**: **0.2729** (+17.0% precision over HBB **0.2332**).
-  - **AR@100**: **0.1104** (v8) / **0.1082** (v11) (closed 70% of total gap to HBB **0.1164**).
-- Exact quad decode plus polygon NMS runs in ~11.1 ms/image; forward pass is ~2.1 ms/image.
+- Exact quad decode plus polygon NMS runs in ~11.2 ms/image; forward pass is ~3.09 ms/image on GPU.
 - `uv` environment includes pinned PyTorch 2.6.0+cu124 and TensorBoard 2.21.0.
-

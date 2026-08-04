@@ -11,7 +11,7 @@ from .head import (
     SharedDetectionHead,
     SharedQuadProposalHead,
 )
-from .neck import LiteFPN
+from .neck import AttnResLiteFPN, LiteFPN
 
 
 class StudentDetector(nn.Module):
@@ -23,6 +23,7 @@ class StudentDetector(nn.Module):
         pretrained_backbone: bool = True,
         backbone: nn.Module | None = None,
         fpn_channels: int = 96,
+        neck_type: str = "lite",
     ) -> None:
         super().__init__()
         if backbone is None:
@@ -31,7 +32,12 @@ class StudentDetector(nn.Module):
             raise TypeError("backbone must expose an out_channels tuple")
 
         self.backbone = backbone
-        self.fpn = LiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        if neck_type == "attn_res":
+            self.fpn = AttnResLiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        elif neck_type == "lite":
+            self.fpn = LiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        else:
+            raise ValueError(f"Unknown neck_type: {neck_type}. Must be 'lite' or 'attn_res'")
         self.head = SharedDetectionHead(fpn_channels)
 
     def forward_features(self, images: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -50,6 +56,7 @@ class QuadProposalDetector(nn.Module):
         pretrained_backbone: bool = True,
         backbone: nn.Module | None = None,
         fpn_channels: int = 96,
+        neck_type: str = "lite",
     ) -> None:
         super().__init__()
         if backbone is None:
@@ -57,7 +64,12 @@ class QuadProposalDetector(nn.Module):
         if not hasattr(backbone, "out_channels"):
             raise TypeError("backbone must expose an out_channels tuple")
         self.backbone = backbone
-        self.fpn = LiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        if neck_type == "attn_res":
+            self.fpn = AttnResLiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        elif neck_type == "lite":
+            self.fpn = LiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        else:
+            raise ValueError(f"Unknown neck_type: {neck_type}. Must be 'lite' or 'attn_res'")
         self.head = SharedQuadProposalHead(fpn_channels)
 
     def forward_features(self, images: Tensor) -> tuple[Tensor, Tensor, Tensor]:

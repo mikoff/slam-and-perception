@@ -99,3 +99,25 @@ def test_real_detector_exports() -> None:
         (24, 24),
         (12, 12),
     ]
+
+
+def test_attn_res_neck_feature_shapes() -> None:
+    model = QuadProposalDetector(backbone=StubBackbone(), neck_type="attn_res").eval()
+    with torch.inference_mode():
+        output = model(torch.randn(2, 3, 64, 64))
+    assert [tensor.shape[1] for tensor in output.quality] == [1, 1, 1]
+    assert [tensor.shape[1] for tensor in output.corner_offsets] == [8, 8, 8]
+
+
+@pytest.mark.slow
+def test_attn_res_quad_detector_exports() -> None:
+    model = QuadProposalDetector(pretrained_backbone=False, neck_type="attn_res").eval()
+    example = torch.randn(1, 3, 384, 384)
+    exported = torch.export.export(model, (example,))
+    result = exported.module()(example)
+    assert [tensor.shape[-2:] for tensor in result.quality] == [
+        (48, 48),
+        (24, 24),
+        (12, 12),
+    ]
+

@@ -79,8 +79,9 @@ def _evaluate(
     state_key: str,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, Any]]:
     model: torch.nn.Module
+    neck_type = getattr(config, "neck_type", "lite")
     if kind == "hbb":
-        model = StudentDetector(pretrained_backbone=False)
+        model = StudentDetector(pretrained_backbone=False, neck_type=neck_type)
         decoder: Any = InferenceDecoder(
             strides=config.assignment.strides,
             top_k=300,
@@ -89,7 +90,7 @@ def _evaluate(
             score_mode=config.inference.score_mode,
         )
     else:
-        model = QuadProposalDetector(pretrained_backbone=False)
+        model = QuadProposalDetector(pretrained_backbone=False, neck_type=neck_type)
         decoder = QuadInferenceDecoder(
             strides=config.assignment.strides,
             pre_nms_top_k=300,

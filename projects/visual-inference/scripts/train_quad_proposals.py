@@ -240,7 +240,10 @@ def main() -> None:
         eligible_levels=config.quad.eligible_levels,
         scale_measure=config.quad.scale_measure,
     )
-    model = QuadProposalDetector(pretrained_backbone=config.pretrained_backbone)
+    model = QuadProposalDetector(
+        pretrained_backbone=config.pretrained_backbone,
+        neck_type=config.neck_type,
+    )
     target_builder = QuadTargetBuilder(assigner, weak_negative_weight=config.quad.weak_negative_weight)
     criterion = QuadProposalLoss(
         strides=config.assignment.strides,

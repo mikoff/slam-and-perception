@@ -161,6 +161,7 @@ class Phase3Config:
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     output_dir: Path = Path("runs/phase3")
     pretrained_backbone: bool = True
+    neck_type: str = "lite"
 
 
 def _construct(cls: type, values: dict[str, Any] | None):
@@ -207,6 +208,7 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         schedule=_construct(ScheduleConfig, raw.get("schedule")),
         output_dir=_resolve(config_path.parent, raw.get("output_dir", "runs/phase3")),
         pretrained_backbone=bool(raw.get("pretrained_backbone", True)),
+        neck_type=str(raw.get("neck_type", "lite")),
     )
     if config.data.input_size % max(config.assignment.strides) != 0:
         raise ValueError("input_size must be divisible by the largest stride")
