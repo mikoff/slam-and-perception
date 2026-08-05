@@ -238,7 +238,13 @@ def parse_args() -> argparse.Namespace:
     launch_p = subparsers.add_parser("launch")
     launch_p.add_argument("--provider", default=os.getenv("CLOUD_PROVIDER", "runpod"), choices=["runpod", "packet"])
     launch_p.add_argument("--api-url", default=os.getenv("CLOUD_API_URL"))
-    launch_p.add_argument("--api-key", default=os.getenv("CLOUD_API_KEY"))
+    launch_p.add_argument(
+        "--api-key",
+        default=os.getenv("CLOUD_API_KEY")
+        or os.getenv("RUNPOD_API_KEY")
+        or os.getenv("PACKET_API_KEY")
+        or os.getenv("RUNPOD_API_TOKEN"),
+    )
     launch_p.add_argument("--gpu-type", default="rtx4090")
     launch_p.add_argument("--volume-id", default=os.getenv("CLOUD_PERSISTENT_VOLUME_ID"))
     launch_p.add_argument("--ssh-key-id", default=os.getenv("CLOUD_SSH_KEY_ID"))
@@ -253,7 +259,13 @@ def parse_args() -> argparse.Namespace:
     term_p = subparsers.add_parser("terminate")
     term_p.add_argument("--provider", default=os.getenv("CLOUD_PROVIDER", "runpod"), choices=["runpod", "packet"])
     term_p.add_argument("--api-url", default=os.getenv("CLOUD_API_URL"))
-    term_p.add_argument("--api-key", default=os.getenv("CLOUD_API_KEY"))
+    term_p.add_argument(
+        "--api-key",
+        default=os.getenv("CLOUD_API_KEY")
+        or os.getenv("RUNPOD_API_KEY")
+        or os.getenv("PACKET_API_KEY")
+        or os.getenv("RUNPOD_API_TOKEN"),
+    )
     term_p.add_argument("--instance-id", required=True)
 
     return parser.parse_args()

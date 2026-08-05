@@ -43,7 +43,7 @@ jobs:
   cloud-training:
     name: Run Cloud Training
     runs-on: ubuntu-latest
-    environment: cloud-production
+    environment: packet-production
 
     steps:
       - name: Checkout Code
@@ -57,7 +57,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: 'projects/visual-inference/pyproject.toml'
+          python-version: '3.12'
 
       - name: Run Local Sanity Tests
         working-directory: projects/visual-inference
@@ -69,7 +69,7 @@ jobs:
         id: provision
         working-directory: projects/visual-inference
         env:
-          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
+          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
           CLOUD_PERSISTENT_VOLUME_ID: ${{ secrets.CLOUD_PERSISTENT_VOLUME_ID }}
           CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
         run: |
@@ -78,19 +78,28 @@ jobs:
             --gpu-type "${{ inputs.gpu_type }}" \
             --container-image "${{ inputs.container_image }}" > instance.json
           cat instance.json
-          echo "INSTANCE_ID=$(jq -r .instance_id instance.json)" >> $GITHUB_ENV
-          echo "IP_ADDRESS=$(jq -r .ip_address instance.json)" >> $GITHUB_ENV
-          echo "SSH_PORT=$(jq -r '.ssh_port // 22' instance.json)" >> $GITHUB_ENV
+          INSTANCE_ID=$(jq -r .instance_id instance.json)
+          IP_ADDRESS=$(jq -r .ip_address instance.json)
+          SSH_PORT=$(jq -r '.ssh_port // 22' instance.json)
+          echo "=================================================="
+          echo "🚀 Provisioned Server IP: $IP_ADDRESS"
+          echo "🔌 SSH Port:             $SSH_PORT"
+          echo "🆔 Instance ID:          $INSTANCE_ID"
+          echo "=================================================="
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "IP_ADDRESS=$IP_ADDRESS" >> $GITHUB_ENV
+          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
 
       - name: Configure SSH Key
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.CLOUD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          echo "${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} >> ~/.ssh/known_hosts
 
       - name: Execute Remote Cloud Training
         run: |
+          echo "--> Connecting via SSH to devuser@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
           ssh -p ${{ env.SSH_PORT }} devuser@${{ env.IP_ADDRESS }} "\
             REPO_URL='https://github.com/${{ github.repository }}.git' \
             COMMIT_SHA='${{ github.sha }}' \
@@ -107,12 +116,11 @@ jobs:
             RESUME_PATH='${{ inputs.resume_path }}' \
             bash -s" < projects/visual-inference/scripts/cloud/remote_entrypoint.sh
 
-
       - name: Terminate Cloud GPU Instance (Cleanup)
         if: always()
         working-directory: projects/visual-inference
         env:
-          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
+          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
         run: |
           if [ -n "${{ env.INSTANCE_ID }}" ]; then
             echo "Terminating instance ${{ env.INSTANCE_ID }} on provider ${{ inputs.provider }}..."
