@@ -86,14 +86,17 @@ jobs:
           INSTANCE_ID=$(jq -r .instance_id instance.json)
           IP_ADDRESS=$(jq -r .ip_address instance.json)
           SSH_PORT=$(jq -r '.ssh_port // 22' instance.json)
+          SSH_USER=$(jq -r '.ssh_user // "ubuntu"' instance.json)
           echo "=================================================="
           echo "🚀 Provisioned Server IP: $IP_ADDRESS"
           echo "🔌 SSH Port:             $SSH_PORT"
+          echo "👤 SSH User:             $SSH_USER"
           echo "🆔 Instance ID:          $INSTANCE_ID"
           echo "=================================================="
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
           echo "IP_ADDRESS=$IP_ADDRESS" >> $GITHUB_ENV
           echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
+          echo "SSH_USER=$SSH_USER" >> $GITHUB_ENV
 
       - name: Configure SSH Key
         run: |
@@ -104,8 +107,8 @@ jobs:
 
       - name: Execute Remote Cloud Training
         run: |
-          echo "--> Connecting via SSH to devuser@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
-          ssh -p ${{ env.SSH_PORT }} devuser@${{ env.IP_ADDRESS }} "\
+          echo "--> Connecting via SSH to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
+          ssh -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} "\
             REPO_URL='https://github.com/${{ github.repository }}.git' \
             COMMIT_SHA='${{ github.sha }}' \
             S3_BUCKET='${{ secrets.S3_BUCKET }}' \

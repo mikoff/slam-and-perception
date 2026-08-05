@@ -138,6 +138,7 @@ class PacketProvider(AbstractCloudProvider):
                     "gpu_type": gpu_type,
                     "ip_address": ip_address,
                     "ssh_port": ssh_port,
+                    "ssh_user": conn_info.get("username") or "ubuntu",
                     "status": "active",
                     "details": details,
                 }

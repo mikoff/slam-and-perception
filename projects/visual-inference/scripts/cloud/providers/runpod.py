@@ -114,6 +114,7 @@ class RunPodProvider(AbstractCloudProvider):
                     "gpu_type": gpu_type,
                     "ip_address": ip_address,
                     "ssh_port": public_port,
+                    "ssh_user": "devuser",
                     "status": "active",
                     "details": pod_data,
                 }
