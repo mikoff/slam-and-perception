@@ -98,7 +98,7 @@ class RunPodProvider:
             "minMemoryInGb": 16,
             "ports": "22/tcp",
         }
-        if volume_id:
+        if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
             input_data["networkVolumeId"] = volume_id
 
         res = self._graphql_query(mutation, {"input": input_data})
@@ -192,7 +192,7 @@ class PacketProvider:
         }
         if pool_id:
             payload["pool_id"] = pool_id
-        if volume_id:
+        if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
             payload["existing_shared_volume_id"] = volume_id
         if ssh_key_id:
             payload["ssh_key_id"] = ssh_key_id
