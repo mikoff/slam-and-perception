@@ -122,7 +122,9 @@ jobs:
           echo "--> Scanning SSH host key on ${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
           KEY_FOUND=0
           for i in {1..30}; do
-            if ssh-keyscan -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} >> ~/.ssh/known_hosts 2>/dev/null && grep -q "${{ env.IP_ADDRESS }}" ~/.ssh/known_hosts; then
+            SCAN_RESULT=$(ssh-keyscan -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} 2>/dev/null | grep -v '^#' || true)
+            if [[ -n "$SCAN_RESULT" ]]; then
+              echo "$SCAN_RESULT" >> ~/.ssh/known_hosts
               echo "--> Successfully scanned SSH host key on attempt $i."
               KEY_FOUND=1
               break
@@ -138,7 +140,7 @@ jobs:
       - name: Execute Remote Cloud Training
         run: |
           echo "--> Connecting via SSH to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
-          ssh -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} "\
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=yes -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} "\
             REPO_URL='https://github.com/${{ github.repository }}.git' \
             COMMIT_SHA='${{ github.sha }}' \
             S3_BUCKET='${{ secrets.S3_BUCKET }}' \
