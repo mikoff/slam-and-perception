@@ -52,7 +52,28 @@ class PacketProvider(AbstractCloudProvider):
         except Exception:
             pass
 
-        return self.DEFAULT_POOL_ID
+    def _resolve_ssh_key_id(
+        self, ssh_key_id: str | None, extra_params: dict[str, Any] | None, kwargs: dict[str, Any]
+    ) -> str | None:
+        if ssh_key_id and ssh_key_id.strip().lower() not in {"none", "null", "false", ""}:
+            return ssh_key_id
+        if extra_params and extra_params.get("ssh_key_id"):
+            return str(extra_params["ssh_key_id"])
+        env_key = os.getenv("CLOUD_SSH_KEY_ID") or os.getenv("PACKET_SSH_KEY_ID")
+        if env_key:
+            return env_key
+
+        # Dynamic auto-detection of registered SSH keys on Packet.ai
+        try:
+            url = f"{self.api_url}/api/v1/ssh-keys"
+            resp = make_json_request(url, self.api_key, method="GET")
+            keys = resp.get("data", [])
+            if isinstance(keys, list) and keys and keys[0].get("id"):
+                return str(keys[0]["id"])
+        except Exception:
+            pass
+
+        return None
 
     def start_instance(
         self,
@@ -68,6 +89,7 @@ class PacketProvider(AbstractCloudProvider):
         url = f"{self.api_url}/api/v1/instances"
         name = f"{name_prefix}{int(time.time())}"
         pool_id = self._resolve_pool_id(gpu_type, extra_params, kwargs)
+        resolved_ssh_key_id = self._resolve_ssh_key_id(ssh_key_id, extra_params, kwargs)
 
         payload: dict[str, Any] = {
             "name": name,
@@ -79,8 +101,8 @@ class PacketProvider(AbstractCloudProvider):
         if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
             if gpu_type.lower() != "rtx4090":
                 payload["existing_shared_volume_id"] = volume_id
-        if ssh_key_id:
-            payload["ssh_key_id"] = ssh_key_id
+        if resolved_ssh_key_id:
+            payload["ssh_key_id"] = resolved_ssh_key_id
 
         response = make_json_request(url, self.api_key, method="POST", payload=payload)
         resp_data = response.get("data") if isinstance(response.get("data"), dict) else response
