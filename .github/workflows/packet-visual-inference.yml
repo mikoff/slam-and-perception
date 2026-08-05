@@ -6,11 +6,11 @@ on:
       provider:
         description: 'Cloud GPU Provider'
         required: true
-        default: 'runpod'
+        default: 'packet'
         type: choice
         options:
-          - runpod
           - packet
+          - runpod
       gpu_type:
         description: 'GPU Type'
         required: true
@@ -78,7 +78,7 @@ jobs:
           CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
           CLOUD_POOL_ID: ${{ inputs.pool_id || secrets.CLOUD_POOL_ID || secrets.PACKET_POOL_ID }}
         run: |
-          uv run python scripts/cloud_orchestrator.py launch \
+          uv run python scripts/cloud/cli.py start_instance \
             --provider "${{ inputs.provider }}" \
             --gpu-type "${{ inputs.gpu_type }}" \
             --container-image "${{ inputs.container_image }}" > instance.json
@@ -128,8 +128,8 @@ jobs:
           CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
         run: |
           if [ -n "${{ env.INSTANCE_ID }}" ]; then
-            echo "Terminating instance ${{ env.INSTANCE_ID }} on provider ${{ inputs.provider }}..."
-            uv run python scripts/cloud_orchestrator.py terminate \
+            echo "Killing instance ${{ env.INSTANCE_ID }} on provider ${{ inputs.provider }}..."
+            uv run python scripts/cloud/cli.py kill_instance \
               --provider "${{ inputs.provider }}" \
               --instance-id "${{ env.INSTANCE_ID }}"
           fi
