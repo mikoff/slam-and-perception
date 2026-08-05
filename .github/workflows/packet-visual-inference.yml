@@ -103,7 +103,21 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} >> ~/.ssh/known_hosts
+          echo "--> Scanning SSH host key on ${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
+          KEY_FOUND=0
+          for i in {1..30}; do
+            if ssh-keyscan -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} >> ~/.ssh/known_hosts 2>/dev/null && grep -q "${{ env.IP_ADDRESS }}" ~/.ssh/known_hosts; then
+              echo "--> Successfully scanned SSH host key on attempt $i."
+              KEY_FOUND=1
+              break
+            fi
+            echo "  [Attempt $i/30] Remote SSH port not accepting connections yet, waiting 5s..."
+            sleep 5
+          done
+          if [[ $KEY_FOUND -eq 0 ]]; then
+            echo "--> Error: Could not connect to SSH daemon on ${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }} after 150s."
+            exit 1
+          fi
 
       - name: Execute Remote Cloud Training
         run: |
