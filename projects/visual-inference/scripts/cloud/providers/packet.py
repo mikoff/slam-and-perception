@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import time
 from typing import Any
 
@@ -103,6 +104,7 @@ class PacketProvider(AbstractCloudProvider):
                 payload["existing_shared_volume_id"] = volume_id
         if resolved_ssh_key_id:
             payload["ssh_key_id"] = resolved_ssh_key_id
+            payload["ssh_key_ids"] = [resolved_ssh_key_id]
 
         response = make_json_request(url, self.api_key, method="POST", payload=payload)
         resp_data = response.get("data") if isinstance(response.get("data"), dict) else response
@@ -153,17 +155,28 @@ class PacketProvider(AbstractCloudProvider):
             ssh_port = conn_info.get("port") or instance_obj.get("ssh_port") or 22
 
             if state in {"active", "running"} and ip_address:
-                return {
-                    "instance_id": instance_id,
-                    "name": name,
-                    "provider": "packet",
-                    "gpu_type": gpu_type,
-                    "ip_address": ip_address,
-                    "ssh_port": ssh_port,
-                    "ssh_user": conn_info.get("username") or "ubuntu",
-                    "status": "active",
-                    "details": details,
-                }
+                port_num = int(ssh_port)
+                tcp_ready = False
+                for _ in range(6):
+                    try:
+                        with socket.create_connection((ip_address, port_num), timeout=3):
+                            tcp_ready = True
+                            break
+                    except Exception:
+                        time.sleep(2)
+
+                if tcp_ready or (time.perf_counter() - start_time >= timeout_seconds - 10):
+                    return {
+                        "instance_id": instance_id,
+                        "name": name,
+                        "provider": "packet",
+                        "gpu_type": gpu_type,
+                        "ip_address": ip_address,
+                        "ssh_port": ssh_port,
+                        "ssh_user": conn_info.get("username") or "ubuntu",
+                        "status": "active",
+                        "details": details,
+                    }
             elif state in {"failed", "error"}:
                 raise RuntimeError(f"Instance {instance_id} entered error state: {details}")
             time.sleep(5)
