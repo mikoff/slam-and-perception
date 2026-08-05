@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -99,78 +99,124 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
         r["split"], r["image"]["source_dataset"], r["source_split"],
         str(r["image"]["source_image_id"]), r["image"]["source_file_name"],
     ))
-    output_data = {
-        "train": {"images": [], "annotations": [], "categories": taxonomy.categories},
-        "val": {"images": [], "annotations": [], "categories": taxonomy.categories},
-    }
-    link_counts = defaultdict(int)
-    image_ids = {"train": 0, "val": 0}
-    progress = Progress("Merging exports", "images")
+
+    # Group records by split and free the main records list to save memory
+    records_by_split = defaultdict(list)
     for record in records:
-        split = record["split"]
-        image_ids[split] += 1
-        image_id = image_ids[split]
-        source = Path(record["image"]["raw_image_path"]).resolve(strict=True)
-        source_dataset = record["image"]["source_dataset"]
-        source_split = record["source_split"]
-        filename = "__".join((
-            _stable_token(source_dataset), _stable_token(source_split),
-            _stable_token(record["image"]["source_image_id"]), _stable_token(record["image"]["source_file_name"]),
-        ))
-        destination = config.workspace_root / "output" / "images" / split / filename
-        action = link_image(source, destination, "symlink", True, force)
-        link_counts[action] += 1
-        camera = "fisheye" if source_dataset == "woodscape_rgb_fisheye" else "perspective"
-        channel = Path(record["image"]["source_file_name"]).stem if camera == "fisheye" else "unknown"
-        output_data[split]["images"].append({
-            "id": image_id, "file_name": f"images/{split}/{filename}",
-            "width": record["image"]["width"], "height": record["image"]["height"],
-            "source_dataset": source_dataset, "source_split": source_split,
-            "source_image_id": str(record["image"]["source_image_id"]),
-            "source_file_name": record["image"]["source_file_name"],
-            "camera_type": camera, "camera_channel": channel,
-            "background_supervision": source_dataset == "coco_2017",
-        })
-        prepared = record["annotations"]
-        for annotation in prepared:
-            annotation["image_id"] = image_id
-            annotation.pop("id", None)
-        prepared.sort(key=lambda a: (
-            a["category_id"], *map(float, a["bbox"]), str(a.get("source_annotation_id", "")),
-        ))
-        output_data[split]["annotations"].extend(prepared)
-        record["annotations"] = []
-        progress.add()
-    progress.finish()
-    for split, data in output_data.items():
-        for annotation_id, annotation in enumerate(data["annotations"], 1):
+        records_by_split[record["split"]].append(record)
+    
+    records = None
+    import gc
+    gc.collect()
+
+    link_counts = defaultdict(int)
+    results = {}
+    background_report = None
+
+    for split in ("train", "val"):
+        split_records = records_by_split[split]
+        output_data = {"images": [], "annotations": [], "categories": taxonomy.categories}
+        image_id = 0
+        progress = Progress(f"Merging {split} exports", "images")
+        
+        for record in split_records:
+            image_id += 1
+            source = Path(record["image"]["raw_image_path"]).resolve(strict=True)
+            source_dataset = record["image"]["source_dataset"]
+            source_split = record["source_split"]
+            filename = "__".join((
+                _stable_token(source_dataset), _stable_token(source_split),
+                _stable_token(record["image"]["source_image_id"]), _stable_token(record["image"]["source_file_name"]),
+            ))
+            destination = config.workspace_root / "output" / "images" / split / filename
+            action = link_image(source, destination, "symlink", True, force)
+            link_counts[action] += 1
+            camera = "fisheye" if source_dataset == "woodscape_rgb_fisheye" else "perspective"
+            channel = Path(record["image"]["source_file_name"]).stem if camera == "fisheye" else "unknown"
+            
+            output_data["images"].append({
+                "id": image_id, "file_name": f"images/{split}/{filename}",
+                "width": record["image"]["width"], "height": record["image"]["height"],
+                "source_dataset": source_dataset, "source_split": source_split,
+                "source_image_id": str(record["image"]["source_image_id"]),
+                "source_file_name": record["image"]["source_file_name"],
+                "camera_type": camera, "camera_channel": channel,
+                "background_supervision": source_dataset == "coco_2017",
+            })
+            
+            prepared = record["annotations"]
+            for annotation in prepared:
+                annotation["image_id"] = image_id
+                annotation.pop("id", None)
+            prepared.sort(key=lambda a: (
+                a["category_id"], *map(float, a["bbox"]), str(a.get("source_annotation_id", "")),
+            ))
+            output_data["annotations"].extend(prepared)
+            
+            record.clear()
+            progress.add()
+            
+        progress.finish()
+        
+        # Free records memory for this split
+        records_by_split[split] = None
+        gc.collect()
+
+        for annotation_id, annotation in enumerate(output_data["annotations"], 1):
             annotation["id"] = annotation_id
+
         write_json(
             config.workspace_root / "output" / "annotations" / f"instances_{split}.json",
-            data,
+            output_data,
             compact=True,
         )
-    manifests = {
-        split: build_manifest(data, split) for split, data in output_data.items()
-    }
-    background_report = derive_trusted_background(config, taxonomy, manifests)
-    for split, manifest in manifests.items():
+
+        results[split] = {"images": len(output_data["images"]), "annotations": len(output_data["annotations"])}
+
+        # Build proposals manifest
+        manifest = build_manifest(output_data, split)
+        output_data = None
+        gc.collect()
+
+        # Derive trusted background for this split
+        split_bg_report = derive_trusted_background(config, taxonomy, {split: manifest})
+
         write_json(
             config.workspace_root / "output" / "annotations" / f"proposals_{split}.json",
             manifest,
             compact=True,
         )
+
+        manifest = None
+        gc.collect()
+
+        if background_report is None:
+            background_report = split_bg_report
+        else:
+            bg_counts = Counter(background_report.get("counts", {}))
+            bg_counts.update(split_bg_report.get("counts", {}))
+            bg_sources = Counter(background_report.get("source_category_instances", {}))
+            bg_sources.update(split_bg_report.get("source_category_instances", {}))
+            background_report["counts"] = dict(sorted(bg_counts.items()))
+            background_report["source_category_instances"] = dict(sorted(bg_sources.items()))
+
     write_json(config.reports / "trusted_background.json", background_report)
+    
     stale_links_removed = 0
     if force:
-        referenced = {
-            image["file_name"]
-            for data in output_data.values()
-            for image in data["images"]
-        }
+        # Memory-efficiently scan references using ijson
+        referenced = set()
+        for split in ("train", "val"):
+            path = config.workspace_root / "output" / "annotations" / f"instances_{split}.json"
+            if path.exists():
+                import ijson
+                with open(path, "rb") as f:
+                    for filename in ijson.items(f, "images.item.file_name"):
+                        referenced.add(filename)
         stale_links_removed = prune_unreferenced_image_links(
             config.workspace_root / "output" / "images", referenced
         )
+
     write_json(config.reports / "split_report.json", {key: dict(value) for key, value in split_report.items()})
     write_json(config.reports / "category_mapping.json", {
         name: category_id for name, category_id in taxonomy.category_ids.items()
@@ -190,4 +236,5 @@ def merge_exports(config: Config, taxonomy: Taxonomy, force: bool = False) -> di
         "stale_final_links_removed": stale_links_removed,
         "estimated_storage_saved": previous.get("intermediate_storage_saved", 0) + final_saved,
     })
-    return {split: {"images": len(data["images"]), "annotations": len(data["annotations"])} for split, data in output_data.items()}
+    return results
+

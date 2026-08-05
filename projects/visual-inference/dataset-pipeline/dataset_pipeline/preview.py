@@ -68,7 +68,12 @@ def generate_previews(config: Config) -> dict[str, int]:
             canonical = category_names[annotation["category_id"]]
             label = f"{canonical} <- {annotation['source_category']} [{dataset}] #{annotation['id']}"
             labels.append(label)
-            draw.rectangle((x, y, x + width, y + height), outline=(255, 40, 40), width=max(2, image.width // 600))
+            quad = annotation.get("quad")
+            if quad:
+                points = [(float(p[0]), float(p[1])) for p in quad]
+                draw.line(points + [points[0]], fill=(255, 40, 40), width=max(2, image.width // 600))
+            else:
+                draw.rectangle((x, y, x + width, y + height), outline=(255, 40, 40), width=max(2, image.width // 600))
             draw.text((x + 2, max(0, y - 12)), label, fill=(255, 40, 40), stroke_width=2, stroke_fill=(255, 255, 255))
         filename = f"{dataset}__{info['id']:08d}.jpg"
         output = config.reports / "previews" / split / filename
