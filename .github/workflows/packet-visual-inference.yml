@@ -38,8 +38,8 @@ on:
         description: 'Resume Checkpoint Path (optional, e.g. /workspace/runs/my_run/last.pt)'
         required: false
         type: string
-      pool_id:
-        description: 'Pool ID (for Packet.ai)'
+      extra_params:
+        description: 'Extra provider parameters (JSON, e.g. {"pool_id": "144"})'
         required: false
         type: string
 
@@ -76,12 +76,12 @@ jobs:
           CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
           CLOUD_PERSISTENT_VOLUME_ID: ${{ secrets.CLOUD_PERSISTENT_VOLUME_ID }}
           CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
-          CLOUD_POOL_ID: ${{ inputs.pool_id || secrets.CLOUD_POOL_ID || secrets.PACKET_POOL_ID }}
         run: |
           uv run python scripts/cloud/cli.py start_instance \
             --provider "${{ inputs.provider }}" \
             --gpu-type "${{ inputs.gpu_type }}" \
-            --container-image "${{ inputs.container_image }}" > instance.json
+            --container-image "${{ inputs.container_image }}" \
+            ${{ inputs.extra_params && format('--extra-json ''{0}''', inputs.extra_params) || '' }} > instance.json
           cat instance.json
           INSTANCE_ID=$(jq -r .instance_id instance.json)
           IP_ADDRESS=$(jq -r .ip_address instance.json)
