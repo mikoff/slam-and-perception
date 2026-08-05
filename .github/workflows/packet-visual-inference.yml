@@ -99,10 +99,26 @@ jobs:
           echo "SSH_USER=$SSH_USER" >> $GITHUB_ENV
 
       - name: Configure SSH Key
+        env:
+          RAW_PRIVATE_KEY: ${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          if [[ -z "${RAW_PRIVATE_KEY:-}" ]]; then
+            echo "--> Error: Neither CLOUD_SSH_PRIVATE_KEY nor SSH_PRIVATE_KEY secret is set in GitHub Secrets!"
+            exit 1
+          fi
+          printf '%s\n' "$RAW_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+
+          echo "--> Validating SSH private key format..."
+          if ssh-keygen -l -f ~/.ssh/id_rsa >/dev/null 2>&1; then
+            echo "--> Private key fingerprint: $(ssh-keygen -l -f ~/.ssh/id_rsa)"
+          else
+            echo "--> Error: The key written to ~/.ssh/id_rsa is invalid or corrupted."
+            echo "    Please check your CLOUD_SSH_PRIVATE_KEY secret in GitHub."
+            exit 1
+          fi
+
           echo "--> Scanning SSH host key on ${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
           KEY_FOUND=0
           for i in {1..30}; do
