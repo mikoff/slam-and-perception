@@ -38,6 +38,10 @@ on:
         description: 'Resume Checkpoint Path (optional, e.g. /workspace/runs/my_run/last.pt)'
         required: false
         type: string
+      pool_id:
+        description: 'Pool ID (for Packet.ai)'
+        required: false
+        type: string
 
 jobs:
   cloud-training:
@@ -72,6 +76,7 @@ jobs:
           CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
           CLOUD_PERSISTENT_VOLUME_ID: ${{ secrets.CLOUD_PERSISTENT_VOLUME_ID }}
           CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
+          CLOUD_POOL_ID: ${{ inputs.pool_id || secrets.CLOUD_POOL_ID || secrets.PACKET_POOL_ID }}
         run: |
           uv run python scripts/cloud_orchestrator.py launch \
             --provider "${{ inputs.provider }}" \

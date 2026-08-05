@@ -70,6 +70,7 @@ class RunPodProvider:
         ssh_key_id: str | None,
         name_prefix: str,
         container_image: str,
+        pool_id: str | None = None,
         timeout_seconds: int = 300,
     ) -> dict[str, Any]:
         mapped_gpu = self.GPU_MAPPING.get(gpu_type.lower(), gpu_type)
@@ -180,6 +181,7 @@ class PacketProvider:
         ssh_key_id: str | None,
         name_prefix: str,
         container_image: str,
+        pool_id: str | None = None,
         timeout_seconds: int = 300,
     ) -> dict[str, Any]:
         url = f"{self.api_url}/api/v1/instances"
@@ -188,6 +190,8 @@ class PacketProvider:
             "name": name,
             "gpu_type": gpu_type,
         }
+        if pool_id:
+            payload["pool_id"] = pool_id
         if volume_id:
             payload["existing_shared_volume_id"] = volume_id
         if ssh_key_id:
@@ -256,6 +260,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
 
+    launch_p.add_argument(
+        "--pool-id",
+        default=os.getenv("CLOUD_POOL_ID") or os.getenv("PACKET_POOL_ID") or os.getenv("POOL_ID"),
+    )
+
     term_p = subparsers.add_parser("terminate")
     term_p.add_argument("--provider", default=os.getenv("CLOUD_PROVIDER", "runpod"), choices=["runpod", "packet"])
     term_p.add_argument("--api-url", default=os.getenv("CLOUD_API_URL"))
@@ -277,7 +286,6 @@ def main() -> None:
         print(json.dumps({"error": "CLOUD_API_KEY is required"}), file=sys.stderr)
         sys.exit(1)
 
-
     provider_name = args.provider.lower()
     if provider_name == "runpod":
         provider = RunPodProvider(api_key=args.api_key, api_url=args.api_url)
@@ -295,6 +303,7 @@ def main() -> None:
                 ssh_key_id=args.ssh_key_id,
                 name_prefix=args.name_prefix,
                 container_image=args.container_image,
+                pool_id=args.pool_id,
             )
             print(json.dumps(res, indent=2))
         except Exception as err:
