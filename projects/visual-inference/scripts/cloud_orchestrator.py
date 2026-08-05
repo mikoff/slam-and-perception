@@ -192,8 +192,10 @@ class PacketProvider:
         }
         if pool_id:
             payload["pool_id"] = pool_id
+        # Shared volumes are not supported for RTX 4090 instances on Packet.ai
         if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
-            payload["existing_shared_volume_id"] = volume_id
+            if gpu_type.lower() != "rtx4090":
+                payload["existing_shared_volume_id"] = volume_id
         if ssh_key_id:
             payload["ssh_key_id"] = ssh_key_id
 
