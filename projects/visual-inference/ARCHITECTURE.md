@@ -37,6 +37,7 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 - Quad checkpoints contain model/EMA, EMA ramp state, optimizer, scheduler, AMP
   scaler, complete config, curriculum, epoch/batch position, and deterministic
   resume state.
+- Lean cloud training pipeline (RunPod / Packet.ai + GHA) stages datasets from S3 to NVMe via `aws s3 sync`, saves checkpoints directly to mounted persistent network volume (`/mnt/nfs/runs/` or `/workspace/runs/`), logs to W&B, and guarantees instance cleanup via GHA `if: always()` traps.
 - Validation caches GT/proposal IoU matrices and evaluates exact polygon IoU/NMS.
 
 # Local Constraints & Gotchas

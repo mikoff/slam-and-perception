@@ -16,7 +16,6 @@ Run its completion checks from this directory:
 
 ```bash
 uv run --group dev pytest -q tests/student_detector
-uv run python scripts/verify_phase2.py
 ```
 
 ## Phase 3 proposal training
@@ -33,6 +32,12 @@ uv run python scripts/audit_phase3_data.py --samples 300
 uv run python scripts/train_phase3.py --overfit-images 50 --epochs 20
 uv run python scripts/train_phase3.py --config configs/phase3.yaml
 ```
+
+### Cloud Training Pipeline
+
+For single-GPU automated training on Packet.ai via GitHub Actions, see:
+- [`docs/cloud_training_runbook.md`](docs/cloud_training_runbook.md) (Complete Step-by-Step Instructions)
+- [`docs/packet_cloud_training_plan.md`](docs/packet_cloud_training_plan.md) (Architecture Blueprint)
 
 ## Phase 1 dataset preparation
 

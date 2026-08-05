@@ -1,0 +1,124 @@
+name: Cloud Production Training (Lean)
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'Cloud GPU Provider'
+        required: true
+        default: 'runpod'
+        type: choice
+        options:
+          - runpod
+          - packet
+      gpu_type:
+        description: 'GPU Type'
+        required: true
+        default: 'rtx4090'
+        type: choice
+        options:
+          - rtx4090
+          - a100
+          - l40s
+      container_image:
+        description: 'Container Image (for RunPod)'
+        required: false
+        default: 'runpod/pytorch:2.5.1-py3.11-cuda12.4.1-devel-ubuntu22.04'
+        type: string
+      config_path:
+        description: 'Training Configuration Path'
+        required: true
+        default: 'configs/phase3_attnres.yaml'
+        type: string
+      wandb_run_name:
+        description: 'W&B Run Name (optional)'
+        required: false
+        type: string
+      resume_path:
+        description: 'Resume Checkpoint Path (optional, e.g. /workspace/runs/my_run/last.pt)'
+        required: false
+        type: string
+
+jobs:
+  cloud-training:
+    name: Run Cloud Training
+    runs-on: ubuntu-latest
+    environment: cloud-production
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: 'projects/visual-inference/pyproject.toml'
+
+      - name: Run Local Sanity Tests
+        working-directory: projects/visual-inference
+        run: |
+          uv sync --frozen --group dev
+          uv run pytest -q tests
+
+      - name: Provision Cloud GPU Instance
+        id: provision
+        working-directory: projects/visual-inference
+        env:
+          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
+          CLOUD_PERSISTENT_VOLUME_ID: ${{ secrets.CLOUD_PERSISTENT_VOLUME_ID }}
+          CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
+        run: |
+          uv run python scripts/cloud_orchestrator.py launch \
+            --provider "${{ inputs.provider }}" \
+            --gpu-type "${{ inputs.gpu_type }}" \
+            --container-image "${{ inputs.container_image }}" > instance.json
+          cat instance.json
+          echo "INSTANCE_ID=$(jq -r .instance_id instance.json)" >> $GITHUB_ENV
+          echo "IP_ADDRESS=$(jq -r .ip_address instance.json)" >> $GITHUB_ENV
+          echo "SSH_PORT=$(jq -r '.ssh_port // 22' instance.json)" >> $GITHUB_ENV
+
+      - name: Configure SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.CLOUD_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} >> ~/.ssh/known_hosts
+
+      - name: Execute Remote Cloud Training
+        run: |
+          ssh -p ${{ env.SSH_PORT }} devuser@${{ env.IP_ADDRESS }} "\
+            REPO_URL='https://github.com/${{ github.repository }}.git' \
+            COMMIT_SHA='${{ github.sha }}' \
+            S3_BUCKET='${{ secrets.S3_BUCKET }}' \
+            S3_ENDPOINT_URL='${{ secrets.S3_ENDPOINT_URL }}' \
+            AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}' \
+            AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
+            AWS_DEFAULT_REGION='${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}' \
+            WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}' \
+            WANDB_PROJECT='${{ secrets.WANDB_PROJECT }}' \
+            WANDB_ENTITY='${{ secrets.WANDB_ENTITY }}' \
+            CONFIG_PATH='${{ inputs.config_path }}' \
+            WANDB_RUN_NAME='${{ inputs.wandb_run_name }}' \
+            RESUME_PATH='${{ inputs.resume_path }}' \
+            bash -s" < projects/visual-inference/scripts/cloud/remote_entrypoint.sh
+
+
+      - name: Terminate Cloud GPU Instance (Cleanup)
+        if: always()
+        working-directory: projects/visual-inference
+        env:
+          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY }}
+        run: |
+          if [ -n "${{ env.INSTANCE_ID }}" ]; then
+            echo "Terminating instance ${{ env.INSTANCE_ID }} on provider ${{ inputs.provider }}..."
+            uv run python scripts/cloud_orchestrator.py terminate \
+              --provider "${{ inputs.provider }}" \
+              --instance-id "${{ env.INSTANCE_ID }}"
+          fi
+
+

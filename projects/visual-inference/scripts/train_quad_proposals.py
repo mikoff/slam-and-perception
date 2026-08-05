@@ -71,6 +71,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--force-index", action="store_true")
+    parser.add_argument("--wandb-project", type=str, help="Weights & Biases project name")
+    parser.add_argument("--wandb-entity", type=str, help="Weights & Biases entity name")
+    parser.add_argument("--wandb-run-name", type=str, help="Weights & Biases run name")
     return parser.parse_args()
 
 
@@ -264,6 +267,9 @@ def main() -> None:
         use_ema_for_validation=not overfit,
         resume=args.resume,
         validation_interval=args.validation_interval,
+        wandb_project=args.wandb_project,
+        wandb_entity=args.wandb_entity,
+        wandb_run_name=args.wandb_run_name,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
 

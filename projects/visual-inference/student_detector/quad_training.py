@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
 
 import torch
 from torch import Tensor
@@ -219,11 +222,32 @@ def _save_checkpoint(
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    torch.save(payload, temporary)
     if temporary.exists():
         temporary.replace(path)
     else:
         torch.save(payload, path)
+    _sync_checkpoint_to_s3(path.parent)
+
+
+def _sync_checkpoint_to_s3(output_dir: Path) -> None:
+    s3_bucket = os.getenv("S3_BUCKET")
+    if not s3_bucket:
+        return
+    run_name = os.getenv("WANDB_RUN_NAME") or output_dir.name
+    s3_endpoint = os.getenv("S3_ENDPOINT_URL")
+    cmd = [
+        "aws", "s3", "sync",
+        str(output_dir),
+        f"s3://{s3_bucket}/runs/{run_name}",
+        "--no-progress",
+    ]
+    if s3_endpoint:
+        cmd.extend(["--endpoint-url", s3_endpoint])
+    try:
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
 
 
 
@@ -242,6 +266,9 @@ def train_quad_proposals(
     use_ema_for_validation: bool = True,
     resume: Path | None = None,
     validation_interval: int = 1,
+    wandb_project: str | None = None,
+    wandb_entity: str | None = None,
+    wandb_run_name: str | None = None,
 ) -> dict[str, Any]:
     """Train the quad detector and write checkpoints plus machine-readable logs."""
     if validation_interval < 1:
@@ -281,6 +308,18 @@ def train_quad_proposals(
     metrics: dict[str, Any] = {}
     log_path = output_dir / "quad_metrics.jsonl"
     tb_writer = SummaryWriter(log_dir=str(output_dir / "tensorboard")) if SummaryWriter is not None else None
+    wandb_run = None
+    if wandb_project is not None:
+        try:
+            import wandb
+            wandb_run = wandb.init(
+                project=wandb_project,
+                entity=wandb_entity,
+                name=wandb_run_name,
+                config=asdict(config),
+            )
+        except Exception:
+            wandb_run = None
     if tb_writer is not None:
         dataset_summary = (
             "### Training Run Dataset Audit Summary\n\n"
@@ -446,6 +485,11 @@ def train_quad_proposals(
                     tb_writer.add_scalar("Train/QualityLoss", train_metrics["quality_loss"], global_step)
                     tb_writer.add_scalar("Train/CornerLoss", train_metrics["corner_loss"], global_step)
                     tb_writer.add_scalar("Train/LearningRate", optimizer.param_groups[0]["lr"], global_step)
+                if wandb_run is not None:
+                    try:
+                        wandb_run.log(train_metrics, step=global_step)
+                    except Exception:
+                        pass
 
             if max_steps is not None and global_step >= max_steps:
                 break
@@ -495,6 +539,11 @@ def train_quad_proposals(
                     tb_writer.add_scalar("Val/Recall75", metrics["recall/100@0.75"], epoch)
                 if "matched_iou/median" in metrics:
                     tb_writer.add_scalar("Val/MatchedIoUMedian", metrics["matched_iou/median"], epoch)
+            if wandb_run is not None:
+                try:
+                    wandb_run.log({"kind": "validation", **metrics}, step=global_step)
+                except Exception:
+                    pass
 
         score = metrics.get("ar/100", 0.0)
         epoch_complete = last_batch_in_epoch >= len(train_loader)
@@ -520,5 +569,10 @@ def train_quad_proposals(
             break
     if tb_writer is not None:
         tb_writer.close()
+    if wandb_run is not None:
+        try:
+            wandb_run.finish()
+        except Exception:
+            pass
     return {"global_step": global_step, "best_score": best_score, "metrics": metrics}
 
