@@ -136,7 +136,6 @@ jobs:
             WANDB_PROJECT='${{ secrets.WANDB_PROJECT }}' \
             WANDB_ENTITY='${{ secrets.WANDB_ENTITY }}' \
             CONFIG_PATH='${{ inputs.config_path }}' \
-
             WANDB_RUN_NAME='${{ inputs.wandb_run_name }}' \
             RESUME_PATH='${{ inputs.resume_path }}' \
             bash -s" < projects/visual-inference/scripts/cloud/remote_entrypoint.sh
