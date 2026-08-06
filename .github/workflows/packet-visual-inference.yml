@@ -135,27 +135,67 @@ jobs:
           echo "--> Error: SSH never became available."
           exit 1
 
-      - name: Execute Remote Cloud Training
+      - name: Register Instance with Janitor
         run: |
-          echo "--> Connecting via SSH to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
-          ssh -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o ServerAliveCountMax=120 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o BatchMode=yes -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} "\
-            REPO_URL='https://github.com/${{ github.repository }}.git' \
-            COMMIT_SHA='${{ github.sha }}' \
-            S3_BUCKET='${{ secrets.S3_BUCKET }}' \
-            S3_ENDPOINT_URL='${{ secrets.S3_ENDPOINT_URL }}' \
-            AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}' \
-            AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
-            AWS_DEFAULT_REGION='${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}' \
-            WANDB_API_KEY='${{ secrets.WANDB_API_KEY }}' \
-            WANDB_PROJECT='${{ secrets.WANDB_PROJECT }}' \
-            WANDB_ENTITY='${{ secrets.WANDB_ENTITY }}' \
-            CONFIG_PATH='${{ inputs.config_path }}' \
-            WANDB_RUN_NAME='${{ inputs.wandb_run_name }}' \
-            RESUME_PATH='${{ inputs.resume_path }}' \
-            bash -s" < projects/visual-inference/scripts/cloud/remote_entrypoint.sh
+          echo '{"instance_id": "${{ env.INSTANCE_ID }}", "provider": "${{ inputs.provider }}", "timestamp": '$(date +%s)'}' > instance_janitor.json
+          aws s3 cp instance_janitor.json s3://${{ secrets.S3_BUCKET }}/janitor/${{ env.INSTANCE_ID }}.json --endpoint-url ${{ secrets.S3_ENDPOINT_URL }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+
+      - name: Execute Remote Cloud Training (Async via tmux)
+        run: |
+          echo "--> Creating local environment file..."
+          cat << 'EOF' > gha_env
+          REPO_URL=https://github.com/${{ github.repository }}.git
+          COMMIT_SHA=${{ github.sha }}
+          S3_BUCKET=${{ secrets.S3_BUCKET }}
+          S3_ENDPOINT_URL=${{ secrets.S3_ENDPOINT_URL }}
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+          WANDB_API_KEY=${{ secrets.WANDB_API_KEY }}
+          WANDB_PROJECT=${{ secrets.WANDB_PROJECT }}
+          WANDB_ENTITY=${{ secrets.WANDB_ENTITY }}
+          CONFIG_PATH=${{ inputs.config_path }}
+          WANDB_RUN_NAME=${{ inputs.wandb_run_name }}
+          RESUME_PATH=${{ inputs.resume_path }}
+          CLOUD_API_KEY=${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
+          CLOUD_PROVIDER=${{ inputs.provider }}
+          INSTANCE_ID=${{ env.INSTANCE_ID }}
+          EOF
+
+          echo "--> Uploading entrypoint script and env file to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}..."
+          scp -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -P ${{ env.SSH_PORT }} projects/visual-inference/scripts/cloud/remote_entrypoint.sh gha_env ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:/tmp/
+          
+          echo "--> Scrubbing local secrets file..."
+          rm gha_env
+          
+          echo "--> Launching training inside detached tmux session..."
+          ssh -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} bash -s << 'EOF'
+            tmux new-session -d -s training 'set -a; source /tmp/gha_env; bash /tmp/remote_entrypoint.sh 2>&1 | tee /tmp/training.log'
+          EOF
+
+      - name: Wait for Training Startup Confirmation
+        run: |
+          echo "--> Tailing logs to ensure PyTorch and Autotune start correctly..."
+          ssh -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} bash -s << 'EOF'
+            timeout 900 tail -f /tmp/training.log | while read line; do
+              echo "$line"
+              if [[ "$line" == *'Starting quad proposal training'* ]] || [[ "$line" == *'Starting background periodic sync'* ]] || [[ "$line" == *'Autotune benchmark script crashed'* ]]; then
+                echo "--> 🚀 Training startup confirmed! Disconnecting GitHub Action safely..."
+                pkill -P $$ tail || true
+                exit 0
+              fi
+            done
+          EOF
+
+      - name: Mark Disconnect Safe
+        run: echo "DISCONNECT_SAFE=true" >> $GITHUB_ENV
 
       - name: Terminate Cloud GPU Instance (Cleanup)
-        if: always()
+        if: always() && env.DISCONNECT_SAFE != 'true'
         working-directory: projects/visual-inference
         env:
           CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}

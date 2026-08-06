@@ -1,0 +1,85 @@
+name: Cloud Instance Janitor
+
+on:
+  schedule:
+    # Run every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  cleanup-orphaned-instances:
+    name: Reaper
+    runs-on: ubuntu-latest
+    environment: packet-production
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: projects/visual-inference
+        run: uv sync --frozen --group dev
+
+      - name: Reap Orphaned Instances
+        working-directory: projects/visual-inference
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${S3_BUCKET:-}" ]; then
+            echo "--> S3_BUCKET not set. Exiting."
+            exit 0
+          fi
+
+          mkdir -p /tmp/janitor
+          ENDPOINT_FLAG=""
+          if [ -n "${S3_ENDPOINT_URL:-}" ]; then
+            ENDPOINT_FLAG="--endpoint-url ${S3_ENDPOINT_URL}"
+          fi
+
+          echo "--> Scanning S3 for active training instances..."
+          FILES=$(aws s3 ls "s3://${S3_BUCKET}/janitor/" $ENDPOINT_FLAG | awk '{print $4}' | grep '\.json$' || true)
+
+          if [ -z "$FILES" ]; then
+            echo "--> No active instances tracked. System clean."
+            exit 0
+          fi
+
+          CURRENT_TIME=$(date +%s)
+          MAX_AGE=86400 # 24 hours in seconds
+
+          for FILE in $FILES; do
+            echo "--> Inspecting ${FILE}..."
+            aws s3 cp "s3://${S3_BUCKET}/janitor/${FILE}" "/tmp/janitor/${FILE}" $ENDPOINT_FLAG --quiet
+            
+            TIMESTAMP=$(jq -r '.timestamp // 0' "/tmp/janitor/${FILE}")
+            INSTANCE_ID=$(jq -r '.instance_id' "/tmp/janitor/${FILE}")
+            PROVIDER=$(jq -r '.provider' "/tmp/janitor/${FILE}")
+            
+            AGE=$((CURRENT_TIME - TIMESTAMP))
+            
+            if [ "$AGE" -gt "$MAX_AGE" ]; then
+              echo "--> ⚠️ Instance ${INSTANCE_ID} is ${AGE} seconds old (exceeds 24h limit)!"
+              echo "--> TERMINATING ${INSTANCE_ID}..."
+              uv run python scripts/cloud/cli.py kill_instance --provider "${PROVIDER}" --instance-id "${INSTANCE_ID}" || true
+              
+              echo "--> Removing ${FILE} from S3 registry..."
+              aws s3 rm "s3://${S3_BUCKET}/janitor/${FILE}" $ENDPOINT_FLAG || true
+            else
+              echo "--> Instance ${INSTANCE_ID} is ${AGE} seconds old (under 24h limit). Skipping."
+            fi
+          done

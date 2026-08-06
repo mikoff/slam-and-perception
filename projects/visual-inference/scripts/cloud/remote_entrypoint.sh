@@ -167,10 +167,26 @@ if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
     done
   ) &
   SYNC_PID=$!
-  
-  # Ensure the background sync is killed when this script exits (even on failure)
-  trap 'echo "--> Cleaning up background processes..."; kill $SYNC_PID 2>/dev/null || true' EXIT
 fi
+
+cleanup_and_terminate() {
+  echo "--> Cleaning up background processes..."
+  kill $SYNC_PID 2>/dev/null || true
+  
+  if [[ -n "${S3_BUCKET:-}" && -n "${INSTANCE_ID:-}" ]]; then
+    echo "--> Deregistering instance from Janitor..."
+    aws s3 rm "s3://${S3_BUCKET}/janitor/${INSTANCE_ID}.json" ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} || true
+  fi
+  
+  if [[ -n "${CLOUD_API_KEY:-}" && -n "${INSTANCE_ID:-}" ]]; then
+    echo "--> Self-terminating instance ${INSTANCE_ID}..."
+    export CLOUD_API_KEY="${CLOUD_API_KEY}"
+    .venv/bin/python scripts/cloud/cli.py kill_instance --provider "${CLOUD_PROVIDER:-packet}" --instance-id "${INSTANCE_ID}" || true
+  fi
+}
+
+# Ensure the background sync and instance are killed when this script exits (even on failure)
+trap cleanup_and_terminate EXIT
 
 .venv/bin/python scripts/train_quad_proposals.py \
   --config "${CONFIG_PATH}" \
