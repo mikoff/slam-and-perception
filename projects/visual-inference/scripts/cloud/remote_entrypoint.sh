@@ -3,7 +3,18 @@ set -Eeuo pipefail
 
 echo "=== [Cloud Training Remote Entrypoint] ==="
 
-# 0. Direct GitHub Checkout if requested
+# 0. Ensure git is installed
+if ! command -v git &> /dev/null; then
+  echo "--> Installing git..."
+  export DEBIAN_FRONTEND=noninteractive
+  if command -v sudo &> /dev/null; then
+    sudo -E apt-get update && sudo -E apt-get install -y git
+  else
+    apt-get update && apt-get install -y git
+  fi
+fi
+
+# 0.1 Direct GitHub Checkout if requested
 if [[ -n "${REPO_URL:-}" ]]; then
   echo "--> Cloning repository directly from GitHub: ${REPO_URL} (${COMMIT_SHA:-main})..."
   WORK_DIR="/tmp/workspace_$(date +%s)"
