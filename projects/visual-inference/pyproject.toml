@@ -43,3 +43,8 @@ explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch" }
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
