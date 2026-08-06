@@ -112,13 +112,22 @@ class PacketProvider(AbstractCloudProvider):
     def _resolve_ssh_key_id(
         self, ssh_key_id: str | None, extra_params: dict[str, Any] | None, kwargs: dict[str, Any]
     ) -> str | None:
+        explicit_id = None
         if ssh_key_id and ssh_key_id.strip().lower() not in {"none", "null", "false", ""}:
-            return ssh_key_id
-        if extra_params and extra_params.get("ssh_key_id"):
-            return str(extra_params["ssh_key_id"])
-        env_key = os.getenv("CLOUD_SSH_KEY_ID") or os.getenv("PACKET_SSH_KEY_ID")
-        if env_key:
-            return env_key
+            explicit_id = ssh_key_id
+        elif extra_params and extra_params.get("ssh_key_id"):
+            explicit_id = str(extra_params["ssh_key_id"])
+        elif os.getenv("CLOUD_SSH_KEY_ID"):
+            explicit_id = os.getenv("CLOUD_SSH_KEY_ID")
+        elif os.getenv("PACKET_SSH_KEY_ID"):
+            explicit_id = os.getenv("PACKET_SSH_KEY_ID")
+            
+        if explicit_id:
+            # Check if the user accidentally passed their actual public key string instead of an ID
+            if "ssh-rsa" in explicit_id or "ssh-ed25519" in explicit_id or "ecdsa-" in explicit_id:
+                explicit_id = None
+            else:
+                return explicit_id
 
         url = f"{self.api_url}/api/v1/ssh-keys"
         registered_keys: list[dict[str, Any]] = []
@@ -175,17 +184,36 @@ class PacketProvider(AbstractCloudProvider):
 
         payload: dict[str, Any] = {
             "name": name,
-            "gpu_type": gpu_type,
-            "pool_id": pool_id,
         }
-
+        
+        try:
+            payload["pool_id"] = int(pool_id)
+        except (ValueError, TypeError):
+            payload["pool_id"] = pool_id
+            
+        # Omit gpu_type if pool_id was explicitly provided in extra_params to avoid conflicts
+        explicit_pool = False
+        if extra_params and extra_params.get("pool_id"):
+            explicit_pool = True
+        elif kwargs.get("pool_id"):
+            explicit_pool = True
+            
+        if not explicit_pool:
+            payload["gpu_type"] = gpu_type
+        
         # Shared volumes are not supported for RTX 4090 instances on Packet.ai
         if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
             if gpu_type.lower() != "rtx4090":
                 payload["existing_shared_volume_id"] = volume_id
         if resolved_ssh_key_id:
-            payload["ssh_key_id"] = resolved_ssh_key_id
-            payload["ssh_key_ids"] = [resolved_ssh_key_id]
+            try:
+                # Try to send SSH key ID as integer if numeric
+                num_id = int(resolved_ssh_key_id)
+                payload["ssh_key_id"] = num_id
+                payload["ssh_key_ids"] = [num_id]
+            except ValueError:
+                payload["ssh_key_id"] = resolved_ssh_key_id
+                payload["ssh_key_ids"] = [resolved_ssh_key_id]
 
         response = make_json_request(url, self.api_key, method="POST", payload=payload)
         resp_data = response.get("data") if isinstance(response.get("data"), dict) else response

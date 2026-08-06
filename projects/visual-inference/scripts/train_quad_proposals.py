@@ -24,6 +24,7 @@ import torch
 
 from torch.utils.data import DataLoader
 
+from student_detector.autotune import autotune_optimal_batch_size
 from student_detector.config import load_phase3_config
 from student_detector.data import DomainMixtureBatchSampler, select_source_mixture_indices
 from student_detector.model import QuadProposalDetector
@@ -71,6 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--force-index", action="store_true")
+    parser.add_argument("--autotune", action="store_true", help="Automatically probe GPU VRAM and benchmark optimal batch size before training")
     parser.add_argument("--wandb-project", type=str, help="Weights & Biases project name")
     parser.add_argument("--wandb-entity", type=str, help="Weights & Biases entity name")
     parser.add_argument("--wandb-run-name", type=str, help="Weights & Biases run name")
@@ -86,6 +88,23 @@ def main() -> None:
     )
     overfit = args.overfit_images is not None or bool(overfit_image_ids)
     config = load_phase3_config(args.config)
+
+    # Resolve active device
+    if args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(args.device)
+
+    # Dynamic VRAM & Batch Size Autotuning
+    import os
+    if args.autotune or os.getenv("AUTOTUNE", "").lower() in {"1", "true", "yes"}:
+        tuned_batch, tuned_acc = autotune_optimal_batch_size(config, device)
+        config = replace(
+            config,
+            data=replace(config.data, batch_size=tuned_batch),
+            schedule=replace(config.schedule, accumulation_steps=tuned_acc),
+        )
+
     if args.epochs is not None or args.no_amp:
         config = replace(
             config,

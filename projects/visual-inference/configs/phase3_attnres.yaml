@@ -6,7 +6,7 @@ data:
   image_root: ../../../data/visual-inference-datasets/output
   index_dir: ../artifacts/phase3/index
   input_size: 384
-  batch_size: 20
+  batch_size: 32
   workers: 4
   empty_fraction: 0.075
   domain_weights:

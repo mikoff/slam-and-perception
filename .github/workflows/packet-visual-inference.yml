@@ -27,6 +27,11 @@ on:
         required: false
         default: 'runpod/pytorch:2.5.1-py3.11-cuda12.4.1-devel-ubuntu22.04'
         type: string
+      batch_size:
+        description: 'Batch size per GPU (default 32 for RTX 6000 96GB VRAM, or custom)'
+        required: false
+        default: '32'
+        type: string
       config_path:
         description: 'Training Configuration Path'
         required: true
@@ -71,6 +76,27 @@ jobs:
           uv sync --frozen --group dev
           uv run pytest -q tests
 
+      - name: Configure Local SSH Key
+        env:
+          RAW_PRIVATE_KEY: ${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          if [[ -z "${RAW_PRIVATE_KEY:-}" ]]; then
+            echo "--> Error: Neither CLOUD_SSH_PRIVATE_KEY nor SSH_PRIVATE_KEY secret is set in GitHub Secrets!"
+            exit 1
+          fi
+          printf '%s\n' "$RAW_PRIVATE_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          echo "--> Validating SSH private key format..."
+          if ssh-keygen -l -f ~/.ssh/id_rsa >/dev/null 2>&1; then
+            echo "--> Private key fingerprint: $(ssh-keygen -l -f ~/.ssh/id_rsa)"
+          else
+            echo "--> Error: The key written to ~/.ssh/id_rsa is invalid or corrupted."
+            echo "    Please check your CLOUD_SSH_PRIVATE_KEY secret in GitHub."
+            exit 1
+          fi
+
       - name: Provision Cloud GPU Instance
         id: provision
         working-directory: projects/visual-inference
@@ -100,45 +126,6 @@ jobs:
           echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
           echo "SSH_USER=$SSH_USER" >> $GITHUB_ENV
 
-      - name: Configure SSH Key
-        env:
-          RAW_PRIVATE_KEY: ${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          if [[ -z "${RAW_PRIVATE_KEY:-}" ]]; then
-            echo "--> Error: Neither CLOUD_SSH_PRIVATE_KEY nor SSH_PRIVATE_KEY secret is set in GitHub Secrets!"
-            exit 1
-          fi
-          printf '%s\n' "$RAW_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-          echo "--> Validating SSH private key format..."
-          if ssh-keygen -l -f ~/.ssh/id_rsa >/dev/null 2>&1; then
-            echo "--> Private key fingerprint: $(ssh-keygen -l -f ~/.ssh/id_rsa)"
-          else
-            echo "--> Error: The key written to ~/.ssh/id_rsa is invalid or corrupted."
-            echo "    Please check your CLOUD_SSH_PRIVATE_KEY secret in GitHub."
-            exit 1
-          fi
-
-          echo "--> Scanning SSH host key on ${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
-          KEY_FOUND=0
-          for i in {1..30}; do
-            SCAN_RESULT=$(ssh-keyscan -T 5 -p ${{ env.SSH_PORT }} -H ${{ env.IP_ADDRESS }} 2>/dev/null | grep -v '^#' || true)
-            if [[ -n "$SCAN_RESULT" ]]; then
-              echo "$SCAN_RESULT" >> ~/.ssh/known_hosts
-              echo "--> Successfully scanned SSH host key on attempt $i."
-              KEY_FOUND=1
-              break
-            fi
-            echo "  [Attempt $i/30] Remote SSH port not accepting connections yet, waiting 5s..."
-            sleep 5
-          done
-          if [[ $KEY_FOUND -eq 0 ]]; then
-            echo "--> Error: Could not connect to SSH daemon on ${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }} after 150s."
-            exit 1
-          fi
-
       - name: Execute Remote Cloud Training
         run: |
           echo "--> Connecting via SSH to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
@@ -154,6 +141,7 @@ jobs:
             WANDB_PROJECT='${{ secrets.WANDB_PROJECT }}' \
             WANDB_ENTITY='${{ secrets.WANDB_ENTITY }}' \
             CONFIG_PATH='${{ inputs.config_path }}' \
+            BATCH_SIZE='${{ inputs.batch_size }}' \
             WANDB_RUN_NAME='${{ inputs.wandb_run_name }}' \
             RESUME_PATH='${{ inputs.resume_path }}' \
             bash -s" < projects/visual-inference/scripts/cloud/remote_entrypoint.sh

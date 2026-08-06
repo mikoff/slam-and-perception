@@ -95,6 +95,17 @@ fi
 if [[ -n "${WANDB_RUN_NAME:-}" ]]; then
   EXTRA_ARGS+=("--wandb-run-name" "${WANDB_RUN_NAME}")
 fi
+if [[ -n "${BATCH_SIZE:-}" ]]; then
+  echo "--> Overriding batch_size: ${BATCH_SIZE}"
+  EXTRA_ARGS+=("--batch-size" "${BATCH_SIZE}")
+else
+  echo "--> Enabling dynamic VRAM & batch size autotuning for target GPU..."
+  EXTRA_ARGS+=("--autotune")
+fi
+if [[ -n "${WORKERS:-}" ]]; then
+  echo "--> Overriding num_workers: ${WORKERS}"
+  EXTRA_ARGS+=("--workers" "${WORKERS}")
+fi
 if [[ -n "${RESUME_PATH:-}" ]]; then
   echo "--> Resuming training from checkpoint: ${RESUME_PATH}"
   EXTRA_ARGS+=("--resume" "${RESUME_PATH}")
