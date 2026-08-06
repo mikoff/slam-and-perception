@@ -23,9 +23,9 @@ on:
           - a100
           - b200
       container_image:
-        description: 'Container Image (for RunPod)'
-        required: false
-        default: 'runpod/pytorch:2.5.1-py3.11-cuda12.4.1-devel-ubuntu22.04'
+        description: 'Base Docker Image for Training'
+        required: true
+        default: 'nvcr.io/nvidia/pytorch:26.07-py3'
         type: string
 
       config_path:
