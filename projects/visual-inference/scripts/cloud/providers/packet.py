@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import time
 from typing import Any
 
@@ -78,6 +79,36 @@ class PacketProvider(AbstractCloudProvider):
             f"Please specify a valid --gpu-type (e.g. 'rtx6000', 'l40s', 'a100', 'b200') or pass pool_id in extra_params."
         )
 
+    def _get_local_public_key(self) -> str | None:
+        """Derive or read local public key from standard SSH locations."""
+        for key_path in [
+            os.path.expanduser("~/.ssh/id_rsa"),
+            os.path.expanduser("~/.ssh/id_ed25519"),
+            os.path.expanduser("~/.ssh/id_ecdsa"),
+        ]:
+            if os.path.exists(key_path):
+                pub_file = f"{key_path}.pub"
+                if os.path.exists(pub_file):
+                    try:
+                        with open(pub_file, "r") as f:
+                            content = f.read().strip()
+                            if content.startswith("ssh-") or content.startswith("ecdsa-"):
+                                return content
+                    except Exception:
+                        pass
+                try:
+                    proc = subprocess.run(
+                        ["ssh-keygen", "-y", "-f", key_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    if proc.returncode == 0 and proc.stdout.strip():
+                        return proc.stdout.strip()
+                except Exception:
+                    pass
+        return None
+
     def _resolve_ssh_key_id(
         self, ssh_key_id: str | None, extra_params: dict[str, Any] | None, kwargs: dict[str, Any]
     ) -> str | None:
@@ -89,15 +120,40 @@ class PacketProvider(AbstractCloudProvider):
         if env_key:
             return env_key
 
-        # Dynamic auto-detection of registered SSH keys on Packet.ai
+        url = f"{self.api_url}/api/v1/ssh-keys"
+        registered_keys: list[dict[str, Any]] = []
         try:
-            url = f"{self.api_url}/api/v1/ssh-keys"
             resp = make_json_request(url, self.api_key, method="GET")
-            keys = resp.get("data", [])
-            if isinstance(keys, list) and keys and keys[0].get("id"):
-                return str(keys[0]["id"])
+            registered_keys = resp.get("data", []) if isinstance(resp.get("data"), list) else []
         except Exception:
             pass
+
+        # Check if runner has a local SSH key configured
+        local_pub = self._get_local_public_key()
+        if local_pub:
+            # 1. Match against existing registered keys on Packet.ai
+            clean_pub = local_pub.strip()
+            for key_obj in registered_keys:
+                preview = key_obj.get("keyPreview", "").replace("...", "").strip()
+                if preview and preview in clean_pub:
+                    return str(key_obj["id"])
+
+            # 2. Auto-register local public key on Packet.ai if not present yet
+            try:
+                payload = {
+                    "name": f"gha-auto-key-{int(time.time())}",
+                    "publicKey": clean_pub,
+                }
+                reg_resp = make_json_request(url, self.api_key, method="POST", payload=payload)
+                reg_data = reg_resp.get("data") if isinstance(reg_resp.get("data"), dict) else reg_resp
+                new_id = reg_data.get("id")
+                if new_id:
+                    return str(new_id)
+            except Exception:
+                pass
+
+        if registered_keys and registered_keys[0].get("id"):
+            return str(registered_keys[0]["id"])
 
         return None
 
