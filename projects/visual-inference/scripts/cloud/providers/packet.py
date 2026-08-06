@@ -171,7 +171,7 @@ class PacketProvider(AbstractCloudProvider):
         gpu_type: str,
         container_image: str,
         name_prefix: str = "vi-gha-",
-        volume_id: str | None = None,
+
         ssh_key_id: str | None = None,
         timeout_seconds: int = 300,
         extra_params: dict[str, Any] | None = None,
@@ -201,10 +201,7 @@ class PacketProvider(AbstractCloudProvider):
         if not explicit_pool:
             payload["gpu_type"] = gpu_type
         
-        # Shared volumes are not supported for RTX 4090 instances on Packet.ai
-        if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
-            if gpu_type.lower() != "rtx4090":
-                payload["existing_shared_volume_id"] = volume_id
+
         if resolved_ssh_key_id:
             try:
                 # Try to send SSH key ID as integer if numeric

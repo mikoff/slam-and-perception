@@ -45,7 +45,7 @@ class AbstractCloudProvider(abc.ABC):
         gpu_type: str,
         container_image: str,
         name_prefix: str = "vi-gha-",
-        volume_id: str | None = None,
+
         ssh_key_id: str | None = None,
         timeout_seconds: int = 300,
         extra_params: dict[str, Any] | None = None,

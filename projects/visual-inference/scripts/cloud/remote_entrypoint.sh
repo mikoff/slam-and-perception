@@ -100,7 +100,17 @@ if [[ -n "${BATCH_SIZE:-}" ]]; then
   EXTRA_ARGS+=("--batch-size" "${BATCH_SIZE}")
 else
   echo "--> Enabling dynamic VRAM & batch size autotuning for target GPU..."
-  EXTRA_ARGS+=("--autotune")
+  AUTOTUNE_JSON=$(.venv/bin/python scripts/benchmark_quad_batch.py --config "${CONFIG_PATH}")
+  OPTIMAL_BATCH=$(echo "$AUTOTUNE_JSON" | .venv/bin/python -c "import sys, json; d=json.load(sys.stdin); print(d.get('recommended_candidate', {}).get('physical_batch_size', ''))" 2>/dev/null)
+  
+  if [ -z "$OPTIMAL_BATCH" ]; then
+    echo "--> Autotune failed to find a valid candidate!"
+    echo "$AUTOTUNE_JSON"
+    exit 1
+  fi
+  
+  echo "--> Best batch size determined by autotune: ${OPTIMAL_BATCH}"
+  EXTRA_ARGS+=("--batch-size" "${OPTIMAL_BATCH}")
 fi
 if [[ -n "${WORKERS:-}" ]]; then
   echo "--> Overriding num_workers: ${WORKERS}"

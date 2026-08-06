@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
             or os.getenv("RUNPOD_API_TOKEN"),
         )
         p.add_argument("--gpu-type", default=os.getenv("CLOUD_GPU_TYPE", "rtx4090"))
-        p.add_argument("--volume-id", default=os.getenv("CLOUD_PERSISTENT_VOLUME_ID"))
+
         p.add_argument("--ssh-key-id", default=os.getenv("CLOUD_SSH_KEY_ID"))
         p.add_argument("--name-prefix", default=os.getenv("CLOUD_INSTANCE_PREFIX", "vi-gha-"))
         p.add_argument(
@@ -119,7 +119,7 @@ def main() -> None:
                 gpu_type=args.gpu_type,
                 container_image=args.container_image,
                 name_prefix=args.name_prefix,
-                volume_id=args.volume_id,
+
                 ssh_key_id=args.ssh_key_id,
                 extra_params=extra_params,
             )

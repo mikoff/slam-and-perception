@@ -35,7 +35,7 @@ class RunPodProvider(AbstractCloudProvider):
         gpu_type: str,
         container_image: str,
         name_prefix: str = "vi-gha-",
-        volume_id: str | None = None,
+
         ssh_key_id: str | None = None,
         timeout_seconds: int = 300,
         extra_params: dict[str, Any] | None = None,
@@ -66,8 +66,7 @@ class RunPodProvider(AbstractCloudProvider):
             "minMemoryInGb": 16,
             "ports": "22/tcp",
         }
-        if volume_id and volume_id.strip().lower() not in {"none", "null", "false", ""}:
-            input_data["networkVolumeId"] = volume_id
+
 
         res = self._graphql_query(mutation, {"input": input_data})
         pod_info = res.get("podFindAndDeployOnDemand")

@@ -27,11 +27,7 @@ on:
         required: false
         default: 'runpod/pytorch:2.5.1-py3.11-cuda12.4.1-devel-ubuntu22.04'
         type: string
-      batch_size:
-        description: 'Batch size per GPU (default 32 for RTX 6000 96GB VRAM, or custom)'
-        required: false
-        default: '32'
-        type: string
+
       config_path:
         description: 'Training Configuration Path'
         required: true
@@ -102,7 +98,6 @@ jobs:
         working-directory: projects/visual-inference
         env:
           CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
-          CLOUD_PERSISTENT_VOLUME_ID: ${{ secrets.CLOUD_PERSISTENT_VOLUME_ID }}
           CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
         run: |
           uv run python scripts/cloud/cli.py start_instance \
@@ -141,7 +136,7 @@ jobs:
             WANDB_PROJECT='${{ secrets.WANDB_PROJECT }}' \
             WANDB_ENTITY='${{ secrets.WANDB_ENTITY }}' \
             CONFIG_PATH='${{ inputs.config_path }}' \
-            BATCH_SIZE='${{ inputs.batch_size }}' \
+
             WANDB_RUN_NAME='${{ inputs.wandb_run_name }}' \
             RESUME_PATH='${{ inputs.resume_path }}' \
             bash -s" < projects/visual-inference/scripts/cloud/remote_entrypoint.sh
