@@ -19,7 +19,7 @@ fi
 
 # Environment defaults
 CONFIG_PATH="${CONFIG_PATH:-configs/phase3_attnres.yaml}"
-NVME_DATASET_PATH="${NVME_DATASET_PATH:-/local/nvme/dataset}"
+NVME_DATASET_PATH="${NVME_DATASET_PATH:-./dataset}"
 NFS_MOUNT_PATH="${NFS_MOUNT_PATH:-/mnt/nfs}"
 RUN_NAME="${WANDB_RUN_NAME:-vi_quad_run_$(date +%Y%m%d_%H%M%S)}"
 
@@ -39,6 +39,19 @@ mkdir -p "${NVME_DATASET_PATH}" "${OUTPUT_DIR}"
 
 echo "--> Target NVMe dataset path: ${NVME_DATASET_PATH}"
 echo "--> Output NFS checkpoint path: ${OUTPUT_DIR}"
+
+# 0.5 Setup Python Virtual Environment
+if ! command -v uv &> /dev/null; then
+  echo "--> Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+fi
+
+if [[ ! -d ".venv" ]]; then
+  echo "--> Installing dependencies via uv..."
+  uv sync --frozen --group cloud
+fi
+export PATH="$PWD/.venv/bin:$PATH"
 
 # 1. Dataset Staging from S3 to NVMe (On-The-Fly Streaming Tar Extraction or Sync)
 if [[ -n "${S3_BUCKET:-}" ]]; then
@@ -71,11 +84,6 @@ else
   echo "--> Warning: No checksums.sha256 found in ${NVME_DATASET_PATH}, skipping verification."
 fi
 
-# 3. Setup Python Virtual Environment
-if [[ ! -d ".venv" ]]; then
-  echo "--> Installing dependencies via uv..."
-  uv sync --frozen --group cloud
-fi
 
 # 4. W&B Login if credentials provided
 if [[ -n "${WANDB_API_KEY:-}" ]]; then
