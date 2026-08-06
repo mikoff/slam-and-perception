@@ -87,6 +87,14 @@ fi
 
 
 
+
+# 1.5 Symlink dataset to expected config path
+# The config file phase3_attnres.yaml expects the dataset at ../../../data/visual-inference-datasets/output
+# So we create a symlink to point it to the local NVMe dataset path.
+echo "--> Symlinking dataset to expected config path..."
+mkdir -p ../../data/visual-inference-datasets
+ln -sfn "$(realpath "${NVME_DATASET_PATH}")" ../../data/visual-inference-datasets/output
+
 # 2. Checksum Verification
 if [[ -f "${NVME_DATASET_PATH}/checksums.sha256" ]]; then
   echo "--> Verifying dataset SHA256 checksums..."
@@ -119,7 +127,10 @@ if [[ -n "${BATCH_SIZE:-}" ]]; then
   EXTRA_ARGS+=("--batch-size" "${BATCH_SIZE}")
 else
   echo "--> Enabling dynamic VRAM & batch size autotuning for target GPU..."
+  set +e
   AUTOTUNE_JSON=$(.venv/bin/python scripts/benchmark_quad_batch.py --config "${CONFIG_PATH}")
+  set -e
+  
   OPTIMAL_BATCH=$(echo "$AUTOTUNE_JSON" | .venv/bin/python -c "import sys, json; d=json.load(sys.stdin); print(d.get('recommended_candidate', {}).get('physical_batch_size', ''))" 2>/dev/null)
   
   if [ -z "$OPTIMAL_BATCH" ]; then
@@ -156,6 +167,9 @@ if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
     done
   ) &
   SYNC_PID=$!
+  
+  # Ensure the background sync is killed when this script exits (even on failure)
+  trap 'echo "--> Cleaning up background processes..."; kill $SYNC_PID 2>/dev/null || true' EXIT
 fi
 
 .venv/bin/python scripts/train_quad_proposals.py \
@@ -164,9 +178,6 @@ fi
   "${EXTRA_ARGS[@]}"
 
 # 7. Final Checkpoint Upload
-if [[ -n "${SYNC_PID:-}" ]]; then
-  kill $SYNC_PID || true
-fi
 
 if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
   echo "--> Performing final backup of run artifacts & checkpoints..."

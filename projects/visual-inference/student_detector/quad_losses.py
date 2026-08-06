@@ -210,7 +210,7 @@ class QuadProposalLoss(nn.Module):
         traversals = torch.cat((forward, backward), dim=1)
         centered = target - target.mean(dim=1, keepdim=True)
         covariance = centered.transpose(1, 2) @ centered / 4.0
-        _, eigenvectors = torch.linalg.eigh(covariance)
+        _, eigenvectors = torch.linalg.eigh(covariance.to(torch.float32))
         # Columns are the minor and major principal axes. Project errors into
         # that local frame and normalize each direction independently so a
         # one-pixel error across a thin object is not hidden by its long axis.

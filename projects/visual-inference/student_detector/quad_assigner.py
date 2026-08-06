@@ -67,7 +67,7 @@ class QuadAssigner:
         center = quad_centroid(quad)
         centered = quad - center
         covariance = centered.transpose(0, 1) @ centered / 4.0
-        _, axes = torch.linalg.eigh(covariance)
+        _, axes = torch.linalg.eigh(covariance.to(torch.float32))
         projected = centered @ axes
         return (projected.amax(dim=0) - projected.amin(dim=0)).amax().clamp(min=1e-6)
 
@@ -87,7 +87,7 @@ class QuadAssigner:
         center = quad_centroid(quad)
         centered = quad - center
         covariance = centered.transpose(0, 1) @ centered / 4.0
-        eigenvalues, eigenvectors = torch.linalg.eigh(covariance)
+        eigenvalues, eigenvectors = torch.linalg.eigh(covariance.to(torch.float32))
         major = eigenvectors[:, torch.argmax(eigenvalues)]
         major = major / torch.linalg.vector_norm(major).clamp(min=1e-6)
         minor = torch.stack((-major[1], major[0]))

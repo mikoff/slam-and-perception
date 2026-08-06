@@ -23,21 +23,23 @@ class DummyQuadDataset(Dataset[QuadProposalSample]):
     def __init__(self, count: int = 256, input_size: int = 384) -> None:
         self.count = count
         self.input_size = input_size
+        self.image = torch.randn(3, self.input_size, self.input_size, dtype=torch.float32)
+        self.quads = torch.tensor([
+            [[50.0, 50.0], [150.0, 50.0], [150.0, 150.0], [50.0, 150.0]],
+            [[200.0, 200.0], [300.0, 200.0], [300.0, 300.0], [200.0, 300.0]],
+        ], dtype=torch.float32)
+        self.ignore_quads = torch.zeros((0, 4, 2), dtype=torch.float32)
+        self.valid_mask = torch.ones((self.input_size, self.input_size), dtype=torch.bool)
 
     def __len__(self) -> int:
         return self.count
 
     def __getitem__(self, idx: int) -> QuadProposalSample:
-        image = torch.randn(3, self.input_size, self.input_size, dtype=torch.float32)
-        quads = torch.tensor([
-            [[50.0, 50.0], [150.0, 50.0], [150.0, 150.0], [50.0, 150.0]],
-            [[200.0, 200.0], [300.0, 200.0], [300.0, 300.0], [200.0, 300.0]],
-        ], dtype=torch.float32)
         return QuadProposalSample(
-            image=image,
-            quads=quads,
-            ignore_quads=torch.zeros((0, 4, 2), dtype=torch.float32),
-            valid_mask=torch.ones((self.input_size, self.input_size), dtype=torch.bool),
+            image=self.image,
+            quads=self.quads,
+            ignore_quads=self.ignore_quads,
+            valid_mask=self.valid_mask,
             image_id=idx,
             source_dataset="coco_2017",
             domain="general",
@@ -53,7 +55,7 @@ def benchmark_batch_size(
     config: Phase3Config,
     device: torch.device,
     warmup_steps: int = 5,
-    timed_steps: int = 15,
+    timed_steps: int = 10,
 ) -> dict[str, Any]:
     """Run fast warm-up and timed steps to measure peak VRAM and throughput for a physical batch size."""
     input_size = config.data.input_size
@@ -182,7 +184,7 @@ def autotune_optimal_batch_size(
 
     for b in candidate_batches:
         try:
-            res = benchmark_batch_size(b, config, device, warmup_steps=5, timed_steps=12)
+            res = benchmark_batch_size(b, config, device, warmup_steps=3, timed_steps=10)
             headroom = res["vram_headroom_fraction"]
             fps = res["examples_per_second"]
             peak_mb = res["peak_vram_mb"]
