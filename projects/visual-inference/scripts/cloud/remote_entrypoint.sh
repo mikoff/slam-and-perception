@@ -71,11 +71,11 @@ if [[ -n "${S3_BUCKET:-}" ]]; then
   aws configure set default.s3.multipart_chunksize 64MB
   aws configure set default.s3.max_queue_size 10000
 
-  # Check if a single dataset.tar exists for zero-disk-overhead streaming extraction
-  if aws s3 ls ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} "s3://${S3_BUCKET}/dataset/dataset.tar" >/dev/null 2>&1; then
-    echo "--> Streaming s3://${S3_BUCKET}/dataset/dataset.tar on-the-fly directly to NVMe (${NVME_DATASET_PATH})..."
-    aws s3 cp ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} "s3://${S3_BUCKET}/dataset/dataset.tar" - \
-      | tar -x -C "${NVME_DATASET_PATH}"
+  echo "--> Attempting to stream dataset.tar.gz directly..."
+  if aws s3 cp ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} "s3://${S3_BUCKET}/dataset/dataset.tar.gz" - | tar -xz -C "${NVME_DATASET_PATH}"; then
+    echo "--> Successfully streamed dataset.tar.gz to NVMe."
+  elif aws s3 cp ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} "s3://${S3_BUCKET}/dataset/dataset.tar" - | tar -x -C "${NVME_DATASET_PATH}"; then
+    echo "--> Successfully streamed dataset.tar to NVMe."
   else
     echo "--> Staging dataset files from s3://${S3_BUCKET}/dataset to ${NVME_DATASET_PATH}..."
     aws s3 sync \
@@ -143,15 +143,36 @@ elif [[ -f "${OUTPUT_DIR}/last.pt" ]]; then
   EXTRA_ARGS+=("--resume" "${OUTPUT_DIR}/last.pt")
 fi
 
+# 6. Periodic Background Checkpoint Sync
+if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
+  echo "--> Starting background periodic sync of checkpoints to s3://${S3_BUCKET}/runs/${RUN_NAME}..."
+  (
+    while true; do
+      sleep 300 # Sync every 5 minutes
+      aws s3 sync \
+        ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} \
+        "${OUTPUT_DIR}" "s3://${S3_BUCKET}/runs/${RUN_NAME}" \
+        --no-progress --quiet || true
+    done
+  ) &
+  SYNC_PID=$!
+fi
+
 .venv/bin/python scripts/train_quad_proposals.py \
   --config "${CONFIG_PATH}" \
   --output-dir "${OUTPUT_DIR}" \
   "${EXTRA_ARGS[@]}"
 
-# 6. Backup Checkpoints to S3 Object Storage
+# 7. Final Checkpoint Upload
+if [[ -n "${SYNC_PID:-}" ]]; then
+  kill $SYNC_PID || true
+fi
+
 if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
-  echo "--> Backing up run artifacts & checkpoints to s3://${S3_BUCKET}/runs/${RUN_NAME}..."
-  aws s3 sync "${OUTPUT_DIR}" "s3://${S3_BUCKET}/runs/${RUN_NAME}" --no-progress
+  echo "--> Performing final backup of run artifacts & checkpoints..."
+  aws s3 sync \
+    ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} \
+    "${OUTPUT_DIR}" "s3://${S3_BUCKET}/runs/${RUN_NAME}" --no-progress
 fi
 
 echo "=== [Training Run Finished Successfully] ==="

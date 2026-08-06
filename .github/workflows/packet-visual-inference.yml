@@ -121,6 +121,20 @@ jobs:
           echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
           echo "SSH_USER=$SSH_USER" >> $GITHUB_ENV
 
+      - name: Wait for SSH to be ready
+        run: |
+          echo "--> Waiting for SSH daemon to become responsive..."
+          for i in {1..30}; do
+            if ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} "echo 'SSH is ready!'"; then
+              echo "--> SSH connection established successfully."
+              exit 0
+            fi
+            echo "--> Attempt $i failed. Retrying in 10 seconds..."
+            sleep 10
+          done
+          echo "--> Error: SSH never became available."
+          exit 1
+
       - name: Execute Remote Cloud Training
         run: |
           echo "--> Connecting via SSH to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:${{ env.SSH_PORT }}..."
