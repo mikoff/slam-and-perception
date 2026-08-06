@@ -118,7 +118,7 @@ python scripts/benchmark_quad_batch.py \
 3. Click the **"Run workflow"** dropdown button on the right side.
 4. Configure the run parameters:
    - **Cloud GPU Provider**: `runpod` (default) or `packet`.
-   - **GPU Type**: Select `rtx4090` (default), `a100`, or `l40s`.
+   - **GPU Type**: Select `rtx6000` (default for Packet.ai), `l40s`, `a100`, `b200`, or `rtx4090`.
    - **Container Image**: Default Ubuntu 22.04 + PyTorch 2.4 image (`runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04`).
    - **Training Configuration Path**: Default `configs/phase3_attnres.yaml`.
    - **W&B Run Name (optional)**: e.g. `phase3_attnres_run1`.

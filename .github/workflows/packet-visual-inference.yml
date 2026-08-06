@@ -18,8 +18,10 @@ on:
         type: choice
         options:
           - rtx4090
-          - a100
+          - rtx6000
           - l40s
+          - a100
+          - b200
       container_image:
         description: 'Container Image (for RunPod)'
         required: false

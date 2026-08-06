@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
             or os.getenv("PACKET_API_KEY")
             or os.getenv("RUNPOD_API_TOKEN"),
         )
-        p.add_argument("--gpu-type", default="rtx4090")
+        p.add_argument("--gpu-type", default=os.getenv("CLOUD_GPU_TYPE", "rtx4090"))
         p.add_argument("--volume-id", default=os.getenv("CLOUD_PERSISTENT_VOLUME_ID"))
         p.add_argument("--ssh-key-id", default=os.getenv("CLOUD_SSH_KEY_ID"))
         p.add_argument("--name-prefix", default=os.getenv("CLOUD_INSTANCE_PREFIX", "vi-gha-"))

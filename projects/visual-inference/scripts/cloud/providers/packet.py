@@ -13,8 +13,6 @@ from ..base import AbstractCloudProvider, make_json_request
 class PacketProvider(AbstractCloudProvider):
     """Packet.ai cloud provider implementation using REST API."""
 
-    DEFAULT_POOL_ID = "144"
-
     def __init__(self, api_key: str, api_url: str | None = None) -> None:
         self.api_key = api_key
         self.api_url = (api_url or "https://dash.packet.ai").rstrip("/")
@@ -32,26 +30,53 @@ class PacketProvider(AbstractCloudProvider):
             return env_pool
 
         # 2. Dynamic API resolution from https://dash.packet.ai/api/v1/launch-options
+        pools: list[dict[str, Any]] = []
         try:
             url = f"{self.api_url}/api/v1/launch-options"
             resp = make_json_request(url, self.api_key, method="GET")
             pools = resp.get("data", {}).get("pools", [])
 
-            # Match pool by GPU model name (e.g. "4090", "a100", "l40s", "b200")
             clean_gpu = gpu_type.lower().replace("-", "").replace("_", "").replace(" ", "")
             matching_pools: list[dict[str, Any]] = []
             for p in pools:
                 model = p.get("gpu_model", "").lower().replace("-", "").replace("_", "").replace(" ", "")
-                if clean_gpu in model or (clean_gpu == "rtx4090" and "4090" in model):
+                p_name = p.get("name", "").lower().replace("-", "").replace("_", "").replace(" ", "")
+                if clean_gpu in model or clean_gpu in p_name:
                     matching_pools.append(p)
+                elif clean_gpu in {"rtx6000", "rtx6000pro", "6000", "rtxpro6000"} and ("6000" in model or "6000" in p_name):
+                    matching_pools.append(p)
+                elif clean_gpu in {"rtx4090", "4090"} and ("4090" in model or "4090" in p_name):
+                    matching_pools.append(p)
+
+            # If rtx4090 requested but no 4090 pool exists on Packet.ai, fall back to budget GPU (rtx6000)
+            if not matching_pools and clean_gpu in {"rtx4090", "4090"}:
+                for p in pools:
+                    model = p.get("gpu_model", "").lower().replace("-", "").replace("_", "").replace(" ", "")
+                    p_name = p.get("name", "").lower().replace("-", "").replace("_", "").replace(" ", "")
+                    if "6000" in model or "6000" in p_name:
+                        matching_pools.append(p)
 
             # Prefer pools with available GPUs (> 0)
             available_pools = [p for p in matching_pools if p.get("available_gpus", 0) > 0]
             chosen = available_pools[0] if available_pools else (matching_pools[0] if matching_pools else None)
             if chosen and chosen.get("id"):
                 return str(chosen["id"])
+        except ValueError:
+            raise
         except Exception:
             pass
+
+        # If pool resolution failed or no matching pool found for gpu_type:
+        available_info = [
+            f"ID {p.get('id')}: {p.get('gpu_model')} ({p.get('name')}, {p.get('available_gpus', 0)} avail)"
+            for p in pools
+        ]
+        pool_summary = "\n  ".join(available_info) if available_info else "No pools returned by Packet API"
+        raise ValueError(
+            f"Could not resolve Packet.ai pool_id for GPU type '{gpu_type}'.\n"
+            f"Available pools on Packet.ai:\n  {pool_summary}\n"
+            f"Please specify a valid --gpu-type (e.g. 'rtx6000', 'l40s', 'a100', 'b200') or pass pool_id in extra_params."
+        )
 
     def _resolve_ssh_key_id(
         self, ssh_key_id: str | None, extra_params: dict[str, Any] | None, kwargs: dict[str, Any]
