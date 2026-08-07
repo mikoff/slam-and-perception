@@ -180,28 +180,39 @@ def autotune_optimal_batch_size(
     print(f"--> [Autotune] Probing GPU: {gpu_name} ({total_vram_gb:.1f} GB VRAM)...")
 
     best_batch = config.data.batch_size
-    best_fps = -1.0
 
-    for b in candidate_batches:
+    left = 0
+    right = len(candidate_batches) - 1
+
+    while left <= right:
+        mid = (left + right) // 2
+        b = candidate_batches[mid]
+        
         try:
-            res = benchmark_batch_size(b, config, device, warmup_steps=3, timed_steps=10)
+            # We don't need accurate FPS anymore, just VRAM. So 2 warmup, 2 timed is enough!
+            res = benchmark_batch_size(b, config, device, warmup_steps=2, timed_steps=2)
             headroom = res["vram_headroom_fraction"]
             fps = res["examples_per_second"]
             peak_mb = res["peak_vram_mb"]
             print(f"    Batch {b:3d} -> {fps:6.1f} img/s | Peak VRAM: {peak_mb:7.1f} MB (Headroom: {headroom*100:.1f}%)")
 
-            if headroom >= 0.10 and fps > best_fps:
-                best_fps = fps
+            if headroom >= 0.10:
+                # Valid candidate! Record it and try to find an even larger one
                 best_batch = b
+                left = mid + 1
+            else:
+                # Not enough safety headroom! Try a smaller batch
+                print(f"    Batch {b:3d} -> Rejected (Headroom < 10%)")
+                right = mid - 1
 
         except torch.cuda.OutOfMemoryError:
             print(f"    Batch {b:3d} -> OUT OF MEMORY")
             if device.type == "cuda":
                 torch.cuda.empty_cache()
-            break
+            right = mid - 1
         except Exception as err:
             print(f"    Batch {b:3d} -> Error: {err}")
-            break
+            right = mid - 1
 
     target_effective = config.schedule.reference_effective_batch or 64
     acc_steps = max(1, math.ceil(target_effective / best_batch))

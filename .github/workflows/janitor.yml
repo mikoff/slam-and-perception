@@ -2,8 +2,8 @@ name: Cloud Instance Janitor
 
 on:
   schedule:
-    # Run every 30 minutes
-    - cron: '*/30 * * * *'
+    # Run every 15 minutes
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -60,7 +60,7 @@ jobs:
           fi
 
           CURRENT_TIME=$(date +%s)
-          MAX_AGE=86400 # 24 hours in seconds
+          MAX_AGE=1800 # 30 minutes in seconds
 
           for FILE in $FILES; do
             echo "--> Inspecting ${FILE}..."
@@ -73,13 +73,13 @@ jobs:
             AGE=$((CURRENT_TIME - TIMESTAMP))
             
             if [ "$AGE" -gt "$MAX_AGE" ]; then
-              echo "--> ⚠️ Instance ${INSTANCE_ID} is ${AGE} seconds old (exceeds 24h limit)!"
+              echo "--> ⚠️ Instance ${INSTANCE_ID} is ${AGE} seconds old (exceeds 30m limit)!"
               echo "--> TERMINATING ${INSTANCE_ID}..."
               uv run python scripts/cloud/cli.py kill_instance --provider "${PROVIDER}" --instance-id "${INSTANCE_ID}" || true
               
               echo "--> Removing ${FILE} from S3 registry..."
               aws s3 rm "s3://${S3_BUCKET}/janitor/${FILE}" $ENDPOINT_FLAG || true
             else
-              echo "--> Instance ${INSTANCE_ID} is ${AGE} seconds old (under 24h limit). Skipping."
+              echo "--> Instance ${INSTANCE_ID} is ${AGE} seconds old (under 30m limit). Skipping."
             fi
           done

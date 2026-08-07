@@ -44,13 +44,15 @@ class QuadEvaluationImage:
 def _best_overlaps(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0],))
-    return pairwise_quad_iou(gt, proposals).max(dim=1).values
+    device = "cuda" if torch.cuda.is_available() else gt.device
+    return pairwise_quad_iou(gt.to(device), proposals.to(device)).max(dim=1).values.to(gt.device)
 
 
 def _overlap_matrix(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0], proposals.shape[0]))
-    return pairwise_quad_iou(gt, proposals)
+    device = "cuda" if torch.cuda.is_available() else gt.device
+    return pairwise_quad_iou(gt.to(device), proposals.to(device)).to(gt.device)
 
 
 def _cached_best(matrix: Tensor, top_k: int) -> Tensor:
@@ -109,13 +111,14 @@ def _assigned_best(image: QuadEvaluationImage) -> Tensor:
     result = image.ground_truth.new_zeros((image.ground_truth.shape[0],))
     if image.assigned_detection is None or image.assigned_gt_indices is None:
         return result
+    device = "cuda" if torch.cuda.is_available() else result.device
     for gt_index, target in enumerate(image.ground_truth):
         owned = image.assigned_gt_indices == gt_index
         if owned.any():
             proposals = image.assigned_detection.quads[owned]
             result[gt_index] = aligned_quad_iou(
-                proposals, target.expand_as(proposals)
-            ).max()
+                proposals.to(device), target.to(device).expand_as(proposals).to(device)
+            ).max().to(result.device)
     return result
 
 
@@ -125,16 +128,17 @@ def _normalized_corner_errors(image: QuadEvaluationImage) -> Tensor:
     )
     if image.assigned_detection is None or image.assigned_gt_indices is None:
         return errors
+    device = "cuda" if torch.cuda.is_available() else errors.device
     for gt_index, target in enumerate(image.ground_truth):
         owned = image.assigned_gt_indices == gt_index
         if not owned.any():
             continue
-        predictions = image.assigned_detection.quads[owned]
-        traversals = equivalent_quad_traversals(target)
+        predictions = image.assigned_detection.quads[owned].to(device)
+        traversals = equivalent_quad_traversals(target.to(device))
         distances = torch.linalg.vector_norm(
             predictions[:, None] - traversals[None], dim=-1
         ).mean(dim=-1)
-        errors[gt_index] = distances.amin() / torch.sqrt(quad_area(target).clamp(min=1e-7))
+        errors[gt_index] = distances.amin().to(errors.device) / torch.sqrt(quad_area(target.to(device)).clamp(min=1e-7)).to(errors.device)
     return errors
 
 

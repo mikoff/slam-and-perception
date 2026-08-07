@@ -45,6 +45,10 @@ on:
         description: 'Batch Size Override (optional, leave blank to autotune)'
         required: false
         type: string
+      extra_training_args:
+        description: 'Extra python arguments (e.g. --max-steps 5 --max-val-batches 2)'
+        required: false
+        type: string
       extra_params:
         description: 'Extra provider parameters (JSON, e.g. {"pool_id": "144"})'
         required: false
@@ -165,10 +169,11 @@ jobs:
           CONFIG_PATH=${{ inputs.config_path }}
           WANDB_RUN_NAME=${{ inputs.wandb_run_name }}
           RESUME_PATH=${{ inputs.resume_path }}
-          CLOUD_API_KEY=${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
-          CLOUD_PROVIDER=${{ inputs.provider }}
-          INSTANCE_ID=${{ env.INSTANCE_ID }}
-          BATCH_SIZE=${{ inputs.batch_size }}
+          CLOUD_API_KEY="${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}"
+          CLOUD_PROVIDER="${{ inputs.provider }}"
+          INSTANCE_ID="${{ env.INSTANCE_ID }}"
+          BATCH_SIZE="${{ inputs.batch_size }}"
+          EXTRA_TRAINING_ARGS="${{ inputs.extra_training_args }}"
           EOF
 
           echo "--> Uploading entrypoint script and env file to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}..."

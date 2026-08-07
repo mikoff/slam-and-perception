@@ -22,6 +22,10 @@ if not hasattr(pathlib, "_local"):
 
 import torch
 
+# Fix for "Too many open files" when using large batch sizes and multiple dataloader workers
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 from torch.utils.data import DataLoader
 
 from student_detector.autotune import autotune_optimal_batch_size

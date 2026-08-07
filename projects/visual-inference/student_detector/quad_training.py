@@ -7,6 +7,7 @@ import math
 import os
 import subprocess
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -148,6 +149,11 @@ def validate_quad(
                 .detach()
                 .cpu(),
             ))
+            
+        if (batch_index + 1) % 50 == 0 or batch_index + 1 == len(loader):
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts}] [Validation] Processed batch {batch_index + 1}/{len(loader)}", flush=True)
+
     return evaluate_quad_proposals(evaluated)
 
 
@@ -366,10 +372,14 @@ def train_quad_proposals(
     if max_steps is not None and global_step >= max_steps:
         return {"global_step": global_step, "best_score": best_score, "metrics": metrics}
     for epoch in range(start_epoch, config.schedule.epochs):
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] [Train] Initializing epoch {epoch} dataset...", flush=True)
         if hasattr(train_loader.dataset, "set_epoch"):
             train_loader.dataset.set_epoch(epoch)
         if hasattr(train_loader.batch_sampler, "set_epoch"):
             train_loader.batch_sampler.set_epoch(epoch)
+        
+        print(f"[{ts}] [Train] Entering DataLoader for epoch {epoch}...", flush=True)
         set_backbone_trainable(model, epoch >= config.schedule.freeze_backbone_epochs)
         model.train()
         if config.pretrained_backbone:
@@ -417,6 +427,15 @@ def train_quad_proposals(
                     f"validity={float(losses.validity.detach().float().cpu())}"
                 )
             scaler.scale(loss).backward()
+
+            if (batch_index + 1) % 50 == 0 or batch_index + 1 == len(train_loader):
+                ts = datetime.now().strftime("%H:%M:%S")
+                print(
+                    f"[{ts}] [Train] Epoch {epoch} | Step {batch_index + 1}/{len(train_loader)} "
+                    f"| Loss: {losses.total.item():.4f} (Qual: {losses.quality.item():.4f}, Corner: {losses.corner.item():.4f})",
+                    flush=True
+                )
+
             should_step = (
                 (batch_index + 1) % config.schedule.accumulation_steps == 0
                 or batch_index + 1 == len(train_loader)
@@ -529,6 +548,8 @@ def train_quad_proposals(
             "gwd_weight": criterion.gwd_weight,
         })
         if should_validate:
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts}] [Validation] Evaluation math finished. Writing logs...", flush=True)
             _write_jsonl(log_path, {"kind": "validation", **metrics})
             if tb_writer is not None:
                 if "ar/100" in metrics:
@@ -550,6 +571,10 @@ def train_quad_proposals(
         is_best = should_validate and score > best_score
         if is_best:
             best_score = score
+            
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] [Validation] Saving checkpoint to {output_dir / 'last.pt'}...", flush=True)
+        
         _save_checkpoint(
             output_dir / "last.pt", model=model, ema=ema, optimizer=optimizer,
             scheduler=scheduler, scaler=scaler, epoch=epoch,
@@ -565,6 +590,10 @@ def train_quad_proposals(
                 global_step=global_step, best_score=best_score, config=config,
                 metrics=metrics, criterion=criterion,
             )
+            
+        ts = datetime.now().strftime("%H:%M:%S")
+        print(f"[{ts}] [Validation] Checkpoint saved successfully. Epoch {epoch} complete.", flush=True)
+        
         if max_steps is not None and global_step >= max_steps:
             break
     if tb_writer is not None:

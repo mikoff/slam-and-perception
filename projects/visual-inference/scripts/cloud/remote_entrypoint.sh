@@ -111,6 +111,9 @@ if [[ -n "${WANDB_API_KEY:-}" ]]; then
 fi
 
 # 5. Launch Training
+echo "--> Increasing file descriptor limit to prevent PyTorch OOM (Too many open files)..."
+ulimit -n 65536 || true
+
 EXTRA_ARGS=()
 if [[ -n "${WANDB_PROJECT:-}" ]]; then
   EXTRA_ARGS+=("--wandb-project" "${WANDB_PROJECT}")
@@ -160,16 +163,50 @@ elif [[ -f "${OUTPUT_DIR}/last.pt" ]]; then
   EXTRA_ARGS+=("--resume" "${OUTPUT_DIR}/last.pt")
 fi
 
-# 6. Periodic Background Checkpoint Sync
+if [[ -n "${EXTRA_TRAINING_ARGS:-}" ]]; then
+  echo "--> [DEBUG] Injecting extra training arguments: ${EXTRA_TRAINING_ARGS}"
+  read -ra EXTRA_PARSED <<< "$EXTRA_TRAINING_ARGS"
+  EXTRA_ARGS+=("${EXTRA_PARSED[@]}")
+fi
+
+# 6. Periodic Background Checkpoint Sync & Watchdog Heartbeat
 if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
-  echo "--> Starting background periodic sync of checkpoints to s3://${S3_BUCKET}/runs/${RUN_NAME}..."
+  echo "--> Starting background periodic sync of checkpoints and watchdog heartbeat..."
   (
+    LAST_SIZE=0
+    UNCHANGED_COUNT=0
+    
     while true; do
-      sleep 300 # Sync every 5 minutes
+      sleep 300 # Run every 5 minutes
+      
+      # 1. Sync Checkpoints
       aws s3 sync \
         ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} \
         "${OUTPUT_DIR}" "s3://${S3_BUCKET}/runs/${RUN_NAME}" \
         --no-progress --quiet || true
+        
+      # 2. Watchdog Heartbeat
+      if [[ -f /tmp/training.log ]]; then
+        CURRENT_SIZE=$(stat -c%s "/tmp/training.log" 2>/dev/null || echo 0)
+        
+        if [[ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]]; then
+          LAST_SIZE=$CURRENT_SIZE
+          UNCHANGED_COUNT=0
+          
+          # Ping Janitor to stay alive
+          if [[ -n "${INSTANCE_ID:-}" ]]; then
+            echo "{\"instance_id\": \"${INSTANCE_ID}\", \"provider\": \"${CLOUD_PROVIDER:-packet}\", \"timestamp\": $(date +%s)}" > /tmp/janitor_ping.json
+            aws s3 cp /tmp/janitor_ping.json "s3://${S3_BUCKET}/janitor/${INSTANCE_ID}.json" ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} --quiet || true
+          fi
+        else
+          UNCHANGED_COUNT=$((UNCHANGED_COUNT + 1))
+          if [[ $UNCHANGED_COUNT -ge 6 ]]; then
+            echo "--> 💀 WATCHDOG TIMEOUT: /tmp/training.log has not grown for 30 minutes! Aborting run..." >> /tmp/training.log
+            pkill -f train_quad_proposals || true
+            exit 1
+          fi
+        fi
+      fi
     done
   ) &
   SYNC_PID=$!
@@ -178,6 +215,17 @@ fi
 cleanup_and_terminate() {
   echo "--> Cleaning up background processes..."
   kill $SYNC_PID 2>/dev/null || true
+
+  if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
+    echo "--> Performing final backup of run artifacts & checkpoints before termination..."
+    aws s3 sync \
+      ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} \
+      "${OUTPUT_DIR}" "s3://${S3_BUCKET}/runs/${RUN_NAME}" --no-progress || true
+      
+    if [[ -f /tmp/training.log ]]; then
+      aws s3 cp /tmp/training.log "s3://${S3_BUCKET}/runs/${RUN_NAME}/training.log" ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} || true
+    fi
+  fi
   
   if [[ -n "${S3_BUCKET:-}" && -n "${INSTANCE_ID:-}" ]]; then
     echo "--> Deregistering instance from Janitor..."
@@ -200,14 +248,7 @@ echo "--> Starting quad proposal training..."
   --output-dir "${OUTPUT_DIR}" \
   "${EXTRA_ARGS[@]}"
 
-# 7. Final Checkpoint Upload
 
-if [[ -n "${S3_BUCKET:-}" && -d "${OUTPUT_DIR}" ]]; then
-  echo "--> Performing final backup of run artifacts & checkpoints..."
-  aws s3 sync \
-    ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"} \
-    "${OUTPUT_DIR}" "s3://${S3_BUCKET}/runs/${RUN_NAME}" --no-progress
-fi
 
 echo "=== [Training Run Finished Successfully] ==="
 
