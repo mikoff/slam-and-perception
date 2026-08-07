@@ -169,7 +169,7 @@ def autotune_optimal_batch_size(
 ) -> tuple[int, int]:
     """Dynamically test candidate batch sizes on hardware and return (optimal_batch_size, accumulation_steps)."""
     if candidate_batches is None:
-        candidate_batches = [16, 24, 32, 48, 64, 96, 128]
+        candidate_batches = [16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
 
     if device.type != "cuda":
         print(f"--> [Autotune] Non-CUDA device '{device}'. Using config batch size {config.data.batch_size}.")

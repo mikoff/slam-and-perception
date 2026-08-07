@@ -41,6 +41,10 @@ on:
         description: 'Resume Checkpoint Path (optional, e.g. /workspace/runs/my_run/last.pt)'
         required: false
         type: string
+      batch_size:
+        description: 'Batch Size Override (optional, leave blank to autotune)'
+        required: false
+        type: string
       extra_params:
         description: 'Extra provider parameters (JSON, e.g. {"pool_id": "144"})'
         required: false
@@ -164,6 +168,7 @@ jobs:
           CLOUD_API_KEY=${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
           CLOUD_PROVIDER=${{ inputs.provider }}
           INSTANCE_ID=${{ env.INSTANCE_ID }}
+          BATCH_SIZE=${{ inputs.batch_size }}
           EOF
 
           echo "--> Uploading entrypoint script and env file to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}..."
@@ -172,9 +177,9 @@ jobs:
           echo "--> Scrubbing local secrets file..."
           rm gha_env
           
-          echo "--> Launching training inside detached tmux session..."
+          echo "--> Launching training in the background using nohup..."
           ssh -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} bash -s << 'EOF'
-            tmux new-session -d -s training 'set -a; source /tmp/gha_env; bash /tmp/remote_entrypoint.sh 2>&1 | tee /tmp/training.log'
+            nohup bash -c 'set -a; source /tmp/gha_env; bash /tmp/remote_entrypoint.sh' > /tmp/training.log 2>&1 &
           EOF
 
       - name: Wait for Training Startup Confirmation

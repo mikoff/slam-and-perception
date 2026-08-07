@@ -111,7 +111,6 @@ if [[ -n "${WANDB_API_KEY:-}" ]]; then
 fi
 
 # 5. Launch Training
-echo "--> Starting quad proposal training..."
 EXTRA_ARGS=()
 if [[ -n "${WANDB_PROJECT:-}" ]]; then
   EXTRA_ARGS+=("--wandb-project" "${WANDB_PROJECT}")
@@ -147,8 +146,15 @@ if [[ -n "${WORKERS:-}" ]]; then
   EXTRA_ARGS+=("--workers" "${WORKERS}")
 fi
 if [[ -n "${RESUME_PATH:-}" ]]; then
-  echo "--> Resuming training from checkpoint: ${RESUME_PATH}"
-  EXTRA_ARGS+=("--resume" "${RESUME_PATH}")
+  if [[ "${RESUME_PATH}" == s3://* ]]; then
+    echo "--> Downloading resume checkpoint from S3: ${RESUME_PATH}"
+    mkdir -p /tmp/resume
+    aws s3 cp "${RESUME_PATH}" /tmp/resume/checkpoint.pt ${S3_ENDPOINT_URL:+--endpoint-url "${S3_ENDPOINT_URL}"}
+    EXTRA_ARGS+=("--resume" "/tmp/resume/checkpoint.pt")
+  else
+    echo "--> Resuming training from local checkpoint: ${RESUME_PATH}"
+    EXTRA_ARGS+=("--resume" "${RESUME_PATH}")
+  fi
 elif [[ -f "${OUTPUT_DIR}/last.pt" ]]; then
   echo "--> Found existing last.pt in ${OUTPUT_DIR}, resuming..."
   EXTRA_ARGS+=("--resume" "${OUTPUT_DIR}/last.pt")
@@ -188,6 +194,7 @@ cleanup_and_terminate() {
 # Ensure the background sync and instance are killed when this script exits (even on failure)
 trap cleanup_and_terminate EXIT
 
+echo "--> Starting quad proposal training..."
 .venv/bin/python scripts/train_quad_proposals.py \
   --config "${CONFIG_PATH}" \
   --output-dir "${OUTPUT_DIR}" \
