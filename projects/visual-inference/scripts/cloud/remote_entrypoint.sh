@@ -242,8 +242,11 @@ cleanup_and_terminate() {
 # Ensure the background sync and instance are killed when this script exits (even on failure)
 trap cleanup_and_terminate EXIT
 
-echo "--> Starting quad proposal training..."
-.venv/bin/python scripts/train_quad_proposals.py \
+echo "--> Starting quad proposal training via cloud daemon..."
+.venv/bin/python scripts/cloud/run_cloud_daemon.py \
+  --output-dir "${OUTPUT_DIR}" \
+  --run-name "${RUN_NAME}" \
+  .venv/bin/python scripts/train_quad_proposals.py \
   --config "${CONFIG_PATH}" \
   --output-dir "${OUTPUT_DIR}" \
   "${EXTRA_ARGS[@]}"

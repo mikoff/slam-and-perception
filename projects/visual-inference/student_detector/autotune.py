@@ -162,6 +162,9 @@ def benchmark_batch_size(
     }
 
 
+import sys
+
+
 def autotune_optimal_batch_size(
     config: Phase3Config,
     device: torch.device,
@@ -172,12 +175,12 @@ def autotune_optimal_batch_size(
         candidate_batches = [16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024]
 
     if device.type != "cuda":
-        print(f"--> [Autotune] Non-CUDA device '{device}'. Using config batch size {config.data.batch_size}.")
+        print(f"--> [Autotune] Non-CUDA device '{device}'. Using config batch size {config.data.batch_size}.", file=sys.stderr)
         return config.data.batch_size, config.schedule.accumulation_steps
 
     gpu_name = torch.cuda.get_device_name(device)
     total_vram_gb = torch.cuda.get_device_properties(device).total_memory / (1024**3)
-    print(f"--> [Autotune] Probing GPU: {gpu_name} ({total_vram_gb:.1f} GB VRAM)...")
+    print(f"--> [Autotune] Probing GPU: {gpu_name} ({total_vram_gb:.1f} GB VRAM)...", file=sys.stderr)
 
     best_batch = config.data.batch_size
 
@@ -194,7 +197,7 @@ def autotune_optimal_batch_size(
             headroom = res["vram_headroom_fraction"]
             fps = res["examples_per_second"]
             peak_mb = res["peak_vram_mb"]
-            print(f"    Batch {b:3d} -> {fps:6.1f} img/s | Peak VRAM: {peak_mb:7.1f} MB (Headroom: {headroom*100:.1f}%)")
+            print(f"    Batch {b:3d} -> {fps:6.1f} img/s | Peak VRAM: {peak_mb:7.1f} MB (Headroom: {headroom*100:.1f}%)", file=sys.stderr)
 
             if headroom >= 0.10:
                 # Valid candidate! Record it and try to find an even larger one
@@ -202,23 +205,24 @@ def autotune_optimal_batch_size(
                 left = mid + 1
             else:
                 # Not enough safety headroom! Try a smaller batch
-                print(f"    Batch {b:3d} -> Rejected (Headroom < 10%)")
+                print(f"    Batch {b:3d} -> Rejected (Headroom < 10%)", file=sys.stderr)
                 right = mid - 1
 
         except torch.cuda.OutOfMemoryError:
-            print(f"    Batch {b:3d} -> OUT OF MEMORY")
+            print(f"    Batch {b:3d} -> OUT OF MEMORY", file=sys.stderr)
             if device.type == "cuda":
                 torch.cuda.empty_cache()
             right = mid - 1
         except Exception as err:
-            print(f"    Batch {b:3d} -> Error: {err}")
+            print(f"    Batch {b:3d} -> Error: {err}", file=sys.stderr)
             right = mid - 1
 
     target_effective = config.schedule.reference_effective_batch or 64
     acc_steps = max(1, math.ceil(target_effective / best_batch))
     print(
         f"--> [Autotune] Selected optimal physical batch size: {best_batch} "
-        f"(accumulation_steps={acc_steps}, effective_batch={best_batch * acc_steps})"
+        f"(accumulation_steps={acc_steps}, effective_batch={best_batch * acc_steps})",
+        file=sys.stderr,
     )
 
     return best_batch, acc_steps

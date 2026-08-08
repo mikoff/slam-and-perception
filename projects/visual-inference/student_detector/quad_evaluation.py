@@ -44,14 +44,14 @@ class QuadEvaluationImage:
 def _best_overlaps(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0],))
-    device = "cuda" if torch.cuda.is_available() else gt.device
+    device = gt.device
     return pairwise_quad_iou(gt.to(device), proposals.to(device)).max(dim=1).values.to(gt.device)
 
 
 def _overlap_matrix(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0], proposals.shape[0]))
-    device = "cuda" if torch.cuda.is_available() else gt.device
+    device = gt.device
     return pairwise_quad_iou(gt.to(device), proposals.to(device)).to(gt.device)
 
 
@@ -111,7 +111,7 @@ def _assigned_best(image: QuadEvaluationImage) -> Tensor:
     result = image.ground_truth.new_zeros((image.ground_truth.shape[0],))
     if image.assigned_detection is None or image.assigned_gt_indices is None:
         return result
-    device = "cuda" if torch.cuda.is_available() else result.device
+    device = result.device
     for gt_index, target in enumerate(image.ground_truth):
         owned = image.assigned_gt_indices == gt_index
         if owned.any():
@@ -128,7 +128,7 @@ def _normalized_corner_errors(image: QuadEvaluationImage) -> Tensor:
     )
     if image.assigned_detection is None or image.assigned_gt_indices is None:
         return errors
-    device = "cuda" if torch.cuda.is_available() else errors.device
+    device = errors.device
     for gt_index, target in enumerate(image.ground_truth):
         owned = image.assigned_gt_indices == gt_index
         if not owned.any():
@@ -155,20 +155,34 @@ def _quantiles(values: list[Tensor], prefix: str, metrics: dict[str, float]) -> 
         metrics[f"score/{prefix}/{name}"] = float(torch.quantile(joined, probability))
 
 
-def evaluate_quad_proposals(images: list[QuadEvaluationImage]) -> dict[str, float]:
+from datetime import datetime
+
+
+@torch.no_grad()
+def evaluate_quad_proposals(
+    images: list[QuadEvaluationImage],
+    *,
+    log_interval: int = 500,
+) -> dict[str, float]:
     """Compute AR over IoU .50:.95 and required fixed-budget slices."""
     metrics: dict[str, float] = {}
-    post_cache = {
-        image.image_id: _overlap_matrix(image.ground_truth, image.detection.quads)
-        for image in images
-    }
-    pre_cache = {
-        image.image_id: _overlap_matrix(
-            image.ground_truth, image.pre_nms_detection.quads
-        )
-        for image in images
-        if image.pre_nms_detection is not None
-    }
+    post_cache: dict[int, Tensor] = {}
+    for index, image in enumerate(images):
+        post_cache[image.image_id] = _overlap_matrix(image.ground_truth, image.detection.quads)
+        if log_interval and ((index + 1) % log_interval == 0 or index + 1 == len(images)):
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts}] [Evaluation Math] Computed overlap matrix for {index + 1}/{len(images)} images", flush=True)
+
+    pre_cache: dict[int, Tensor] = {}
+    for index, image in enumerate(images):
+        if image.pre_nms_detection is not None:
+            pre_cache[image.image_id] = _overlap_matrix(
+                image.ground_truth, image.pre_nms_detection.quads
+            )
+            if log_interval and ((index + 1) % log_interval == 0 or index + 1 == len(images)):
+                ts = datetime.now().strftime("%H:%M:%S")
+                print(f"[{ts}] [Evaluation Math] Computed pre-NMS overlap matrix for {index + 1}/{len(images)} images", flush=True)
+
     thresholds = [0.50 + 0.05 * index for index in range(10)]
     for top_k in (50, 100, 300):
         for threshold in (0.50, 0.75):

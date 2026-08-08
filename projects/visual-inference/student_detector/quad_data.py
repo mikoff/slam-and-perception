@@ -21,6 +21,7 @@ from .data import (
     ImageRecord,
     _mask_to_tensor,
     _pil_to_normalized_tensor,
+    build_coco_parquet_index,
     build_coco_sqlite_index,
 )
 from .quad_geometry import (
@@ -254,14 +255,12 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         seed: int = 42,
         force_index: bool = False,
     ) -> None:
+        import duckdb
         self.image_root = Path(image_root).resolve()
-        self.index_path = build_coco_sqlite_index(annotations, index_path, force=force_index)
+        self.images_parquet, self.annotations_parquet = build_coco_parquet_index(annotations, index_path, force=force_index)
         self.data_config = data_config
         self.training = training
         self.seed = seed
-        # DataLoader workers persist across epochs for throughput. Keep the
-        # epoch in shared memory so their deterministic augmentation seed still
-        # advances when the main process calls set_epoch().
         self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
         self.transform = QuadProposalTransform(
             data_config.input_size, augmentation, training=training,
@@ -270,17 +269,20 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
             thin_aspect_ratio_min=data_config.thin_aspect_ratio_min,
             thin_area=data_config.thin_area,
         )
-        with sqlite3.connect(self.index_path) as connection:
-            rows = connection.execute(
-                "SELECT row_index, image_id, file_name, width, height, source_dataset, camera_type, background_supervision, positive_count FROM images ORDER BY row_index"
-            ).fetchall()
+        con = duckdb.connect()
+        rows = con.execute(
+            f"SELECT row_index, image_id, file_name, width, height, source_dataset, camera_type, background_supervision, positive_count FROM '{self.images_parquet}' ORDER BY row_index"
+        ).fetchall()
+        ann_rows = con.execute(
+            f"SELECT image_id, quad_json, ignore_region, geometry_tier, object_condition, seen_status FROM '{self.annotations_parquet}'"
+        ).fetchall()
+        con.close()
         self.records = [ImageRecord(*row) for row in rows]
-        self._connection: sqlite3.Connection | None = None
-
-    def _db(self) -> sqlite3.Connection:
-        if self._connection is None:
-            self._connection = sqlite3.connect(self.index_path)
-        return self._connection
+        from collections import defaultdict
+        annotations_by_image: defaultdict[int, list[tuple[str, int, str, str, str]]] = defaultdict(list)
+        for row in ann_rows:
+            annotations_by_image[row[0]].append((row[1], row[2], row[3], row[4], row[5]))
+        self._annotations_by_image = dict(annotations_by_image)
 
     def __len__(self) -> int:
         return len(self.records)
@@ -290,11 +292,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
 
     def __getitem__(self, index: int) -> QuadProposalSample:
         record = self.records[index]
-        rows = self._db().execute(
-            "SELECT quad_json, ignore_region, geometry_tier, object_condition, seen_status "
-            "FROM annotations WHERE image_id=?",
-            (record.image_id,),
-        ).fetchall()
+        rows = self._annotations_by_image.get(record.image_id, ())
         positive = [json.loads(row[0]) for row in rows if row[1] == 0]
         ignore = [json.loads(row[0]) for row in rows if row[1] == 1]
         trusted = [json.loads(row[0]) for row in rows if row[1] == 2]

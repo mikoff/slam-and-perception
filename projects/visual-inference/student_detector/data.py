@@ -62,9 +62,38 @@ class ProposalSample:
 
 def _source_signature(path: Path) -> str:
     stat = path.stat()
-    # Do not include the absolute path: cloud archives preserve size and mtime
-    # but are extracted under /content rather than the workstation path.
     return f"{stat.st_size}:{stat.st_mtime_ns}"
+
+
+def build_coco_parquet_index(
+    annotations: str | Path,
+    index_path: str | Path,
+    *,
+    force: bool = False,
+) -> tuple[Path, Path]:
+    """Export dataset index to columnar Parquet files using DuckDB."""
+    import duckdb
+    source = Path(annotations).resolve()
+    target_dir = Path(index_path).resolve().parent
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(index_path).stem
+    images_parquet = target_dir / f"{stem}_images.parquet"
+    annotations_parquet = target_dir / f"{stem}_annotations.parquet"
+
+    sqlite_path = build_coco_sqlite_index(annotations, target_dir / f"{stem}.sqlite", force=force)
+    up_to_date = (
+        images_parquet.exists()
+        and annotations_parquet.exists()
+        and images_parquet.stat().st_mtime >= sqlite_path.stat().st_mtime
+    )
+    if up_to_date and not force:
+        return images_parquet, annotations_parquet
+    con = duckdb.connect()
+    con.execute(f"ATTACH '{sqlite_path}' AS db (TYPE SQLITE)")
+    con.execute(f"COPY (SELECT * FROM db.images ORDER BY row_index) TO '{images_parquet}' (FORMAT PARQUET)")
+    con.execute(f"COPY (SELECT * FROM db.annotations) TO '{annotations_parquet}' (FORMAT PARQUET)")
+    con.close()
+    return images_parquet, annotations_parquet
 
 
 def build_coco_sqlite_index(
@@ -79,22 +108,27 @@ def build_coco_sqlite_index(
     # field may appear after the first (large) images array.  Inspect only the
     # first streamed image record: manifests use `image_id`, while COCO uses
     # `id`, and this avoids loading the annotation document.
-    with source.open("rb") as stream:
-        first_image = next(ijson.items(stream, "images.item"), None)
-    if isinstance(first_image, dict) and "image_id" in first_image:
-        return build_proposal_manifest_sqlite_index(source, index_path, force=force)
     destination = Path(index_path).resolve()
     signature = _source_signature(source)
     if destination.exists() and not force:
-        with sqlite3.connect(destination) as connection:
-            metadata = dict(connection.execute(
-                "SELECT key, value FROM metadata"
-            ).fetchall())
-        if (
-            metadata.get("source_signature") == signature
-            and metadata.get("schema_version") == INDEX_SCHEMA_VERSION
-        ):
-            return destination
+        try:
+            with sqlite3.connect(destination) as connection:
+                metadata = dict(connection.execute(
+                    "SELECT key, value FROM metadata"
+                ).fetchall())
+            if (
+                metadata.get("source_signature") == signature
+                and metadata.get("schema_version") in (INDEX_SCHEMA_VERSION, f"{INDEX_SCHEMA_VERSION}:proposal-manifest")
+            ):
+                return destination
+        except Exception:
+            pass
+
+    with source.open("rb") as stream:
+        first_image = next(ijson.items(stream, "images.item"), None)
+
+    if isinstance(first_image, dict) and "image_id" in first_image:
+        return build_proposal_manifest_sqlite_index(source, index_path, force=force)
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, staged_name = tempfile.mkstemp(
@@ -589,6 +623,9 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
                 FROM images ORDER BY row_index
                 """
             ).fetchall()
+            ann_rows = connection.execute(
+                "SELECT image_id, x1, y1, x2, y2, ignore_region, category_name FROM annotations"
+            ).fetchall()
         self.records = [
             ImageRecord(
                 int(row[0]),
@@ -603,7 +640,10 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             )
             for row in rows
         ]
-        self._connection: sqlite3.Connection | None = None
+        annotations_by_image: defaultdict[int, list[tuple[float, float, float, float, int, str]]] = defaultdict(list)
+        for row in ann_rows:
+            annotations_by_image[row[0]].append((row[1], row[2], row[3], row[4], row[5], row[6]))
+        self._annotations_by_image = dict(annotations_by_image)
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -611,25 +651,9 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
     def __len__(self) -> int:
         return len(self.records)
 
-    def _db(self) -> sqlite3.Connection:
-        if self._connection is None:
-            self._connection = sqlite3.connect(self.index_path)
-        return self._connection
-
-    def __getstate__(self) -> dict[str, Any]:
-        state = dict(self.__dict__)
-        state["_connection"] = None
-        return state
-
     def __getitem__(self, index: int) -> ProposalSample:
         record = self.records[index]
-        rows = self._db().execute(
-            """
-            SELECT x1, y1, x2, y2, ignore_region, category_name
-            FROM annotations WHERE image_id=?
-            """,
-            (record.image_id,),
-        ).fetchall()
+        rows = self._annotations_by_image.get(record.image_id, ())
         positive_rows = [row for row in rows if row[4] == 0]
         ignore_rows = [row for row in rows if row[4] == 1]
         trusted_rows = [row for row in rows if row[4] == 2]

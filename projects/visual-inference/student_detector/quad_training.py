@@ -35,6 +35,11 @@ try:
 except ImportError:
     SummaryWriter = None
 
+try:
+    from accelerate import Accelerator
+except ImportError:
+    Accelerator = None
+
 
 def _feature_shapes(output: Any) -> tuple[tuple[int, int], ...]:
 
@@ -228,10 +233,8 @@ def _save_checkpoint(
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
-    if temporary.exists():
-        temporary.replace(path)
-    else:
-        torch.save(payload, path)
+    torch.save(payload, temporary)
+    temporary.replace(path)
     _sync_checkpoint_to_s3(path.parent)
 
 
@@ -250,9 +253,10 @@ def _sync_checkpoint_to_s3(output_dir: Path) -> None:
     if s3_endpoint:
         cmd.extend(["--endpoint-url", s3_endpoint])
     try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+        subprocess.Popen(cmd)
+    except Exception as err:
+        sys.stderr.write(f"--> [Warning] S3 sync process launch failed: {err}\n")
+
 
 
 
@@ -296,6 +300,12 @@ def train_quad_proposals(
     scaler = torch.amp.GradScaler(
         "cuda", enabled=config.schedule.amp and device.type == "cuda"
     )
+    accelerator = None
+    if Accelerator is not None and device.type == "cuda":
+        accelerator = Accelerator(
+            gradient_accumulation_steps=config.schedule.accumulation_steps,
+            mixed_precision="fp16" if config.schedule.amp else "no",
+        )
     ema = ExponentialMovingAverage(
         model, config.schedule.ema_decay, config.schedule.ema_ramp_steps
     )
@@ -426,7 +436,10 @@ def train_quad_proposals(
                     f"gwd={float(losses.gwd.detach().float().cpu())}, "
                     f"validity={float(losses.validity.detach().float().cpu())}"
                 )
-            scaler.scale(loss).backward()
+            if accelerator is not None:
+                accelerator.backward(loss)
+            else:
+                scaler.scale(loss).backward()
 
             if (batch_index + 1) % 50 == 0 or batch_index + 1 == len(train_loader):
                 ts = datetime.now().strftime("%H:%M:%S")
@@ -441,12 +454,18 @@ def train_quad_proposals(
                 or batch_index + 1 == len(train_loader)
             )
             if should_step:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), config.schedule.gradient_clip_norm
-                )
-                scaler.step(optimizer)
-                scaler.update()
+                if accelerator is not None:
+                    accelerator.clip_grad_norm_(
+                        model.parameters(), config.schedule.gradient_clip_norm
+                    )
+                    optimizer.step()
+                else:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(), config.schedule.gradient_clip_norm
+                    )
+                    scaler.step(optimizer)
+                    scaler.update()
                 optimizer.zero_grad(set_to_none=True)
                 scheduler.step()
                 ema.update(model)

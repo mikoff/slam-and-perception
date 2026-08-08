@@ -37,8 +37,8 @@ canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
 - Quad checkpoints contain model/EMA, EMA ramp state, optimizer, scheduler, AMP
   scaler, complete config, curriculum, epoch/batch position, and deterministic
   resume state.
-- Lean cloud training pipeline (RunPod / Packet.ai + GHA) stages datasets from S3 to NVMe via `aws s3 sync`, saves checkpoints directly to mounted persistent network volume (`/mnt/nfs/runs/` or `/workspace/runs/`), logs to W&B, and guarantees instance cleanup via GHA `if: always()` traps.
-- Validation caches GT/proposal IoU matrices and evaluates exact polygon IoU/NMS.
+- Lean cloud training pipeline (RunPod / Packet.ai + GHA) stages datasets from S3 to NVMe via `aws s3 sync`, loads annotation index into memory to avoid SQLite worker locks, logs to W&B, executes via robust Python process daemon (`scripts/cloud/run_cloud_daemon.py`) with signal traps and periodic S3 sync, and guarantees node self-termination upon completion.
+- Validation caches GT/proposal IoU matrices under `@torch.no_grad()`, streams real-time evaluation math progress logs to prevent watchdog timeouts, and writes atomic checkpoints (`last.pt.tmp` -> `last.pt`).
 
 # Local Constraints & Gotchas
 
