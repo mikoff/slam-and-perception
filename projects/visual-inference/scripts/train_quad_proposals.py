@@ -21,6 +21,7 @@ if not hasattr(pathlib, "_local"):
     sys.modules["pathlib._local"] = _local_mod
 
 import torch
+from accelerate import Accelerator
 
 # Fix for "Too many open files" when using large batch sizes and multiple dataloader workers
 import torch.multiprocessing
@@ -37,7 +38,7 @@ from student_detector.quad_data import QuadProposalDataset, collate_quad_proposa
 from student_detector.quad_losses import QuadProposalLoss
 from student_detector.quad_targets import QuadTargetBuilder
 from student_detector.quad_training import train_quad_proposals
-from student_detector.training import set_reproducibility_seed
+from student_detector.training_optimization import set_reproducibility_seed
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +51,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--batches-per-epoch", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--neck-type", choices=("lite", "attn_res"))
     parser.add_argument("--overfit-images", type=int)
     parser.add_argument(
         "--overfit-image-ids",
@@ -93,16 +96,16 @@ def main() -> None:
     overfit = args.overfit_images is not None or bool(overfit_image_ids)
     config = load_phase3_config(args.config)
 
-    # Resolve active device
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
+    requested_device = torch.device(
+        "cuda" if args.device == "auto" and torch.cuda.is_available()
+        else "cpu" if args.device == "auto"
+        else args.device
+    )
 
     # Dynamic VRAM & Batch Size Autotuning
     import os
     if args.autotune or os.getenv("AUTOTUNE", "").lower() in {"1", "true", "yes"}:
-        tuned_batch, tuned_acc = autotune_optimal_batch_size(config, device)
+        tuned_batch, tuned_acc = autotune_optimal_batch_size(config, requested_device)
         config = replace(
             config,
             data=replace(config.data, batch_size=tuned_batch),
@@ -124,6 +127,15 @@ def main() -> None:
             workers=args.workers if args.workers is not None else config.data.workers,
             batch_size=args.batch_size if args.batch_size is not None else config.data.batch_size,
         ))
+    if args.seed is not None or args.neck_type is not None:
+        config = replace(
+            config,
+            schedule=replace(
+                config.schedule,
+                seed=args.seed if args.seed is not None else config.schedule.seed,
+            ),
+            neck_type=args.neck_type or config.neck_type,
+        )
     if args.output_dir is not None:
         config = replace(config, output_dir=args.output_dir.resolve())
     if args.no_pretrained:
@@ -158,33 +170,44 @@ def main() -> None:
                 ),
             ),
         )
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
+    accelerator = Accelerator(
+        cpu=requested_device.type == "cpu",
+        gradient_accumulation_steps=config.schedule.accumulation_steps,
+        split_batches=True,
+        mixed_precision=(
+            "fp16"
+            if config.schedule.amp and requested_device.type == "cuda"
+            else "no"
+        ),
+    )
+    device = accelerator.device
+    if args.autotune and accelerator.num_processes > 1:
+        raise ValueError("--autotune is not supported with multi-process training")
     # Model construction initializes the proposal head, so seed before creating
     # the dataset, sampler, or model. Seeding only inside the training loop made
     # nominally identical runs start from different heads.
     set_reproducibility_seed(config.schedule.seed)
-    train_dataset = QuadProposalDataset(
-        config.data.quad_train_annotations or config.data.train_annotations,
-        config.data.image_root, config.data.index_dir / "quad_train.sqlite",
-        config.data, config.augmentation, training=not overfit,
-        seed=config.schedule.seed,
-        force_index=args.force_index,
-    )
-    val_annotations = (
-        config.data.quad_train_annotations or config.data.train_annotations
-        if overfit
-        else config.data.quad_val_annotations or config.data.val_annotations
-    )
-    val_index = "quad_train.sqlite" if overfit else "quad_val.sqlite"
-    val_dataset = QuadProposalDataset(
-        val_annotations,
-        config.data.image_root, config.data.index_dir / val_index,
-        config.data, config.augmentation, training=False, seed=config.schedule.seed,
-        force_index=args.force_index,
-    )
+    with accelerator.main_process_first():
+        train_dataset = QuadProposalDataset(
+            config.data.quad_train_annotations or config.data.train_annotations,
+            config.data.image_root, config.data.index_dir / "quad_train.sqlite",
+            config.data, config.augmentation, training=not overfit,
+            seed=config.schedule.seed,
+            force_index=args.force_index,
+        )
+        val_annotations = (
+            config.data.quad_train_annotations or config.data.train_annotations
+            if overfit
+            else config.data.quad_val_annotations or config.data.val_annotations
+        )
+        val_index = "quad_train.sqlite" if overfit else "quad_val.sqlite"
+        val_dataset = QuadProposalDataset(
+            val_annotations,
+            config.data.image_root, config.data.index_dir / val_index,
+            config.data, config.augmentation, training=False,
+            seed=config.schedule.seed,
+            force_index=args.force_index,
+        )
     if overfit:
         if args.overfit_images is not None and args.overfit_images < 1:
             raise ValueError("--overfit-images must be positive")
@@ -209,7 +232,11 @@ def main() -> None:
         train_dataset.records = list(selected)
         val_dataset.records = list(selected)
         optimizer_steps = math.ceil(
-            (args.batches_per_epoch or math.ceil(len(selected) / config.data.batch_size))
+            (
+                args.batches_per_epoch
+                or config.data.batches_per_epoch
+                or math.ceil(len(selected) / config.data.batch_size)
+            )
             / config.schedule.accumulation_steps
         ) * config.schedule.epochs
         config = replace(
@@ -224,8 +251,10 @@ def main() -> None:
             ),
         )
     if overfit:
-        repeat_count = args.batches_per_epoch or math.ceil(
-            len(train_dataset) / config.data.batch_size
+        repeat_count = (
+            args.batches_per_epoch
+            or config.data.batches_per_epoch
+            or math.ceil(len(train_dataset) / config.data.batch_size)
         )
         # Every optimizer batch sees every fixed fixture image exactly once.
         # This avoids domain sampling noise and makes the learnability check
@@ -239,7 +268,9 @@ def main() -> None:
             source_weights=config.data.source_weights,
             empty_fraction=config.data.empty_fraction,
             seed=config.schedule.seed,
-            batches_per_epoch=args.batches_per_epoch,
+            batches_per_epoch=(
+                args.batches_per_epoch or config.data.batches_per_epoch
+            ),
         )
     train_loader = DataLoader(
         train_dataset,
@@ -287,14 +318,15 @@ def main() -> None:
         model, train_loader, val_loader, target_builder, criterion, config, device,
         max_steps=args.max_steps, max_val_batches=args.max_val_batches,
         log_interval=args.log_interval,
-        use_ema_for_validation=not overfit,
         resume=args.resume,
         validation_interval=args.validation_interval,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         wandb_run_name=args.wandb_run_name,
+        accelerator=accelerator,
     )
-    print(json.dumps(result, indent=2, sort_keys=True))
+    if accelerator.is_main_process:
+        print(json.dumps(result, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,124 @@
+data:
+  train_annotations: ../../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_train.json
+  val_annotations: ../../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_val.json
+  quad_train_annotations: ../../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_train.json
+  quad_val_annotations: ../../../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_val.json
+  image_root: ../../../../data/visual-inference-datasets/output
+  index_dir: ../../artifacts/phase3/benchmarks/bounded_v1/index
+  input_size: 384
+  # This is the historical AttnRes physical/global batch. Accelerate splits
+  # each batch across GPUs, so the schedule remains 19 steps on 1 or 2 GPUs.
+  batch_size: 20
+  batches_per_epoch: 19
+  workers: 4
+  empty_fraction: 0.075
+  domain_weights:
+    general: 0.50
+    automotive: 0.30
+    fisheye: 0.20
+  source_domains:
+    coco_2017: general
+    nuimages: automotive
+    bdd100k_images_100k: automotive
+    woodscape_rgb_fisheye: fisheye
+  source_weights:
+    coco_2017: 0.50
+    nuimages: 0.18
+    bdd100k_images_100k: 0.12
+    woodscape_rgb_fisheye: 0.20
+  dense_background_sources: []
+  background_loss_weights: {}
+  tiny_area: 100
+  tiny_min_side: 4
+  quad_regular_min_side: 16
+  thin_major_axis_min: 8
+  thin_aspect_ratio_min: 3
+  thin_area: 16
+  component_categories:
+    [face, head, hand, arm, leg, foot, shoe, wheel, tire, license_plate,
+     mirror, door, handle, screen, logo]
+  parent_categories:
+    [person, pedestrian_adult, pedestrian_child, pedestrian_other,
+     pedestrian_construction_worker, pedestrian_police_officer,
+     car, truck, bus, van, motorcycle, bicycle, construction_vehicle]
+  component_containment_threshold: 0.8
+
+augmentation:
+  horizontal_flip_probability: 0.5
+  color_jitter_probability: 0.8
+  brightness: 0.2
+  contrast: 0.2
+  saturation: 0.2
+  blur_probability: 0.1
+  noise_probability: 0.1
+  jpeg_probability: 0.1
+  scale_min: 0.8
+  scale_max: 1.2
+  translation_fraction: 0.1
+  positive_visible_fraction: 0.6
+  ignore_visible_fraction: 0.2
+
+assignment:
+  strides: [8, 16, 32]
+  prior_sizes: [64, 128, 256]
+  top_k: 9
+  center_radius: 1.5
+
+loss:
+  objectness_weight: 1.0
+  box_weight: 2.0
+  ltrb_weight: 0.5
+  centerness_weight: 0.0
+  objectness_loss: quality_focal
+  quality_focal_beta: 2.0
+  box_loss: ciou
+  box_weighting: uniform
+  focal_alpha: 0.25
+  focal_gamma: 2.0
+
+inference:
+  pre_nms_top_k: 300
+  nms_iou_threshold: 0.9
+  max_proposals: 100
+  score_mode: objectness
+
+quad:
+  top_k: 9
+  gamma: 2.0
+  scale_sigma: 0.75
+  eligible_levels: 2
+  scale_measure: area
+  weak_negative_weight: 0.0
+  quality_weight: 1.0
+  corner_weight: 2.0
+  corner_smooth_l1_beta: 1.0
+  gwd_weight: 0.0
+  validity_weight: 0.05
+  quality_focal_beta: 2.0
+  quality_target_mode: centerness
+  quality_blend: 0.0
+  geometry_quality_target: corner_proxy
+
+schedule:
+  epochs: 40
+  freeze_backbone_epochs: 2
+  head_learning_rate: 0.0003
+  backbone_lr_multiplier: 0.1
+  reference_effective_batch: 64
+  weight_decay: 0.0001
+  warmup_steps: 1000
+  min_lr_ratio: 0.01
+  gradient_clip_norm: 10
+  # EMA does not affect raw training; this ramp prevents the historical EMA
+  # from retaining mostly random initialization over the short benchmark.
+  ema_decay: 0.9962930409
+  ema_ramp_steps: 200
+  accumulation_steps: 1
+  amp: true
+  seed: 42
+  checkpoint_every_epochs: 1
+  checkpoint_every_steps: 500
+
+pretrained_backbone: true
+neck_type: lite
+output_dir: ../../artifacts/phase3/benchmarks/bounded_v1/template

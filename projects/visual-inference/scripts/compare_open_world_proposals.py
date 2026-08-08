@@ -26,6 +26,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from student_detector.config import load_phase3_config
+from student_detector.checkpoints import checkpoint_neck_type, load_model_state_strict
 from student_detector.decoder import InferenceDecoder
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.quad_data import QuadProposalDataset, collate_quad_proposal_samples
@@ -44,11 +45,20 @@ def _sha256(path: Path) -> str:
 
 
 def _checkpoint_model(
-    model: torch.nn.Module, path: Path, state_key: str
-) -> dict[str, Any]:
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    model.load_state_dict(checkpoint[state_key], strict=False)
-    return checkpoint
+    model: torch.nn.Module,
+    checkpoint: dict[str, Any],
+    state_key: str,
+    *,
+    kind: str,
+    neck_type: str,
+) -> None:
+    load_model_state_strict(
+        model,
+        checkpoint,
+        kind=kind,
+        neck_type=neck_type,
+        state_key=state_key,
+    )
 
 
 
@@ -79,7 +89,10 @@ def _evaluate(
     state_key: str,
 ) -> tuple[dict[str, float], dict[str, float], dict[str, Any]]:
     model: torch.nn.Module
-    neck_type = getattr(config, "neck_type", "lite")
+    checkpoint_preview = torch.load(
+        checkpoint_path, map_location="cpu", weights_only=False
+    )
+    neck_type = checkpoint_neck_type(checkpoint_preview)
     if kind == "hbb":
         model = StudentDetector(pretrained_backbone=False, neck_type=neck_type)
         decoder: Any = InferenceDecoder(
@@ -97,7 +110,14 @@ def _evaluate(
             nms_iou_threshold=config.inference.nms_iou_threshold,
             max_proposals=300,
         )
-    checkpoint = _checkpoint_model(model, checkpoint_path, state_key)
+    _checkpoint_model(
+        model,
+        checkpoint_preview,
+        state_key,
+        kind=kind,
+        neck_type=neck_type,
+    )
+    checkpoint = checkpoint_preview
     model.to(device).eval()
     evaluated: list[QuadEvaluationImage] = []
     forward_seconds = decode_seconds = nms_seconds = 0.0
@@ -239,9 +259,11 @@ def main() -> None:
             "hbb_checkpoint": str(args.hbb_checkpoint.resolve()),
             "hbb_checkpoint_sha256": _sha256(args.hbb_checkpoint.resolve()),
             "hbb_global_step": hbb_checkpoint.get("global_step"),
+            "hbb_neck_type": checkpoint_neck_type(hbb_checkpoint),
             "quad_checkpoint": str(args.quad_checkpoint.resolve()),
             "quad_checkpoint_sha256": _sha256(args.quad_checkpoint.resolve()),
             "quad_global_step": quad_checkpoint.get("global_step"),
+            "quad_neck_type": checkpoint_neck_type(quad_checkpoint),
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
             "device": torch.cuda.get_device_name(device) if device.type == "cuda" else str(device),

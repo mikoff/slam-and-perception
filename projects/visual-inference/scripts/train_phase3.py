@@ -22,7 +22,8 @@ from student_detector.data import (
 from student_detector.losses import ProposalLoss
 from student_detector.model import StudentDetector
 from student_detector.targets import TargetBuilder
-from student_detector.training import set_reproducibility_seed, train_phase3
+from student_detector.training import train_phase3
+from student_detector.training_optimization import set_reproducibility_seed
 
 
 def parse_args() -> argparse.Namespace:

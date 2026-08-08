@@ -19,6 +19,7 @@ class DataConfig:
     quad_val_annotations: Path | None = None
     input_size: int = 384
     batch_size: int = 10
+    batches_per_epoch: int | None = None
     workers: int = 4
     empty_fraction: float = 0.075
     domain_weights: dict[str, float] = field(default_factory=lambda: {
@@ -212,6 +213,8 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
     )
     if config.data.input_size % max(config.assignment.strides) != 0:
         raise ValueError("input_size must be divisible by the largest stride")
+    if config.neck_type not in {"lite", "attn_res"}:
+        raise ValueError("neck_type must be 'lite' or 'attn_res'")
     if abs(sum(config.data.domain_weights.values()) - 1.0) > 1e-6:
         raise ValueError("domain_weights must sum to 1")
     if abs(sum(config.data.source_weights.values()) - 1.0) > 1e-6:
@@ -231,6 +234,8 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("ltrb_weight must be non-negative")
     if config.schedule.checkpoint_every_steps < 0:
         raise ValueError("checkpoint_every_steps must be non-negative")
+    if config.data.batches_per_epoch is not None and config.data.batches_per_epoch < 1:
+        raise ValueError("batches_per_epoch must be positive when configured")
     if not 0 <= config.schedule.ema_decay < 1:
         raise ValueError("ema_decay must be in [0, 1)")
     if config.schedule.ema_ramp_steps < 0:

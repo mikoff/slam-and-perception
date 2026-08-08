@@ -1,0 +1,43 @@
+{
+  "schema_version": "phase3-benchmark-lock.v1",
+  "benchmark": "phase3_bounded_v1",
+  "config": {
+    "path": "configs/benchmarks/phase3_bounded_v1.yaml",
+    "sha256": "403a72de5bfae192d52be625071786fdcab28037cec7f639c6484052888a5a7f"
+  },
+  "train_manifest": {
+    "images": 364,
+    "path": "../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_train.json",
+    "sha256": "bbf5592dcb8138cbeb01e6a2c6fc2485e9a1dcc257effbb10064136086db1e25",
+    "size": 14316484
+  },
+  "validation_manifest": {
+    "images": 36,
+    "path": "../../data/visual-inference-datasets/reports/g1_audit_bundle/open_world/open_world_coco_val.json",
+    "sha256": "25ad4e80b7ec8ab4c952d96a033ad13b21d27fe2b17e8ea256ec090bbff7c938",
+    "size": 1318196
+  },
+  "hbb_baseline": {
+    "name": "hbb_control_v1",
+    "training_optimizer_steps": 1240,
+    "checkpoint_state": "model",
+    "checkpoint": {
+      "path": "artifacts/phase3/open_world/hbb_control_v1/last.pt",
+      "sha256": "fc9dfd2438fe5b0f09e4c33c5aa4f523fe3e4415990f752e1b85516395c737ab",
+      "size": 114188364
+    },
+    "report": {
+      "path": "artifacts/phase3/open_world/comparison_v11_modulated/report_raw.json",
+      "sha256": "43f0bd9ae413f83b5c0d5637ce26433692b23308dfbb9cab4b42d5bf096e17b9",
+      "size": 11292
+    }
+  },
+  "optimization": {
+    "batch_size": 20,
+    "batches_per_epoch": 19,
+    "epochs": 40,
+    "optimizer_steps": 760
+  },
+  "variants": ["lite", "attn_res"],
+  "default_seeds": [42, 43, 44]
+}

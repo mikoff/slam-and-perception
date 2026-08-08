@@ -17,7 +17,8 @@ from student_detector.losses import (
 )
 from student_detector.model import StudentDetector
 from student_detector.targets import TargetBuilder
-from student_detector.training import ExponentialMovingAverage, train_phase3
+from student_detector.training import train_phase3
+from student_detector.training_optimization import ExponentialMovingAverage
 
 
 def _sample(*, dense: bool = True, ignore: bool = False) -> ProposalSample:
@@ -386,6 +387,10 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
         assert "model" in checkpoint
         assert "ema_model" in checkpoint
         assert "optimizer" in checkpoint
+        assert checkpoint["selected_state"] == (
+            "ema_model" if name == "best.pt" else "model"
+        )
+        assert "rng_state" in checkpoint
     resumed_config = replace(
         config, schedule=replace(config.schedule, epochs=2)
     )

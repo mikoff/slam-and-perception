@@ -47,17 +47,40 @@ the detector does not train closed-set class logits.
 Run from this directory:
 
 ```bash
-uv sync --frozen
-uv run pytest -q tests
-uv run python scripts/verify_phase2.py
-uv run python scripts/audit_phase3_data.py --samples 300
-uv run python scripts/train_quad_proposals.py --config configs/phase3_attnres.yaml
+uv sync --frozen --group cloud --inexact
+uv run --no-sync pytest -q tests
+uv run --no-sync python scripts/verify_phase2.py
+uv run --no-sync python scripts/audit_phase3_data.py --samples 300
+uv run --no-sync python scripts/train_quad_proposals.py --config configs/phase3_attnres.yaml
 ```
+
+`LiteFPN` and `AttnResLiteFPN` are mutually exclusive neck variants. Historical
+`production_quad_v11` used LiteFPN; current cloud defaults select AttnRes. Keep
+LiteFPN as the matched control until the bounded multi-seed benchmark selects a
+winner.
+
+Verify and run the frozen 364-train/36-validation benchmark matrix:
+
+The canonical v1 reproduction record, expected measurements, and known
+schedule mismatch are documented in
+[`phase3_bounded_benchmark_v1.md`](phase3_bounded_benchmark_v1.md).
+
+```bash
+uv run --no-sync python scripts/run_limited_benchmark.py --verify-only
+uv run --no-sync python scripts/run_limited_benchmark.py --seeds 42,43,44
+uv run --no-sync python scripts/run_limited_benchmark.py \
+  --seeds 42,43,44 --parallel-neck-devices 0,1
+```
+
+Each run uses batch 20, 19 batches per epoch, 40 epochs, and 760 optimizer
+updates. It writes raw and EMA metrics, strict neck-specific checkpoints, and a
+content-addressed `run_contract.json`. Add `--num-processes 2` to distribute one
+model over two GPUs without changing the global batch or update schedule.
 
 Compare open-world quad proposal checkpoints:
 
 ```bash
-uv run python scripts/compare_open_world_proposals.py \
+uv run --no-sync python scripts/compare_open_world_proposals.py \
   --config configs/phase3_attnres.yaml \
   --hbb-checkpoint artifacts/phase3/open_world/hbb_control_v1/last.pt \
   --quad-checkpoint artifacts/phase3/open_world/quad_candidate_v12_attnres/last.pt \
@@ -66,7 +89,5 @@ uv run python scripts/compare_open_world_proposals.py \
 
 ## Cleanup Boundary
 
-The active detector surface consists of `student_detector/`,
-`scripts/train_quad_proposals.py`, `scripts/audit_phase3_data.py`,
-`scripts/compare_open_world_proposals.py`, the Phase-2 inspection utilities, and
-`configs/phase3_attnres.yaml`.
+The active detector surface consists of `student_detector/`, the Phase-3 train,
+compare, audit, and bounded-benchmark scripts, and the Phase-3 configs.

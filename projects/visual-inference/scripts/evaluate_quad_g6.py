@@ -13,6 +13,7 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 
+from student_detector.checkpoints import selected_checkpoint_state
 from student_detector.config import load_phase3_config
 from student_detector.model import QuadProposalDetector
 from student_detector.quad_assigner import QuadAssigner
@@ -95,7 +96,7 @@ def main() -> None:
     checkpoint_path = args.checkpoint.resolve()
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model = QuadProposalDetector(pretrained_backbone=False).to(device)
-    model.load_state_dict(checkpoint["model"])
+    model.load_state_dict(checkpoint[selected_checkpoint_state(checkpoint)])
     model.eval()
 
     manifest_path = config.data.quad_val_annotations or config.data.val_annotations
