@@ -33,9 +33,12 @@ also discover the key from Packet's full key, SHA-256 fingerprint, or key
 preview. It deliberately does not create keys through Packet's API because the
 live endpoint's validation contract currently disagrees with its OpenAPI schema.
 
-Enable S3 versioning. Add lifecycle rules that retain checkpoint objects long
-enough for recovery and eventually expire abandoned multipart uploads. W&B is
-not a backup: S3 is the durable source for resume state.
+Enable S3 versioning. Add an enabled lifecycle rule applying to `runs/` that
+aborts incomplete multipart uploads. If that rule expires current objects or
+noncurrent versions, it must retain them for at least seven days and must not
+use a fixed expiration date. Every GitHub dispatch verifies these properties
+before allocating a GPU. W&B is not a backup: S3 is the durable source for
+resume state.
 
 ## Publish an immutable dataset
 
@@ -128,6 +131,12 @@ Monitor all three surfaces:
 - dstack: task scheduling, host status, stdout/stderr, and termination.
 - W&B: namespaced metrics, system utilization, validation duration, checkpoint
   save duration, free disk, and upload queue depth.
+
+The locked cloud group includes `wandb[aws]` so W&B can resolve the immutable
+S3 dataset reference. For an S3-compatible provider, the worker maps
+`S3_ENDPOINT_URL` to W&B's `AWS_S3_ENDPOINT_URL`. Failure to attach that
+auxiliary dataset link is recorded and printed but does not abort training;
+failure to initialize the W&B run itself remains fatal.
 
 The Packet reconciler runs every 15 minutes. Every attempt receives a unique
 Packet instance and dstack fleet name. A failed or stale provisioning attempt is
@@ -241,6 +250,8 @@ First classify the failure:
 | GitHub interruption before dstack accepts the task | stale attempt is destroyed; reconciler creates fresh capacity |
 | GitHub interruption after dstack accepts the task | reconciler monitors the existing dstack task without reconnecting to the server |
 | corrupt newest checkpoint | auto-resume verifies hashes and falls back to an older manifest entry |
+| S3 authentication, timeout, or service failure | fail before training; only an authoritative missing-object response permits a fresh run |
+| W&B dataset artifact reference failure | record and print the observability error; continue because the immutable dataset contract is already captured |
 | contract mismatch | publish/use the correct dataset/config/commit; never force-load it |
 
 On a replacement host, `--resume-mode auto` downloads the newest verified full

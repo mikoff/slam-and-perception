@@ -22,7 +22,7 @@ packages = ["student_detector"]
 [dependency-groups]
 cloud = [
     "awscli>=1.46.0",
-    "wandb>=0.28.1",
+    "wandb[aws]>=0.28.1",
 ]
 dev = [
     "pytest>=8",

@@ -30,6 +30,14 @@ def test_cloud_environment_rejects_unversioned_recipe(
         verify_environment()
 
 
+def test_cloud_environment_accepts_rtx4090_production_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _environment(monkeypatch)
+    monkeypatch.setenv("CONFIG_PATH", "configs/phase3_rtx4090_bs128_v1.yaml")
+    assert verify_environment()["config"] == "configs/phase3_rtx4090_bs128_v1.yaml"
+
+
 def test_smoke_command_is_bounded_and_resume_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -40,6 +48,7 @@ def test_smoke_command_is_bounded_and_resume_enabled(
     assert command[0:3] == [command[0], "-m", "accelerate.commands.launch"]
     assert command[command.index("--max-steps") + 1] == "5"
     assert command[command.index("--max-val-batches") + 1] == "2"
+    assert command[command.index("--log-interval") + 1] == "1"
     assert command[command.index("--resume-mode") + 1] == "auto"
     assert command[command.index("--validation-interval") + 1] == "1"
 

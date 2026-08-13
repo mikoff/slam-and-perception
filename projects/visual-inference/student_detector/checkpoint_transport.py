@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 MANIFEST_SCHEMA = "visual-inference-checkpoints.v1"
+CHECKPOINT_TRANSFER_TIMEOUT_SECONDS = 300
+_NOT_FOUND_MARKERS = ("404", "not found", "nosuchkey", "no such key")
 
 
 def _sha256(path: Path) -> str:
@@ -56,23 +58,42 @@ class AwsCheckpointStore:
                 "s3", "cp", str(source), f"s3://{self.bucket}/{key}", "--no-progress"
             ),
             check=True,
+            timeout=CHECKPOINT_TRANSFER_TIMEOUT_SECONDS,
         )
 
     def download(self, key: str, destination: Path) -> bool:
+        """Download one object, returning false only for an authoritative miss."""
         destination.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            self._command(
-                "s3",
-                "cp",
-                f"s3://{self.bucket}/{key}",
-                str(destination),
-                "--no-progress",
-            ),
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        try:
+            result = subprocess.run(
+                self._command(
+                    "s3",
+                    "cp",
+                    f"s3://{self.bucket}/{key}",
+                    str(destination),
+                    "--no-progress",
+                ),
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=CHECKPOINT_TRANSFER_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            destination.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"checkpoint download failed for s3://{self.bucket}/{key}"
+            ) from error
+        if result.returncode == 0:
+            return True
+        destination.unlink(missing_ok=True)
+        details = result.stderr.strip()
+        if any(marker in details.lower() for marker in _NOT_FOUND_MARKERS):
+            return False
+        raise RuntimeError(
+            f"checkpoint download failed for s3://{self.bucket}/{key}: "
+            f"{details or f'AWS CLI exited {result.returncode}'}"
         )
-        return result.returncode == 0
 
 
 def _manifest_key(run_id: str) -> str:
@@ -189,6 +210,10 @@ class CheckpointUploader:
             value = json.loads(target.read_text(encoding="utf-8"))
             if value.get("schema_version") != MANIFEST_SCHEMA:
                 raise ValueError("existing checkpoint manifest has incompatible schema")
+            if value.get("run_id") != self.run_id:
+                raise ValueError("existing checkpoint manifest run ID mismatch")
+            if value.get("contract", {}) != self.contract:
+                raise ValueError("existing checkpoint manifest contract mismatch")
             return value
 
     def _upload(self, item: _Upload) -> None:

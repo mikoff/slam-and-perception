@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 import yaml
+
+if __package__:
+    from .run_training import ALLOWED_CONFIGS
+else:
+    from run_training import ALLOWED_CONFIGS
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = PROJECT_ROOT.parents[1]
@@ -38,6 +44,15 @@ def main() -> None:
         raise ValueError("cloud task must verify its effective shared-memory mount")
     if task.get("resources", {}).get("shm_size") != "32GB":
         raise ValueError("cloud task must request 32GB shared memory from dstack")
+    if task.get("backends") != ["runpod"]:
+        raise ValueError("static dstack backend must remain runpod")
+
+    project = tomllib.loads(
+        (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    cloud_dependencies = project.get("dependency-groups", {}).get("cloud", [])
+    if not any(str(value).startswith("wandb[aws]") for value in cloud_dependencies):
+        raise ValueError("cloud dependencies must install W&B's AWS artifact support")
 
     workflows = sorted((REPOSITORY_ROOT / ".github/workflows").glob("*.yml"))
     for workflow in workflows:
@@ -60,6 +75,15 @@ def main() -> None:
         raise ValueError("workflow bypasses the validated dstack task renderer")
     if "scripts/cloud/submit_dstack_task.py" not in cloud_text:
         raise ValueError("RunPod dispatch must use the validated dstack task renderer")
+    if "--verify-storage" not in cloud_text:
+        raise ValueError("cloud dispatch must verify S3 checkpoint protection")
+    workflow_configs = set(re.findall(r"configs/[\w./-]+\.yaml", cloud_text))
+    if workflow_configs != ALLOWED_CONFIGS:
+        raise ValueError(
+            "workflow config choices and cloud allowlist differ: "
+            f"workflow={sorted(workflow_configs)}, "
+            f"allowlist={sorted(ALLOWED_CONFIGS)}"
+        )
     print("Cloud workflow and dstack policy verified")
 
 

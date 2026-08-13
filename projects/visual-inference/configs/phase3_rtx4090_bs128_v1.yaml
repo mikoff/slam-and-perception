@@ -7,7 +7,7 @@ data:
   index_dir: ../artifacts/phase3/index
   input_size: 384
   batch_size: 128
-  workers: 4
+  workers: 8
   empty_fraction: 0.075
   domain_weights:
     general: 0.50

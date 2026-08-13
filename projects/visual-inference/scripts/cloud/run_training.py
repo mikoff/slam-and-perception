@@ -16,6 +16,7 @@ if __package__:
         download_manifest,
         sha256_file,
         stage_dataset,
+        verify_bucket_protection,
     )
 else:
     from dataset_staging import (
@@ -23,11 +24,16 @@ else:
         download_manifest,
         sha256_file,
         stage_dataset,
+        verify_bucket_protection,
     )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = PROJECT_ROOT.parents[1]
-ALLOWED_CONFIGS = {"configs/phase3.yaml", "configs/phase3_attnres.yaml", "configs/phase3_rtx4090_bs128_v1.yaml"}
+ALLOWED_CONFIGS = {
+    "configs/phase3.yaml",
+    "configs/phase3_attnres.yaml",
+    "configs/phase3_rtx4090_bs128_v1.yaml",
+}
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -113,7 +119,16 @@ def build_training_command(values: dict[str, str], output_dir: Path) -> list[str
         "5" if values["mode"] == "production" else "1",
     ]
     if values["mode"] == "smoke":
-        command.extend(["--max-steps", "5", "--max-val-batches", "2"])
+        command.extend(
+            [
+                "--max-steps",
+                "5",
+                "--max-val-batches",
+                "2",
+                "--log-interval",
+                "1",
+            ]
+        )
     for option, variable in (
         ("--wandb-project", "WANDB_PROJECT"),
         ("--wandb-entity", "WANDB_ENTITY"),
@@ -157,8 +172,15 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify-env", action="store_true")
     parser.add_argument("--verify-dataset", action="store_true")
+    parser.add_argument("--verify-storage", action="store_true")
     args = parser.parse_args()
     values = verify_environment()
+    if args.verify_storage:
+        verify_bucket_protection(
+            bucket=_required("S3_BUCKET"),
+            aws=AwsCli(os.getenv("S3_ENDPOINT_URL") or None),
+        )
+        print("S3 checkpoint protection verified")
     if args.verify_dataset:
         verify_remote_dataset(
             values,
@@ -193,6 +215,7 @@ def main() -> None:
     output_root = Path(os.getenv("RUN_ROOT", "/workspace/runs"))
     output_dir = output_root / values["run_id"]
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Launching {values['mode']} workload for run {values['run_id']}", flush=True)
     process = subprocess.Popen(
         build_workload_command(values, output_dir),
         cwd=PROJECT_ROOT,
@@ -206,6 +229,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, forward)
     signal.signal(signal.SIGTERM, forward)
     return_code = process.wait()
+    print(
+        f"Workload for run {values['run_id']} exited with code {return_code}",
+        flush=True,
+    )
     if values["mode"] == "batch_preflight":
         upload_batch_preflight_report(values, output_dir, bucket, aws)
     raise SystemExit(return_code)

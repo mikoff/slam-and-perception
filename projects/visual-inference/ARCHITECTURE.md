@@ -26,10 +26,9 @@ and then run through the same dstack task contract.
   read-only, and never load the full annotation table.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
-- S3 checkpoint manifests are published only after immutable object upload and
-  contain the latest plus two previous recovery candidates with SHA-256 hashes.
-- Run contracts bind checkpoints to source commit, dataset ID and manifest,
-  config path, phase, and model architecture. Mismatches fail closed.
+- S3 checkpoint manifests follow immutable object uploads and retain the latest
+  plus two SHA-256 recovery candidates; transport errors fail closed.
+- Run contracts bind checkpoints to source, data, config, phase, and architecture.
 
 # Active Design Patterns & Decisions
 
@@ -77,4 +76,5 @@ and then run through the same dstack task contract.
 - Packet servers are never adopted; ambiguous launches are only destroyed.
 - A 30-minute lease prevents races. After expiry, started tasks are monitored;
   otherwise resources are replaced. dstack checks out the recorded commit.
-- W&B is observability, not durability; S3 versioning/lifecycle protect recovery.
+- GitHub verifies S3 versioning, multipart cleanup, and seven-day retention
+  before submission; W&B artifact links are best-effort observability only.

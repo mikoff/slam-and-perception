@@ -70,6 +70,14 @@ class StandardReporter:
             epochs=config.schedule.epochs,
             world_size=context["world_size"],
         )
+        print(
+            "Training started: "
+            f"run={self.run_id or 'local'} "
+            f"train_images={len(context['train_loader'].dataset)} "
+            f"validation_images={len(context['val_loader'].dataset)} "
+            f"batch_size={config.data.batch_size} epochs={config.schedule.epochs}",
+            flush=True,
+        )
         if self.wandb_project is not None:
             if self.accelerator is None:
                 raise RuntimeError("W&B reporting requires the training Accelerator")
@@ -98,23 +106,41 @@ class StandardReporter:
                     },
                 )
                 self.tracking_started = True
-                bucket = os.getenv("S3_BUCKET")
-                dataset_id = os.getenv("DATASET_ID")
-                if bucket and dataset_id:
-                    import wandb
-
-                    artifact = wandb.Artifact(f"dataset-{dataset_id}", type="dataset")
-                    artifact.add_reference(
-                        f"s3://{bucket}/datasets/{dataset_id}/dataset-manifest.json"
-                    )
-                    self.accelerator.get_tracker("wandb", unwrap=True).log_artifact(
-                        artifact, aliases=["used"]
-                    )
             except Exception as error:
                 self._event("tracking_error", operation="init", error=str(error))
                 raise RuntimeError("failed to initialize W&B tracking") from error
+            self._log_dataset_artifact()
         if self.start_callback is not None:
             self.start_callback(**context)
+
+    def _log_dataset_artifact(self) -> None:
+        """Best-effort W&B link to the immutable S3 dataset manifest."""
+        bucket = os.getenv("S3_BUCKET")
+        dataset_id = os.getenv("DATASET_ID")
+        if not bucket or not dataset_id:
+            return
+        if endpoint := os.getenv("S3_ENDPOINT_URL"):
+            # W&B's boto3 S3 reference handler uses this endpoint variable.
+            os.environ.setdefault("AWS_S3_ENDPOINT_URL", endpoint)
+        try:
+            import wandb
+
+            artifact = wandb.Artifact(f"dataset-{dataset_id}", type="dataset")
+            artifact.add_reference(
+                f"s3://{bucket}/datasets/{dataset_id}/dataset-manifest.json"
+            )
+            self.accelerator.get_tracker("wandb", unwrap=True).log_artifact(
+                artifact, aliases=["used"]
+            )
+        except Exception as error:
+            self._event(
+                "tracking_error", operation="dataset_artifact", error=str(error)
+            )
+            print(
+                f"W&B dataset artifact reference failed: {error}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _record(self, record: Mapping[str, Any], *, step: int) -> None:
         if self.batch_path is not None:
@@ -149,6 +175,12 @@ class StandardReporter:
             **{f"timing/{key}": value for key, value in (timings or {}).items()},
         }
         self._record(record, step=global_step)
+        print(
+            "Training progress: "
+            f"epoch={epoch + 1} batch={batch}/{batches_per_epoch} "
+            f"step={global_step} loss={float(metrics.get('loss', 0.0)):.6f}",
+            flush=True,
+        )
 
     def on_validation(
         self,
@@ -167,6 +199,11 @@ class StandardReporter:
         if duration_seconds is not None:
             record[f"timing/{prefix}_seconds"] = duration_seconds
         self._record(record, step=global_step)
+        print(
+            f"Validation complete: state={state} epoch={epoch + 1} "
+            f"step={global_step} duration={duration_seconds or 0.0:.1f}s",
+            flush=True,
+        )
 
     def on_epoch(self, *, metrics: Mapping[str, Any]) -> None:
         if self.epoch_path is not None:
@@ -204,6 +241,11 @@ class StandardReporter:
                     best, global_step, logical_name=best.name
                 )
                 self._best_signatures[best.name] = signature
+        print(
+            f"Checkpoint saved: step={global_step} path={checkpoint}",
+            f"upload_queue={self.checkpoint_uploader.pending if self.checkpoint_uploader else 0}",
+            flush=True,
+        )
 
     def close(self) -> None:
         upload_error: BaseException | None = None

@@ -14,6 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 MANIFEST_SCHEMA = "visual-inference-dataset.v1"
+MIN_CHECKPOINT_RETENTION_DAYS = 7
+AWS_CONTROL_PLANE_TIMEOUT_SECONDS = 60
 
 
 def sha256_file(path: Path, *, chunk_size: int = 8 * 1024 * 1024) -> str:
@@ -103,6 +105,108 @@ class AwsCli:
             check=True,
         )
 
+    def json(self, *arguments: str) -> dict[str, Any]:
+        """Run a bounded AWS control-plane query and decode its JSON object."""
+        result = subprocess.run(
+            self._command(*arguments),
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=AWS_CONTROL_PLANE_TIMEOUT_SECONDS,
+        )
+        value = json.loads(result.stdout or "{}")
+        if not isinstance(value, dict):
+            raise ValueError("AWS CLI returned a non-object JSON response")
+        return value
+
+
+def _untagged_rule_prefix(rule: dict[str, Any]) -> str | None:
+    """Return the prefix for a rule that can affect untagged checkpoint objects."""
+    if "Prefix" in rule:
+        return str(rule["Prefix"])
+    filter_value = rule.get("Filter")
+    if filter_value is None:
+        return ""
+    if not isinstance(filter_value, dict) or "Tag" in filter_value:
+        return None
+    if "Prefix" in filter_value:
+        return str(filter_value["Prefix"])
+    conjunction = filter_value.get("And")
+    if not isinstance(conjunction, dict) or conjunction.get("Tags"):
+        return None
+    return str(conjunction.get("Prefix", ""))
+
+
+def _affects_checkpoint_prefix(rule: dict[str, Any]) -> bool:
+    prefix = _untagged_rule_prefix(rule)
+    return prefix is not None and (
+        "runs/".startswith(prefix) or prefix.startswith("runs/")
+    )
+
+
+def _covers_checkpoint_prefix(rule: dict[str, Any]) -> bool:
+    prefix = _untagged_rule_prefix(rule)
+    return prefix is not None and "runs/".startswith(prefix)
+
+
+def _multipart_abort_days(rule: dict[str, Any]) -> int:
+    abort = rule.get("AbortIncompleteMultipartUpload")
+    if not isinstance(abort, dict):
+        return 0
+    return int(abort.get("DaysAfterInitiation", 0))
+
+
+def verify_bucket_protection(*, bucket: str, aws: AwsCli) -> None:
+    """Fail unless checkpoint pointers and uploads have required S3 protection."""
+    versioning = aws.json("s3api", "get-bucket-versioning", "--bucket", bucket)
+    if versioning.get("Status") != "Enabled":
+        raise ValueError("S3 bucket versioning must be Enabled")
+
+    lifecycle = aws.json(
+        "s3api", "get-bucket-lifecycle-configuration", "--bucket", bucket
+    )
+    rules = lifecycle.get("Rules")
+    if not isinstance(rules, list):
+        raise ValueError("S3 bucket lifecycle configuration must contain Rules")
+    enabled = [
+        rule
+        for rule in rules
+        if isinstance(rule, dict) and rule.get("Status") == "Enabled"
+    ]
+    abort_rules = [
+        rule
+        for rule in enabled
+        if _covers_checkpoint_prefix(rule) and _multipart_abort_days(rule) > 0
+    ]
+    if not abort_rules:
+        raise ValueError(
+            "S3 lifecycle must abort incomplete multipart uploads under runs/"
+        )
+
+    for rule in enabled:
+        if not _affects_checkpoint_prefix(rule):
+            continue
+        expiration = rule.get("Expiration", {})
+        if isinstance(expiration, dict):
+            if expiration.get("Date"):
+                raise ValueError(
+                    "S3 lifecycle must not use fixed-date expiration under runs/"
+                )
+            days = int(expiration.get("Days", 0))
+            if days and days < MIN_CHECKPOINT_RETENTION_DAYS:
+                raise ValueError(
+                    "S3 checkpoint expiration must retain current objects for at "
+                    f"least {MIN_CHECKPOINT_RETENTION_DAYS} days"
+                )
+        noncurrent = rule.get("NoncurrentVersionExpiration", {})
+        if isinstance(noncurrent, dict):
+            days = int(noncurrent.get("NoncurrentDays", 0))
+            if days and days < MIN_CHECKPOINT_RETENTION_DAYS:
+                raise ValueError(
+                    "S3 checkpoint expiration must retain noncurrent versions for at "
+                    f"least {MIN_CHECKPOINT_RETENTION_DAYS} days"
+                )
+
 
 def _safe_extract(archive: Path, destination: Path) -> None:
     with tarfile.open(archive, mode="r:*") as bundle:
@@ -151,6 +255,7 @@ def stage_dataset(
     destination = destination_root / dataset_id
     published_manifest = destination / ".dataset-manifest.json"
     manifest_uri = f"s3://{bucket}/datasets/{dataset_id}/dataset-manifest.json"
+    print(f"Dataset staging: downloading manifest for {dataset_id}", flush=True)
     destination_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
         prefix=f".{dataset_id}.", dir=destination_root
@@ -163,6 +268,7 @@ def stage_dataset(
         manifest_digest = sha256_file(manifest_path)
         if destination.is_dir() and published_manifest.is_file():
             if sha256_file(published_manifest) == manifest_digest:
+                print(f"Dataset staging: reusing verified {destination}", flush=True)
                 return destination
             raise ValueError("existing dataset directory has a different manifest")
 
@@ -174,6 +280,11 @@ def stage_dataset(
                 f"insufficient staging disk: need {required} bytes, have {free}"
             )
         archive = temporary / "dataset.tar"
+        print(
+            "Dataset staging: downloading "
+            f"{archive_size / 1024**3:.1f} GiB archive for {dataset_id}",
+            flush=True,
+        )
         aws.download(f"s3://{bucket}/{manifest['archive']['key']}", archive)
         if archive.stat().st_size != archive_size:
             raise ValueError("dataset archive size mismatch")
@@ -181,19 +292,27 @@ def stage_dataset(
             raise ValueError("dataset archive checksum mismatch")
         extracted = temporary / "extracted"
         extracted.mkdir()
+        print(
+            f"Dataset staging: extracting {len(manifest['files'])} files",
+            flush=True,
+        )
         _safe_extract(archive, extracted)
+        print("Dataset staging: verifying extracted files", flush=True)
         _verify_tree(extracted, manifest)
         shutil.copy2(manifest_path, extracted / ".dataset-manifest.json")
         os.replace(extracted, destination)
+        print(f"Dataset staging: published verified {destination}", flush=True)
     return destination
 
 
 __all__ = [
     "AwsCli",
     "MANIFEST_SCHEMA",
+    "MIN_CHECKPOINT_RETENTION_DAYS",
     "download_manifest",
     "required_staging_bytes",
     "sha256_file",
     "stage_dataset",
     "validate_manifest",
+    "verify_bucket_protection",
 ]
