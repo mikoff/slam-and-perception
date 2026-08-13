@@ -51,9 +51,9 @@ resources:
   shm_size: 32GB
   disk: 300GB
 
-backends: [runpod]
+backends: [packet]
 spot_policy: on-demand
-max_duration: 24h
+max_duration: 48h
 stop_duration: 10m
 max_price: 5.0
 idle_duration: 5m

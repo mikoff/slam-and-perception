@@ -23,6 +23,7 @@ on:
         options:
           - configs/phase3.yaml
           - configs/phase3_attnres.yaml
+          - configs/phase3_rtx4090_bs128_v1.yaml
       dataset_id:
         description: Immutable S3 dataset identifier
         required: true
