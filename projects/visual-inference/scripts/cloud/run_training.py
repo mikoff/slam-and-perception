@@ -27,7 +27,7 @@ else:
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = PROJECT_ROOT.parents[1]
-ALLOWED_CONFIGS = {"configs/phase3.yaml", "configs/phase3_attnres.yaml"}
+ALLOWED_CONFIGS = {"configs/phase3.yaml", "configs/phase3_attnres.yaml", "configs/phase3_rtx4090_bs128_v1.yaml"}
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
