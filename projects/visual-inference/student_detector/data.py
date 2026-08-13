@@ -33,6 +33,11 @@ INDEX_SCHEMA_VERSION = "6"
 PROPOSAL_MANIFEST_SCHEMA = "quad-proposal-manifest.v1"
 
 
+def use_file_system_tensor_sharing(_worker_id: int | None = None) -> None:
+    """Avoid file-descriptor exhaustion when DataLoader workers send tensors."""
+    torch.multiprocessing.set_sharing_strategy("file_system")
+
+
 @dataclass(frozen=True)
 class ImageRecord:
     row_index: int

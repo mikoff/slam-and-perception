@@ -22,12 +22,6 @@ if not hasattr(pathlib, "_local"):
 
 import torch
 from accelerate import Accelerator
-
-# Fix for "Too many open files" when using large batch sizes and multiple dataloader workers
-import torch.multiprocessing
-
-torch.multiprocessing.set_sharing_strategy("file_system")
-
 from torch.utils.data import DataLoader
 
 from student_detector.checkpoint_transport import (
@@ -38,6 +32,7 @@ from student_detector.config import load_phase3_config
 from student_detector.data import (
     DomainMixtureBatchSampler,
     select_source_mixture_indices,
+    use_file_system_tensor_sharing,
 )
 from student_detector.model import QuadProposalDetector
 from student_detector.quad_assigner import QuadAssigner
@@ -49,7 +44,6 @@ from student_detector.quad_losses import QuadProposalLoss
 from student_detector.quad_targets import QuadTargetBuilder
 from student_detector.quad_training import train_quad_proposals
 from student_detector.training_optimization import set_reproducibility_seed
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -198,6 +192,7 @@ def main() -> None:
     # the dataset, sampler, or model. Seeding only inside the training loop made
     # nominally identical runs start from different heads.
     set_reproducibility_seed(config.schedule.seed)
+    use_file_system_tensor_sharing()
     with accelerator.main_process_first():
         train_dataset = QuadProposalDataset(
             config.data.quad_train_annotations or config.data.train_annotations,
@@ -298,6 +293,8 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_quad_proposal_samples,
         pin_memory=device.type == "cuda",
+        multiprocessing_context=("spawn" if config.data.workers > 0 else None),
+        worker_init_fn=use_file_system_tensor_sharing,
         persistent_workers=config.data.workers > 0,
     )
     val_loader = DataLoader(
@@ -307,6 +304,8 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_quad_proposal_samples,
         pin_memory=device.type == "cuda",
+        multiprocessing_context=("spawn" if config.data.workers > 0 else None),
+        worker_init_fn=use_file_system_tensor_sharing,
         persistent_workers=config.data.workers > 0,
     )
     assigner = QuadAssigner(

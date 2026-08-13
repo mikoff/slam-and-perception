@@ -18,13 +18,13 @@ from student_detector.data import (
     IndexedCocoProposalDataset,
     collate_proposal_samples,
     select_source_mixture_indices,
+    use_file_system_tensor_sharing,
 )
 from student_detector.losses import ProposalLoss
 from student_detector.model import StudentDetector
 from student_detector.targets import TargetBuilder
 from student_detector.training import train_phase3
 from student_detector.training_optimization import set_reproducibility_seed
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -261,6 +261,7 @@ def main() -> None:
         else args.device
     )
     set_reproducibility_seed(config.schedule.seed)
+    use_file_system_tensor_sharing()
     train_dataset = IndexedCocoProposalDataset(
         config.data.train_annotations,
         config.data.image_root,
@@ -318,6 +319,8 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_proposal_samples,
         pin_memory=device.type == "cuda",
+        multiprocessing_context=("spawn" if config.data.workers > 0 else None),
+        worker_init_fn=use_file_system_tensor_sharing,
         # Worker-local dataset copies otherwise retain epoch zero forever and
         # repeat the same deterministic augmentation sequence every epoch.
         persistent_workers=False,
@@ -329,6 +332,8 @@ def main() -> None:
         num_workers=config.data.workers,
         collate_fn=collate_proposal_samples,
         pin_memory=device.type == "cuda",
+        multiprocessing_context=("spawn" if config.data.workers > 0 else None),
+        worker_init_fn=use_file_system_tensor_sharing,
         persistent_workers=False,
     )
     if args.overfit_images:

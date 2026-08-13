@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +23,10 @@ from accelerate import Accelerator
 from torch.utils.data import DataLoader
 
 from student_detector.config import Phase3Config, load_phase3_config
-from student_detector.data import DomainMixtureBatchSampler
+from student_detector.data import (
+    DomainMixtureBatchSampler,
+    use_file_system_tensor_sharing,
+)
 from student_detector.model import QuadProposalDetector
 from student_detector.quad_assigner import QuadAssigner
 from student_detector.quad_data import (
@@ -183,6 +187,7 @@ def run_worker(args: argparse.Namespace) -> int:
     try:
         if not torch.cuda.is_available():
             raise RuntimeError("batch preflight requires a CUDA GPU")
+        use_file_system_tensor_sharing()
         shared_memory = os.statvfs("/dev/shm")
         shared_memory_total = shared_memory.f_frsize * shared_memory.f_blocks
         shared_memory_free = shared_memory.f_frsize * shared_memory.f_bavail
@@ -236,7 +241,14 @@ def run_worker(args: argparse.Namespace) -> int:
             num_workers=config.data.workers,
             collate_fn=collate_quad_proposal_samples,
             pin_memory=True,
-            persistent_workers=config.data.workers > 0,
+            # CUDA and dstack already own background threads before iteration.
+            # PyTorch documents fork as unsafe in that state; spawn also uses
+            # QuadProposalDataset.__getstate__ to reopen SQLite per worker.
+            multiprocessing_context=("spawn" if config.data.workers > 0 else None),
+            worker_init_fn=use_file_system_tensor_sharing,
+            # A candidate has one finite traversal. Persistent children only
+            # complicate teardown after an error and provide no reuse benefit.
+            persistent_workers=False,
         )
         model = QuadProposalDetector(
             pretrained_backbone=False, neck_type=config.neck_type
@@ -324,6 +336,7 @@ def run_worker(args: argparse.Namespace) -> int:
             "status": "error",
             "batch_size": args.worker_batch,
             "error": f"{type(error).__name__}: {error}",
+            "traceback": traceback.format_exc(),
         }
     _write_result(output, result)
     print(json.dumps(result, sort_keys=True), flush=True)
