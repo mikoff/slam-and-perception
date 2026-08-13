@@ -5,11 +5,9 @@ description = "Experiments with neural network distillation and visual inference
 requires-python = ">=3.11,<3.14"
 dependencies = [
     "accelerate>=1.14.0",
-    "duckdb>=1.5.5",
     "ijson>=3.4,<4",
     "pillow",
     "pyyaml>=6,<7",
-    "tensorboard>=2.21.0",
     "timm>=1.0.27,<2",
     "torch>=2.7.0",
 ]
@@ -28,6 +26,7 @@ cloud = [
 ]
 dev = [
     "pytest>=8",
+    "ruff==0.12.8",
 ]
 inspection = [
     "ai-edge-model-explorer>=0.1.32,<0.2",
@@ -47,6 +46,7 @@ explicit = true
 torch = { index = "pytorch" }
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

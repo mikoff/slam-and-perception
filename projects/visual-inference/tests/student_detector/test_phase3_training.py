@@ -26,9 +26,7 @@ def _sample(*, dense: bool = True, ignore: bool = False) -> ProposalSample:
         image=torch.randn(3, 64, 64),
         boxes=torch.tensor([[12.0, 12.0, 48.0, 52.0]]),
         ignore_boxes=(
-            torch.tensor([[0.0, 0.0, 10.0, 10.0]])
-            if ignore
-            else torch.empty((0, 4))
+            torch.tensor([[0.0, 0.0, 10.0, 10.0]]) if ignore else torch.empty((0, 4))
         ),
         valid_mask=torch.ones(64, 64, dtype=torch.bool),
         image_id=1,
@@ -116,9 +114,7 @@ def test_weak_background_supervision_preserves_positive_and_ignore_weights():
         torch.ones_like(targets.objectness_weights[positive]),
     )
     weak_negative = (
-        targets.objectness_mask
-        & ~positive
-        & (targets.objectness_weights > 0)
+        targets.objectness_mask & ~positive & (targets.objectness_weights > 0)
     )
     assert weak_negative.any()
     torch.testing.assert_close(
@@ -160,12 +156,8 @@ def test_synthetic_forward_loss_backward_has_finite_gradients():
     samples = [_sample(), _sample(dense=False)]
     images = torch.stack([sample.image for sample in samples])
     output = model(images)
-    shapes = tuple(
-        (tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness
-    )
-    targets = TargetBuilder(ATSSAssigner())(
-        samples, shapes, device=torch.device("cpu")
-    )
+    shapes = tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness)
+    targets = TargetBuilder(ATSSAssigner())(samples, shapes, device=torch.device("cpu"))
     losses = ProposalLoss()(output, targets)
     losses.total.backward()
     assert torch.isfinite(losses.total)
@@ -184,13 +176,8 @@ def test_qfl_mode_has_finite_gradients_and_dormant_centerness():
     samples = [_sample(), _sample(dense=False)]
     images = torch.stack([sample.image for sample in samples])
     output = model(images)
-    shapes = tuple(
-        (tensor.shape[-2], tensor.shape[-1])
-        for tensor in output.objectness
-    )
-    targets = TargetBuilder(ATSSAssigner())(
-        samples, shapes, device=torch.device("cpu")
-    )
+    shapes = tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness)
+    targets = TargetBuilder(ATSSAssigner())(samples, shapes, device=torch.device("cpu"))
     losses = ProposalLoss(
         objectness_loss="quality_focal",
         ltrb_weight=0.5,
@@ -223,9 +210,7 @@ def test_empty_positive_batch_losses_are_finite():
         sample.transform,
     )
     output = model(sample.image.unsqueeze(0))
-    shapes = tuple(
-        (tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness
-    )
+    shapes = tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness)
     targets = TargetBuilder(ATSSAssigner())(
         [sample], shapes, device=torch.device("cpu")
     )
@@ -234,24 +219,20 @@ def test_empty_positive_batch_losses_are_finite():
     assert losses.box_ciou.item() == 0
     assert losses.box_ltrb.item() == 0
     assert losses.centerness.item() == 0
+
+
 def test_disabled_dense_branch_is_finite_in_float16():
     model = StudentDetector(backbone=StubBackbone()).eval()
     sample = _sample()
     output = model(sample.image.unsqueeze(0))
     output = type(output)(
         objectness=tuple(
-            torch.full_like(tensor, -20.0).half()
-            for tensor in output.objectness
+            torch.full_like(tensor, -20.0).half() for tensor in output.objectness
         ),
-        box_distances=tuple(
-            tensor.half() for tensor in output.box_distances
-        ),
+        box_distances=tuple(tensor.half() for tensor in output.box_distances),
         centerness=tuple(tensor.half() for tensor in output.centerness),
     )
-    shapes = tuple(
-        (tensor.shape[-2], tensor.shape[-1])
-        for tensor in output.objectness
-    )
+    shapes = tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness)
     targets = TargetBuilder(ATSSAssigner())(
         [sample], shapes, device=torch.device("cpu")
     )
@@ -268,10 +249,7 @@ def test_ltrb_auxiliary_loss_is_stride_normalized_and_component_averaged():
     model = StudentDetector(backbone=StubBackbone()).eval()
     sample = _sample()
     output = model(sample.image.unsqueeze(0))
-    shapes = tuple(
-        (tensor.shape[-2], tensor.shape[-1])
-        for tensor in output.objectness
-    )
+    shapes = tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness)
     targets = TargetBuilder(ATSSAssigner())(
         [sample], shapes, device=torch.device("cpu")
     )
@@ -281,12 +259,12 @@ def test_ltrb_auxiliary_loss_is_stride_normalized_and_component_averaged():
     # A one-stride error on every LTRB coordinate has normalized error 1.
     # SmoothL1(1) is 0.5, and averaging over coordinates and positives must
     # therefore also produce exactly 0.5.
-    level_strides = torch.cat([
-        torch.full((height * width,), float(stride))
-        for (height, width), stride in zip(
-            shapes, (8, 16, 32), strict=True
-        )
-    ])
+    level_strides = torch.cat(
+        [
+            torch.full((height * width,), float(stride))
+            for (height, width), stride in zip(shapes, (8, 16, 32), strict=True)
+        ]
+    )
     predicted = torch.cat(
         [
             tensor.permute(0, 2, 3, 1).reshape(1, -1, 4)
@@ -295,10 +273,9 @@ def test_ltrb_auxiliary_loss_is_stride_normalized_and_component_averaged():
         dim=1,
     )
     stride_offsets = level_strides.unsqueeze(0).expand_as(positive)
-    predicted[positive] = (
-        targets.box_distances[positive]
-        + stride_offsets[positive].unsqueeze(1)
-    )
+    predicted[positive] = targets.box_distances[positive] + stride_offsets[
+        positive
+    ].unsqueeze(1)
     offset = 0
     distance_levels = []
     for height, width in shapes:
@@ -320,9 +297,7 @@ def test_ltrb_auxiliary_loss_is_stride_normalized_and_component_averaged():
         ltrb_weight=1,
         centerness_weight=0,
     )(modified_output, targets)
-    torch.testing.assert_close(
-        losses.box_ltrb, torch.tensor(0.5), atol=1e-6, rtol=0
-    )
+    torch.testing.assert_close(losses.box_ltrb, torch.tensor(0.5), atol=1e-6, rtol=0)
     torch.testing.assert_close(losses.total, losses.box_ltrb)
 
 
@@ -384,16 +359,19 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
             config.output_dir / name, map_location="cpu", weights_only=False
         )
         assert checkpoint["phase"] == 3
-        assert "model" in checkpoint
-        assert "ema_model" in checkpoint
-        assert "optimizer" in checkpoint
         assert checkpoint["selected_state"] == (
             "ema_model" if name == "best.pt" else "model"
         )
-        assert "rng_state" in checkpoint
-    resumed_config = replace(
-        config, schedule=replace(config.schedule, epochs=2)
-    )
+        if name == "last.pt":
+            assert "model" in checkpoint
+            assert "ema_model" in checkpoint
+            assert "optimizer" in checkpoint
+            assert "rng_state" in checkpoint
+        else:
+            assert checkpoint["checkpoint_kind"] == "weights_only"
+            assert "ema_model" in checkpoint
+            assert "optimizer" not in checkpoint
+    resumed_config = replace(config, schedule=replace(config.schedule, epochs=2))
     resumed = train_phase3(
         StudentDetector(backbone=StubBackbone()),
         loader,

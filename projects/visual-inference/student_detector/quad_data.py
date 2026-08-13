@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import sqlite3
 from collections.abc import Sequence
@@ -17,11 +18,9 @@ from torch.utils.data import Dataset
 from .config import AugmentationConfig, DataConfig
 from .data import (
     IMAGENET_MEAN,
-    IMAGENET_STD,
     ImageRecord,
     _mask_to_tensor,
     _pil_to_normalized_tensor,
-    build_coco_parquet_index,
     build_coco_sqlite_index,
 )
 from .quad_geometry import (
@@ -64,11 +63,15 @@ def _quad_slice_labels(quads: Tensor, size: int) -> tuple[tuple[str, ...], ...]:
     long = extent.amax(dim=1)
     scale = torch.sqrt(extent.prod(dim=1).clamp(min=0))
     centers = quads.mean(dim=1)
-    radial = torch.linalg.vector_norm(
-        (centers - size / 2) / max(size / 2, 1), dim=1
-    )
+    radial = torch.linalg.vector_norm((centers - size / 2) / max(size / 2, 1), dim=1)
     size_bins = tuple(
-        "tiny" if value < 16 else "small" if value < 32 else "medium" if value < 96 else "large"
+        "tiny"
+        if value < 16
+        else "small"
+        if value < 32
+        else "medium"
+        if value < 96
+        else "large"
         for value in scale.tolist()
     )
     ratios = long / short.clamp(min=1e-7)
@@ -121,7 +124,15 @@ class QuadProposalTransform:
         trusted_background_quads: Tensor | None = None,
         *,
         seed: int,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, tuple[float, float, float], tuple[int, ...]]:
+    ) -> tuple[
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        tuple[float, float, float],
+        tuple[int, ...],
+    ]:
         generator = random.Random(seed)
         image = image.convert("RGB")
         width, height = image.size
@@ -131,18 +142,25 @@ class QuadProposalTransform:
             else quads.new_empty((0, 4, 2))
         )
         all_quads = torch.cat((quads, ignore_quads, trusted_background_quads), dim=0)
-        state = torch.cat((
-            torch.zeros(quads.shape[0], dtype=torch.long),
-            torch.ones(ignore_quads.shape[0], dtype=torch.long),
-            torch.full((trusted_background_quads.shape[0],), 2, dtype=torch.long),
-        ))
-        if self.training and generator.random() < self.augmentation.horizontal_flip_probability:
+        state = torch.cat(
+            (
+                torch.zeros(quads.shape[0], dtype=torch.long),
+                torch.ones(ignore_quads.shape[0], dtype=torch.long),
+                torch.full((trusted_background_quads.shape[0],), 2, dtype=torch.long),
+            )
+        )
+        if (
+            self.training
+            and generator.random() < self.augmentation.horizontal_flip_probability
+        ):
             image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             if all_quads.numel():
                 all_quads[..., 0] = (width - 1) - all_quads[..., 0]
         base_scale = min(self.input_size / width, self.input_size / height)
         if self.training:
-            scale = base_scale * generator.uniform(self.augmentation.scale_min, self.augmentation.scale_max)
+            scale = base_scale * generator.uniform(
+                self.augmentation.scale_min, self.augmentation.scale_max
+            )
             translation = self.augmentation.translation_fraction * self.input_size
             shift_x = generator.uniform(-translation, translation)
             shift_y = generator.uniform(-translation, translation)
@@ -150,14 +168,27 @@ class QuadProposalTransform:
             scale, shift_x, shift_y = base_scale, 0.0, 0.0
         offset_x = (self.input_size - width * scale) * 0.5 + shift_x
         offset_y = (self.input_size - height * scale) * 0.5 + shift_y
-        inverse = (1.0 / scale, 0.0, -offset_x / scale, 0.0, 1.0 / scale, -offset_y / scale)
+        inverse = (
+            1.0 / scale,
+            0.0,
+            -offset_x / scale,
+            0.0,
+            1.0 / scale,
+            -offset_y / scale,
+        )
         image = image.transform(
-            (self.input_size, self.input_size), Image.Transform.AFFINE, inverse,
-            resample=Image.Resampling.BILINEAR, fillcolor=tuple(round(channel * 255) for channel in IMAGENET_MEAN),
+            (self.input_size, self.input_size),
+            Image.Transform.AFFINE,
+            inverse,
+            resample=Image.Resampling.BILINEAR,
+            fillcolor=tuple(round(channel * 255) for channel in IMAGENET_MEAN),
         )
         valid = Image.new("L", (width, height), color=255).transform(
-            (self.input_size, self.input_size), Image.Transform.AFFINE, inverse,
-            resample=Image.Resampling.NEAREST, fillcolor=0,
+            (self.input_size, self.input_size),
+            Image.Transform.AFFINE,
+            inverse,
+            resample=Image.Resampling.NEAREST,
+            fillcolor=0,
         )
         transformed = all_quads * scale
         transformed[..., 0] += offset_x
@@ -179,7 +210,14 @@ class QuadProposalTransform:
             original_area = float(polygon_signed_area(quad).abs())
             clipped = clip_convex_polygon(
                 quad,
-                quad.new_tensor([[0.0, 0.0], [self.input_size, 0.0], [self.input_size, self.input_size], [0.0, self.input_size]]),
+                quad.new_tensor(
+                    [
+                        [0.0, 0.0],
+                        [self.input_size, 0.0],
+                        [self.input_size, self.input_size],
+                        [0.0, self.input_size],
+                    ]
+                ),
             )
             if clipped.shape[0] < 3:
                 clipped_tensor[index] = 0
@@ -188,8 +226,8 @@ class QuadProposalTransform:
                 clipped_tensor[index] = canonicalize_quad(clipped)
             else:
                 clipped_tensor[index] = fit_quad_from_points(clipped)
-            visibility_tensor[index] = (
-                float(polygon_signed_area(clipped).abs()) / max(original_area, 1e-7)
+            visibility_tensor[index] = float(polygon_signed_area(clipped).abs()) / max(
+                original_area, 1e-7
             )
         if not transformed.shape[0]:
             image_tensor = _pil_to_normalized_tensor(image)
@@ -203,7 +241,9 @@ class QuadProposalTransform:
                 (),
             )
         areas = polygon_signed_area(clipped_tensor).abs()
-        edge_lengths = torch.linalg.vector_norm(torch.roll(clipped_tensor, -1, 1) - clipped_tensor, dim=2)
+        edge_lengths = torch.linalg.vector_norm(
+            torch.roll(clipped_tensor, -1, 1) - clipped_tensor, dim=2
+        )
         side = edge_lengths.amin(dim=1)
         major = edge_lengths.amax(dim=1)
         aspect_ratio = major / side.clamp(min=1e-7)
@@ -214,9 +254,12 @@ class QuadProposalTransform:
             & (aspect_ratio >= self.thin_aspect_ratio_min)
             & (areas >= self.thin_area)
         )
-        positive = (state == 0) & geometrically_valid & (
-            visibility_tensor >= self.augmentation.positive_visible_fraction
-        ) & (regular_size | thin_size)
+        positive = (
+            (state == 0)
+            & geometrically_valid
+            & (visibility_tensor >= self.augmentation.positive_visible_fraction)
+            & (regular_size | thin_size)
+        )
         ignore = (
             (state != 2)
             & geometrically_valid
@@ -255,34 +298,68 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         seed: int = 42,
         force_index: bool = False,
     ) -> None:
-        import duckdb
+        self.annotations = Path(annotations).resolve()
         self.image_root = Path(image_root).resolve()
-        self.images_parquet, self.annotations_parquet = build_coco_parquet_index(annotations, index_path, force=force_index)
+        resolved_index = Path(index_path).resolve()
+        require_prebuilt = os.getenv("REQUIRE_PREBUILT_INDEX") == "1"
+        if require_prebuilt and not resolved_index.is_file():
+            raise FileNotFoundError(
+                f"cloud dataset is missing prebuilt index: {resolved_index}"
+            )
+        self.index_path = build_coco_sqlite_index(
+            self.annotations,
+            resolved_index,
+            force=force_index,
+            build_if_missing=not require_prebuilt,
+        )
         self.data_config = data_config
         self.training = training
         self.seed = seed
         self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
         self.transform = QuadProposalTransform(
-            data_config.input_size, augmentation, training=training,
+            data_config.input_size,
+            augmentation,
+            training=training,
             regular_min_side=data_config.quad_regular_min_side,
             thin_major_axis_min=data_config.thin_major_axis_min,
             thin_aspect_ratio_min=data_config.thin_aspect_ratio_min,
             thin_area=data_config.thin_area,
         )
-        con = duckdb.connect()
-        rows = con.execute(
-            f"SELECT row_index, image_id, file_name, width, height, source_dataset, camera_type, background_supervision, positive_count FROM '{self.images_parquet}' ORDER BY row_index"
-        ).fetchall()
-        ann_rows = con.execute(
-            f"SELECT image_id, quad_json, ignore_region, geometry_tier, object_condition, seen_status FROM '{self.annotations_parquet}'"
-        ).fetchall()
-        con.close()
+        with sqlite3.connect(self.index_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT row_index, image_id, file_name, width, height,
+                       source_dataset, camera_type, background_supervision,
+                       positive_count
+                FROM images ORDER BY row_index
+                """
+            ).fetchall()
         self.records = [ImageRecord(*row) for row in rows]
-        from collections import defaultdict
-        annotations_by_image: defaultdict[int, list[tuple[str, int, str, str, str]]] = defaultdict(list)
-        for row in ann_rows:
-            annotations_by_image[row[0]].append((row[1], row[2], row[3], row[4], row[5]))
-        self._annotations_by_image = dict(annotations_by_image)
+        self._connection: sqlite3.Connection | None = None
+        self._connection_pid: int | None = None
+
+    def _annotation_rows(self, image_id: int) -> list[tuple[str, int, str, str, str]]:
+        pid = os.getpid()
+        if self._connection is None or self._connection_pid != pid:
+            if self._connection is not None:
+                self._connection.close()
+            uri = f"file:{self.index_path}?mode=ro&immutable=1"
+            self._connection = sqlite3.connect(uri, uri=True)
+            self._connection_pid = pid
+        return self._connection.execute(
+            """
+            SELECT quad_json, ignore_region, geometry_tier,
+                   object_condition, seen_status
+            FROM annotations WHERE image_id=?
+            """,
+            (image_id,),
+        ).fetchall()
+
+    def __getstate__(self) -> dict[str, object]:
+        state = dict(self.__dict__)
+        state["_connection"] = None
+        state["_connection_pid"] = None
+        return state
 
     def __len__(self) -> int:
         return len(self.records)
@@ -292,7 +369,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
 
     def __getitem__(self, index: int) -> QuadProposalSample:
         record = self.records[index]
-        rows = self._annotations_by_image.get(record.image_id, ())
+        rows = self._annotation_rows(record.image_id)
         positive = [json.loads(row[0]) for row in rows if row[1] == 0]
         ignore = [json.loads(row[0]) for row in rows if row[1] == 1]
         trusted = [json.loads(row[0]) for row in rows if row[1] == 2]
@@ -302,17 +379,27 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
         transformed = self.transform(
-            image, _quad_tensor(positive), _quad_tensor(ignore), _quad_tensor(trusted),
+            image,
+            _quad_tensor(positive),
+            _quad_tensor(ignore),
+            _quad_tensor(trusted),
             seed=self.seed + int(self._epoch.item()) * max(len(self), 1) + index,
         )
         domain = self.data_config.source_domains.get(record.source_dataset, "unknown")
         retained = transformed[6]
         slice_labels = _quad_slice_labels(transformed[1], self.data_config.input_size)
         return QuadProposalSample(
-            transformed[0], transformed[1], transformed[2], transformed[4],
-            record.image_id, record.source_dataset, domain, record.camera_type,
+            transformed[0],
+            transformed[1],
+            transformed[2],
+            transformed[4],
+            record.image_id,
+            record.source_dataset,
+            domain,
+            record.camera_type,
             bool(transformed[3].numel()),
-            (record.height, record.width), transformed[5],
+            (record.height, record.width),
+            transformed[5],
             tuple(tiers[index] for index in retained),
             tuple(conditions[index] for index in retained),
             transformed[3],
@@ -321,5 +408,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         )
 
 
-def collate_quad_proposal_samples(samples: Sequence[QuadProposalSample]) -> tuple[Tensor, list[QuadProposalSample]]:
+def collate_quad_proposal_samples(
+    samples: Sequence[QuadProposalSample],
+) -> tuple[Tensor, list[QuadProposalSample]]:
     return torch.stack([sample.image for sample in samples]), list(samples)

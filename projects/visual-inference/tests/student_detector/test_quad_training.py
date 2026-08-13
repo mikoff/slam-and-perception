@@ -42,6 +42,21 @@ class _Samples(Dataset[QuadProposalSample]):
         return self.sample
 
 
+class _CountingLoader:
+    def __init__(self, loader: DataLoader) -> None:
+        self.loader = loader
+        self.iterations = 0
+        self.dataset = loader.dataset
+        self.batch_sampler = loader.batch_sampler
+
+    def __len__(self) -> int:
+        return len(self.loader)
+
+    def __iter__(self):
+        self.iterations += 1
+        return iter(self.loader)
+
+
 def test_quad_checkpoint_resumes_and_round_trips_config(tmp_path) -> None:
     loader = DataLoader(
         _Samples(), batch_size=1, collate_fn=collate_quad_proposal_samples
@@ -94,10 +109,10 @@ def test_quad_checkpoint_resumes_and_round_trips_config(tmp_path) -> None:
         config.output_dir / "best_ema.pt", map_location="cpu", weights_only=False
     )
     assert best_ema["selected_state"] == "ema_model"
+    assert best_ema["checkpoint_kind"] == "weights_only"
+    assert "optimizer" not in best_ema
 
-    resumed_config = replace(
-        config, schedule=replace(config.schedule, epochs=2)
-    )
+    resumed_config = replace(config, schedule=replace(config.schedule, epochs=2))
     resumed = train_quad_proposals(
         QuadProposalDetector(backbone=StubBackbone()),
         loader,
@@ -111,6 +126,43 @@ def test_quad_checkpoint_resumes_and_round_trips_config(tmp_path) -> None:
         resume=checkpoint_path,
     )
     assert resumed["global_step"] == 2
+
+
+def test_raw_and_ema_validation_share_one_loader_pass(tmp_path) -> None:
+    loader = DataLoader(
+        _Samples(), batch_size=1, collate_fn=collate_quad_proposal_samples
+    )
+    validation = _CountingLoader(loader)
+    placeholder = tmp_path / "unused.json"
+    config = Phase3Config(
+        data=DataConfig(
+            placeholder,
+            placeholder,
+            tmp_path,
+            tmp_path,
+            input_size=64,
+            batch_size=1,
+            workers=0,
+            quad_regular_min_side=8,
+        ),
+        schedule=ScheduleConfig(
+            epochs=1, freeze_backbone_epochs=0, warmup_steps=1, amp=False
+        ),
+        output_dir=tmp_path / "single-pass",
+        pretrained_backbone=False,
+    )
+    train_quad_proposals(
+        QuadProposalDetector(backbone=StubBackbone()),
+        loader,
+        validation,
+        QuadTargetBuilder(QuadAssigner()),
+        QuadProposalLoss(),
+        config,
+        torch.device("cpu"),
+        max_steps=1,
+        max_val_batches=1,
+    )
+    assert validation.iterations == 1
 
 
 def test_accelerate_accumulation_counts_optimizer_updates_once(tmp_path) -> None:

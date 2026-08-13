@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 import torch
 from torch import Tensor
@@ -45,7 +48,11 @@ def _best_overlaps(gt: Tensor, proposals: Tensor) -> Tensor:
     if gt.numel() == 0 or proposals.numel() == 0:
         return gt.new_zeros((gt.shape[0],))
     device = gt.device
-    return pairwise_quad_iou(gt.to(device), proposals.to(device)).max(dim=1).values.to(gt.device)
+    return (
+        pairwise_quad_iou(gt.to(device), proposals.to(device))
+        .max(dim=1)
+        .values.to(gt.device)
+    )
 
 
 def _overlap_matrix(gt: Tensor, proposals: Tensor) -> Tensor:
@@ -61,52 +68,6 @@ def _cached_best(matrix: Tensor, top_k: int) -> Tensor:
     return matrix[:, :top_k].max(dim=1).values
 
 
-def _recall(
-    images: list[QuadEvaluationImage],
-    top_k: int,
-    threshold: float,
-    overlap_cache: dict[int, Tensor] | None = None,
-) -> tuple[int, int]:
-    recalled = total = 0
-    for image in images:
-        if image.ground_truth.numel() == 0:
-            continue
-        total += image.ground_truth.shape[0]
-        best = (
-            _cached_best(overlap_cache[image.image_id], top_k)
-            if overlap_cache is not None
-            else _best_overlaps(image.ground_truth, image.detection.quads[:top_k])
-        )
-        recalled += int((best >= threshold).sum())
-    return recalled, total
-
-
-def _sliced_recall(
-    images: list[QuadEvaluationImage],
-    labels_name: str,
-    label: str,
-    top_k: int,
-    threshold: float,
-    overlap_cache: dict[int, Tensor] | None = None,
-) -> tuple[int, int]:
-    recalled = total = 0
-    for image in images:
-        labels = getattr(image, labels_name)
-        if not labels:
-            continue
-        mask = torch.tensor([value == label for value in labels], dtype=torch.bool)
-        if not mask.any():
-            continue
-        gt = image.ground_truth[mask]
-        total += gt.shape[0]
-        if overlap_cache is not None:
-            best = _cached_best(overlap_cache[image.image_id][mask], top_k)
-        else:
-            best = _best_overlaps(gt, image.detection.quads[:top_k])
-        recalled += int((best >= threshold).sum())
-    return recalled, total
-
-
 def _assigned_best(image: QuadEvaluationImage) -> Tensor:
     result = image.ground_truth.new_zeros((image.ground_truth.shape[0],))
     if image.assigned_detection is None or image.assigned_gt_indices is None:
@@ -116,16 +77,19 @@ def _assigned_best(image: QuadEvaluationImage) -> Tensor:
         owned = image.assigned_gt_indices == gt_index
         if owned.any():
             proposals = image.assigned_detection.quads[owned]
-            result[gt_index] = aligned_quad_iou(
-                proposals.to(device), target.to(device).expand_as(proposals).to(device)
-            ).max().to(result.device)
+            result[gt_index] = (
+                aligned_quad_iou(
+                    proposals.to(device),
+                    target.to(device).expand_as(proposals).to(device),
+                )
+                .max()
+                .to(result.device)
+            )
     return result
 
 
 def _normalized_corner_errors(image: QuadEvaluationImage) -> Tensor:
-    errors = image.ground_truth.new_full(
-        (image.ground_truth.shape[0],), float("inf")
-    )
+    errors = image.ground_truth.new_full((image.ground_truth.shape[0],), float("inf"))
     if image.assigned_detection is None or image.assigned_gt_indices is None:
         return errors
     device = errors.device
@@ -138,7 +102,9 @@ def _normalized_corner_errors(image: QuadEvaluationImage) -> Tensor:
         distances = torch.linalg.vector_norm(
             predictions[:, None] - traversals[None], dim=-1
         ).mean(dim=-1)
-        errors[gt_index] = distances.amin().to(errors.device) / torch.sqrt(quad_area(target.to(device)).clamp(min=1e-7)).to(errors.device)
+        errors[gt_index] = distances.amin().to(errors.device) / torch.sqrt(
+            quad_area(target.to(device)).clamp(min=1e-7)
+        ).to(errors.device)
     return errors
 
 
@@ -155,7 +121,191 @@ def _quantiles(values: list[Tensor], prefix: str, metrics: dict[str, float]) -> 
         metrics[f"score/{prefix}/{name}"] = float(torch.quantile(joined, probability))
 
 
-from datetime import datetime
+class QuadEvaluationAccumulator:
+    """Aggregate quad metrics while releasing per-image GPU tensors promptly."""
+
+    _thresholds = tuple(0.50 + 0.05 * index for index in range(10))
+    _slices = (
+        ("geometry_tiers", "geometry_tier"),
+        ("object_conditions", "condition"),
+        ("seen_statuses", "seen_status"),
+        ("size_bins", "size"),
+        ("aspect_bins", "aspect"),
+        ("radial_bins", "radial"),
+    )
+
+    def __init__(self, *, log_interval: int = 500) -> None:
+        self.log_interval = log_interval
+        self.image_count = 0
+        self.total_gt = 0
+        self.hits: dict[tuple[int, float], int] = defaultdict(int)
+        self.domain_counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+        self.slice_counts: dict[tuple[str, str, float], list[int]] = defaultdict(
+            lambda: [0, 0]
+        )
+        self.pre_hits: dict[float, int] = defaultdict(int)
+        self.values: dict[str, list[Tensor]] = defaultdict(list)
+        self.candidates = 0
+        self.invalid_candidates = 0
+        self.post_nms_invalid = 0
+
+    @staticmethod
+    def _keep_cpu(values: Tensor) -> Tensor:
+        return values.detach().flatten().cpu()
+
+    @torch.no_grad()
+    def update(self, images: Iterable[QuadEvaluationImage]) -> None:
+        """Consume images and retain only counters and one-dimensional CPU values."""
+        for image in images:
+            self._update_image(image)
+
+    def _update_image(self, image: QuadEvaluationImage) -> None:
+        self.image_count += 1
+        post = _overlap_matrix(image.ground_truth, image.detection.quads)
+        gt_count = image.ground_truth.shape[0]
+        self.total_gt += gt_count
+
+        best_by_k = {top_k: _cached_best(post, top_k) for top_k in (50, 100, 300)}
+        for top_k in (50, 100, 300):
+            for threshold in (0.50, 0.75):
+                self.hits[top_k, threshold] += int(
+                    (best_by_k[top_k] >= threshold).sum()
+                )
+        for threshold in self._thresholds:
+            if threshold not in (0.50, 0.75):
+                self.hits[100, threshold] += int((best_by_k[100] >= threshold).sum())
+
+        domain = self.domain_counts[image.domain]
+        domain[0] += int((best_by_k[100] >= 0.50).sum())
+        domain[1] += gt_count
+        for labels_name, prefix in self._slices:
+            labels = getattr(image, labels_name)
+            for label in set(labels):
+                mask = torch.tensor(
+                    [value == label for value in labels],
+                    dtype=torch.bool,
+                    device=image.ground_truth.device,
+                )
+                for threshold in (0.50, 0.75):
+                    counts = self.slice_counts[prefix, label, threshold]
+                    counts[0] += int((best_by_k[100][mask] >= threshold).sum())
+                    counts[1] += int(mask.sum())
+
+        if gt_count:
+            matched = best_by_k[100]
+            self.values["matched"].append(self._keep_cpu(matched))
+            if image.detection.quads.numel():
+                overlaps = post[:, :100]
+                scores = image.detection.scores[:100]
+                self.values["matched_scores"].append(
+                    self._keep_cpu(scores[overlaps.argmax(dim=1)])
+                )
+            else:
+                self.values["matched_scores"].append(torch.zeros(gt_count))
+            if image.assigned_detection is not None:
+                self.values["assigned"].append(self._keep_cpu(_assigned_best(image)))
+                self.values["corner_errors"].append(
+                    self._keep_cpu(_normalized_corner_errors(image))
+                )
+            if image.dense_detection is not None:
+                self.values["dense"].append(
+                    self._keep_cpu(
+                        _best_overlaps(image.ground_truth, image.dense_detection.quads)
+                    )
+                )
+            if image.pre_nms_detection is not None:
+                pre = _overlap_matrix(image.ground_truth, image.pre_nms_detection.quads)
+                pre_best = _cached_best(pre, 100)
+                self.values["pre_nms_loss"].append(self._keep_cpu(pre_best - matched))
+                for threshold in (0.50, 0.75):
+                    self.pre_hits[threshold] += int((pre_best >= threshold).sum())
+
+        self.candidates += getattr(image.detection, "candidate_count", 0)
+        self.invalid_candidates += getattr(
+            image.detection, "invalid_candidate_count", 0
+        )
+        if image.detection.quads.numel():
+            self.post_nms_invalid += int((~quad_validity(image.detection.quads)).sum())
+        for name in ("positive", "trusted_background", "weak_background"):
+            scores = getattr(image, f"{name}_scores")
+            if scores is not None and scores.numel():
+                self.values[name].append(self._keep_cpu(scores))
+
+        if self.log_interval and self.image_count % self.log_interval == 0:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(
+                f"[{timestamp}] [Evaluation Math] Aggregated {self.image_count} images",
+                flush=True,
+            )
+
+    def _joined(self, name: str) -> Tensor | None:
+        chunks = self.values[name]
+        return torch.cat(chunks) if chunks else None
+
+    def compute(self) -> dict[str, float]:
+        """Finalize metrics without revisiting model outputs or proposal tensors."""
+        metrics: dict[str, float] = {}
+        for top_k in (50, 100, 300):
+            for threshold in (0.50, 0.75):
+                metrics[f"recall/{top_k}@{threshold:.2f}"] = (
+                    self.hits[top_k, threshold] / self.total_gt
+                    if self.total_gt
+                    else 0.0
+                )
+        metrics["ar/100"] = sum(
+            self.hits[100, threshold] / self.total_gt if self.total_gt else 0.0
+            for threshold in self._thresholds
+        ) / len(self._thresholds)
+        for domain, (hit, total) in sorted(self.domain_counts.items()):
+            metrics[f"recall/domain_{domain}/100@0.50"] = hit / total if total else 0.0
+        for (prefix, label, threshold), (hit, total) in sorted(
+            self.slice_counts.items()
+        ):
+            metrics[f"recall/{prefix}_{label}/100@{threshold:.2f}"] = (
+                hit / total if total else 0.0
+            )
+
+        matched = self._joined("matched")
+        matched_scores = self._joined("matched_scores")
+        pre_nms_loss = self._joined("pre_nms_loss")
+        metrics["matched_iou/median"] = (
+            float(matched.median()) if matched is not None else 0.0
+        )
+        metrics["matched_score/median"] = (
+            float(matched_scores.median()) if matched_scores is not None else 0.0
+        )
+        metrics["nms/matched_iou_delta_mean"] = (
+            float(pre_nms_loss.mean()) if pre_nms_loss is not None else 0.0
+        )
+        for threshold in (0.50, 0.75):
+            metrics[f"nms/recall_delta/100@{threshold:.2f}"] = (
+                (self.pre_hits[threshold] - self.hits[100, threshold]) / self.total_gt
+                if self.total_gt
+                else 0.0
+            )
+        for name in ("assigned", "dense"):
+            joined = self._joined(name)
+            if joined is not None:
+                metrics[f"oracle/{name}_recall@0.50"] = float(
+                    (joined >= 0.50).float().mean()
+                )
+                metrics[f"oracle/{name}_recall@0.75"] = float(
+                    (joined >= 0.75).float().mean()
+                )
+                metrics[f"oracle/{name}_iou_median"] = float(joined.median())
+        corner_errors = self._joined("corner_errors")
+        if corner_errors is not None:
+            finite = corner_errors[torch.isfinite(corner_errors)]
+            metrics["corner_error/normalized_median"] = (
+                float(finite.median()) if finite.numel() else 0.0
+            )
+        metrics["decoder/topk_invalid_rate"] = (
+            self.invalid_candidates / self.candidates if self.candidates else 0.0
+        )
+        metrics["decoder/post_nms_invalid_count"] = float(self.post_nms_invalid)
+        for name in ("positive", "trusted_background", "weak_background"):
+            _quantiles(self.values[name], name, metrics)
+        return metrics
 
 
 @torch.no_grad()
@@ -164,150 +314,7 @@ def evaluate_quad_proposals(
     *,
     log_interval: int = 500,
 ) -> dict[str, float]:
-    """Compute AR over IoU .50:.95 and required fixed-budget slices."""
-    metrics: dict[str, float] = {}
-    post_cache: dict[int, Tensor] = {}
-    for index, image in enumerate(images):
-        post_cache[image.image_id] = _overlap_matrix(image.ground_truth, image.detection.quads)
-        if log_interval and ((index + 1) % log_interval == 0 or index + 1 == len(images)):
-            ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[{ts}] [Evaluation Math] Computed overlap matrix for {index + 1}/{len(images)} images", flush=True)
-
-    pre_cache: dict[int, Tensor] = {}
-    for index, image in enumerate(images):
-        if image.pre_nms_detection is not None:
-            pre_cache[image.image_id] = _overlap_matrix(
-                image.ground_truth, image.pre_nms_detection.quads
-            )
-            if log_interval and ((index + 1) % log_interval == 0 or index + 1 == len(images)):
-                ts = datetime.now().strftime("%H:%M:%S")
-                print(f"[{ts}] [Evaluation Math] Computed pre-NMS overlap matrix for {index + 1}/{len(images)} images", flush=True)
-
-    thresholds = [0.50 + 0.05 * index for index in range(10)]
-    for top_k in (50, 100, 300):
-        for threshold in (0.50, 0.75):
-            hit, total = _recall(images, top_k, threshold, post_cache)
-            metrics[f"recall/{top_k}@{threshold:.2f}"] = hit / total if total else 0.0
-    values = []
-    for threshold in thresholds:
-        hit, total = _recall(images, 100, threshold, post_cache)
-        values.append(hit / total if total else 0.0)
-    metrics["ar/100"] = sum(values) / len(values)
-
-    domains = sorted({image.domain for image in images})
-    for domain in domains:
-        subset = [image for image in images if image.domain == domain]
-        hit, total = _recall(subset, 100, 0.50, post_cache)
-        metrics[f"recall/domain_{domain}/100@0.50"] = hit / total if total else 0.0
-
-    for labels_name, prefix in (
-        ("geometry_tiers", "geometry_tier"),
-        ("object_conditions", "condition"),
-        ("seen_statuses", "seen_status"),
-        ("size_bins", "size"),
-        ("aspect_bins", "aspect"),
-        ("radial_bins", "radial"),
-    ):
-        labels = sorted({
-            label for image in images for label in getattr(image, labels_name)
-        })
-        for label in labels:
-            for threshold in (0.50, 0.75):
-                hit, total = _sliced_recall(
-                    images, labels_name, label, 100, threshold, post_cache
-                )
-                metrics[f"recall/{prefix}_{label}/100@{threshold:.2f}"] = (
-                    hit / total if total else 0.0
-                )
-
-    matched: list[Tensor] = []
-    matched_scores: list[Tensor] = []
-    pre_nms_loss: list[Tensor] = []
-    assigned_oracle: list[Tensor] = []
-    dense_oracle: list[Tensor] = []
-    corner_errors: list[Tensor] = []
-    for image in images:
-        if image.ground_truth.numel() == 0:
-            continue
-        matched.append(_cached_best(post_cache[image.image_id], 100))
-        if image.detection.quads.numel():
-            overlaps = post_cache[image.image_id][:, :100]
-            for row in overlaps:
-                matched_scores.append(
-                    image.detection.scores[:100][row.argmax()].reshape(1)
-                )
-        else:
-            matched_scores.append(
-                image.ground_truth.new_zeros((image.ground_truth.shape[0],))
-            )
-        if image.assigned_detection is not None:
-            assigned_oracle.append(_assigned_best(image))
-            corner_errors.append(_normalized_corner_errors(image))
-        if image.dense_detection is not None:
-            dense_oracle.append(
-                _best_overlaps(image.ground_truth, image.dense_detection.quads)
-            )
-        if image.pre_nms_detection is not None:
-            pre_nms_loss.append(
-                _cached_best(pre_cache[image.image_id], 100)
-                - matched[-1]
-            )
-    metrics["matched_iou/median"] = float(torch.cat(matched).median()) if matched else 0.0
-    metrics["matched_score/median"] = (
-        float(torch.cat(matched_scores).median()) if matched_scores else 0.0
-    )
-    metrics["nms/matched_iou_delta_mean"] = (
-        float(torch.cat(pre_nms_loss).mean()) if pre_nms_loss else 0.0
-    )
-    for threshold in (0.50, 0.75):
-        post_hit, total = _recall(images, 100, threshold, post_cache)
-        pre_hit = 0
-        for image in images:
-            if image.pre_nms_detection is None or image.ground_truth.numel() == 0:
-                continue
-            pre_hit += int((
-                _cached_best(pre_cache[image.image_id], 100) >= threshold
-            ).sum())
-        metrics[f"nms/recall_delta/100@{threshold:.2f}"] = (
-            (pre_hit - post_hit) / total if total else 0.0
-        )
-    if assigned_oracle:
-        joined = torch.cat(assigned_oracle)
-        metrics["oracle/assigned_recall@0.50"] = float(
-            (joined >= 0.50).float().mean()
-        )
-        metrics["oracle/assigned_recall@0.75"] = float(
-            (joined >= 0.75).float().mean()
-        )
-        metrics["oracle/assigned_iou_median"] = float(joined.median())
-    if dense_oracle:
-        joined = torch.cat(dense_oracle)
-        metrics["oracle/dense_recall@0.50"] = float((joined >= 0.50).float().mean())
-        metrics["oracle/dense_recall@0.75"] = float((joined >= 0.75).float().mean())
-        metrics["oracle/dense_iou_median"] = float(joined.median())
-    if corner_errors:
-        finite_errors = torch.cat(corner_errors)
-        finite_errors = finite_errors[torch.isfinite(finite_errors)]
-        metrics["corner_error/normalized_median"] = (
-            float(finite_errors.median()) if finite_errors.numel() else 0.0
-        )
-    candidates = sum(
-        getattr(image.detection, "candidate_count", 0) for image in images
-    )
-    invalid = sum(
-        getattr(image.detection, "invalid_candidate_count", 0) for image in images
-    )
-    metrics["decoder/topk_invalid_rate"] = invalid / candidates if candidates else 0.0
-    metrics["decoder/post_nms_invalid_count"] = float(sum(
-        int((~quad_validity(image.detection.quads)).sum())
-        for image in images
-        if image.detection.quads.numel()
-    ))
-    _quantiles([image.positive_scores for image in images], "positive", metrics)
-    _quantiles(
-        [image.trusted_background_scores for image in images],
-        "trusted_background",
-        metrics,
-    )
-    _quantiles([image.weak_background_scores for image in images], "weak_background", metrics)
-    return metrics
+    """Compute fixed-budget metrics through the streaming accumulator."""
+    accumulator = QuadEvaluationAccumulator(log_interval=log_interval)
+    accumulator.update(images)
+    return accumulator.compute()

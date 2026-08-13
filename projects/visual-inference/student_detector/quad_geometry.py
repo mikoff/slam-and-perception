@@ -36,12 +36,17 @@ def quad_centroid(quad: Tensor) -> Tensor:
     """Return the area centroid of a non-degenerate quadrilateral."""
     value = _quad_tensor(quad)
     following = torch.roll(value, -1, dims=-2)
-    cross = value[..., :, 0] * following[..., :, 1] - following[..., :, 0] * value[..., :, 1]
+    cross = (
+        value[..., :, 0] * following[..., :, 1]
+        - following[..., :, 0] * value[..., :, 1]
+    )
     denominator = (3.0 * cross.sum(dim=-1)).unsqueeze(-1)
     numerator = ((value + following) * cross.unsqueeze(-1)).sum(dim=-2)
     mean = value.mean(dim=-2)
     nondegenerate = denominator.abs() > _EPS
-    safe_denominator = torch.where(nondegenerate, denominator, torch.ones_like(denominator))
+    safe_denominator = torch.where(
+        nondegenerate, denominator, torch.ones_like(denominator)
+    )
     centroid = numerator / safe_denominator
     return torch.where(nondegenerate, centroid, mean)
 
@@ -95,9 +100,7 @@ def canonicalize_quads(quad: Tensor) -> Tensor:
     indices = (
         torch.arange(4, device=value.device).unsqueeze(0) + start.unsqueeze(1)
     ).remainder(4)
-    canonical = torch.gather(
-        ordered, 1, indices.unsqueeze(-1).expand(-1, -1, 2)
-    )
+    canonical = torch.gather(ordered, 1, indices.unsqueeze(-1).expand(-1, -1, 2))
     return canonical.reshape(original_shape)
 
 
@@ -121,9 +124,7 @@ def equivalent_quad_traversals(quad: Tensor) -> Tensor:
 def quad_offsets(quad: Tensor, point: Tensor, stride: float) -> Tensor:
     """Encode four image points as eight signed stride-normalized offsets."""
     value = _quad_tensor(quad)
-    return ((value - point[..., None, :]) / float(stride)).reshape(
-        *value.shape[:-2], 8
-    )
+    return ((value - point[..., None, :]) / float(stride)).reshape(*value.shape[:-2], 8)
 
 
 def decode_quad_offsets(point: Tensor, offsets: Tensor, stride: float) -> Tensor:
@@ -148,12 +149,28 @@ def points_inside_convex_quad(points: Tensor, quad: Tensor) -> Tensor:
     return (turns >= -_EPS).all(dim=1) | (turns <= _EPS).all(dim=1)
 
 
-def _line_intersection(start: Tensor, end: Tensor, clip_start: Tensor, clip_end: Tensor) -> Tensor:
+def points_inside_convex_quads(points: Tensor, quads: Tensor) -> Tensor:
+    """Return a [num_points, num_quads] batched convex inclusion mask."""
+    point_values = torch.as_tensor(points)
+    quad_values = canonicalize_quads(quads)
+    edges = torch.roll(quad_values, -1, dims=1) - quad_values
+    relative = point_values[:, None, None, :] - quad_values[None, :, :, :]
+    turns = _cross(edges[None, :, :, :], relative)
+    return (turns >= -_EPS).all(dim=-1) | (turns <= _EPS).all(dim=-1)
+
+
+def _line_intersection(
+    start: Tensor, end: Tensor, clip_start: Tensor, clip_end: Tensor
+) -> Tensor:
     direction = end - start
     clip_direction = clip_end - clip_start
     denominator = _cross(direction, clip_direction)
     numerator = _cross(clip_start - start, clip_direction)
-    t = numerator / denominator.clamp(min=_EPS) if denominator >= 0 else numerator / denominator.clamp(max=-_EPS)
+    t = (
+        numerator / denominator.clamp(min=_EPS)
+        if denominator >= 0
+        else numerator / denominator.clamp(max=-_EPS)
+    )
     return start + t * direction
 
 
@@ -171,11 +188,17 @@ def clip_convex_polygon(subject: Tensor, clip: Tensor) -> Tensor:
         clip_end = clip_value[(index + 1) % clip_value.shape[0]]
         output: list[Tensor] = []
         previous = vertices[-1]
-        previous_inside = bool(_cross(clip_end - clip_start, previous - clip_start) >= -_EPS)
+        previous_inside = bool(
+            _cross(clip_end - clip_start, previous - clip_start) >= -_EPS
+        )
         for current in vertices:
-            current_inside = bool(_cross(clip_end - clip_start, current - clip_start) >= -_EPS)
+            current_inside = bool(
+                _cross(clip_end - clip_start, current - clip_start) >= -_EPS
+            )
             if current_inside != previous_inside:
-                output.append(_line_intersection(previous, current, clip_start, clip_end))
+                output.append(
+                    _line_intersection(previous, current, clip_start, clip_end)
+                )
             if current_inside:
                 output.append(current)
             previous, previous_inside = current, current_inside
@@ -274,16 +297,14 @@ def _aligned_intersection_area(first: Tensor, second: Tensor) -> Tensor:
     ordered = torch.gather(candidates, 1, order.unsqueeze(-1).expand(-1, -1, 2))
 
     sequential_cross = _cross(ordered[:, :-1], ordered[:, 1:])
-    positions = torch.arange(
-        sequential_cross.shape[1], device=first.device
-    ).unsqueeze(0)
-    sequential_cross = (
-        sequential_cross * (positions < (counts - 1).unsqueeze(1))
-    ).sum(dim=1)
+    positions = torch.arange(sequential_cross.shape[1], device=first.device).unsqueeze(
+        0
+    )
+    sequential_cross = (sequential_cross * (positions < (counts - 1).unsqueeze(1))).sum(
+        dim=1
+    )
     last_index = (counts - 1).clamp(min=0)
-    last = ordered.gather(
-        1, last_index[:, None, None].expand(-1, 1, 2)
-    ).squeeze(1)
+    last = ordered.gather(1, last_index[:, None, None].expand(-1, 1, 2)).squeeze(1)
     closing_cross = _cross(last, ordered[:, 0])
     area = 0.5 * (sequential_cross + closing_cross).abs()
     return torch.where(counts >= 3, area, torch.zeros_like(area))
@@ -377,9 +398,15 @@ def pairwise_quad_iou(
                 raise ValueError("CUDA pair_chunk_size must remain 16384")
             if chunk_length < pair_chunk_size:
                 padding = pair_chunk_size - chunk_length
-                chunk_first = torch.cat((chunk_first, chunk_first[:1].expand(padding, -1, -1)))
-                chunk_second = torch.cat((chunk_second, chunk_second[:1].expand(padding, -1, -1)))
-            chunk_iou = _compiled_aligned_quad_iou(chunk_first, chunk_second)[:chunk_length]
+                chunk_first = torch.cat(
+                    (chunk_first, chunk_first[:1].expand(padding, -1, -1))
+                )
+                chunk_second = torch.cat(
+                    (chunk_second, chunk_second[:1].expand(padding, -1, -1))
+                )
+            chunk_iou = _compiled_aligned_quad_iou(chunk_first, chunk_second)[
+                :chunk_length
+            ]
         else:
             chunk_iou = aligned_quad_iou(chunk_first, chunk_second)
         values.append(chunk_iou)
@@ -401,9 +428,7 @@ def polygon_nms(
     if value.shape[0] == 0:
         return torch.empty((0,), dtype=torch.long, device=value.device)
     valid = quad_validity(value)
-    overlaps = pairwise_quad_iou(
-        value, value, minimum_iou=iou_threshold
-    ).detach().cpu()
+    overlaps = pairwise_quad_iou(value, value, minimum_iou=iou_threshold).detach().cpu()
     order = torch.argsort(scores.detach().cpu(), descending=True, stable=True)
     valid_cpu = valid.detach().cpu()
     kept: list[int] = []
@@ -437,9 +462,7 @@ def fit_quad_from_points(points: Tensor) -> Tensor:
     projected = torch.stack((centered @ major, centered @ minor), dim=1)
     lower = projected.min(dim=0).values
     upper = projected.max(dim=0).values
-    corners_local = value.new_tensor([
-        [0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]
-    ])
+    corners_local = value.new_tensor([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
     corners_local = lower + corners_local * (upper - lower)
     fitted = center + corners_local[:, :1] * major + corners_local[:, 1:] * minor
     return canonicalize_quad(fitted)

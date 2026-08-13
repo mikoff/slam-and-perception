@@ -25,16 +25,26 @@ from accelerate import Accelerator
 
 # Fix for "Too many open files" when using large batch sizes and multiple dataloader workers
 import torch.multiprocessing
-torch.multiprocessing.set_sharing_strategy('file_system')
+
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 from torch.utils.data import DataLoader
 
-from student_detector.autotune import autotune_optimal_batch_size
+from student_detector.checkpoint_transport import (
+    AwsCheckpointStore,
+    resolve_auto_resume,
+)
 from student_detector.config import load_phase3_config
-from student_detector.data import DomainMixtureBatchSampler, select_source_mixture_indices
+from student_detector.data import (
+    DomainMixtureBatchSampler,
+    select_source_mixture_indices,
+)
 from student_detector.model import QuadProposalDetector
 from student_detector.quad_assigner import QuadAssigner
-from student_detector.quad_data import QuadProposalDataset, collate_quad_proposal_samples
+from student_detector.quad_data import (
+    QuadProposalDataset,
+    collate_quad_proposal_samples,
+)
 from student_detector.quad_losses import QuadProposalLoss
 from student_detector.quad_targets import QuadTargetBuilder
 from student_detector.quad_training import train_quad_proposals
@@ -77,10 +87,13 @@ def parse_args() -> argparse.Namespace:
         help="Override the positive Smooth-L1 transition for corner regression",
     )
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--resume-mode", choices=("none", "auto"), default="none")
+    parser.add_argument("--run-id", type=str)
     parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--force-index", action="store_true")
-    parser.add_argument("--autotune", action="store_true", help="Automatically probe GPU VRAM and benchmark optimal batch size before training")
-    parser.add_argument("--wandb-project", type=str, help="Weights & Biases project name")
+    parser.add_argument(
+        "--wandb-project", type=str, help="Weights & Biases project name"
+    )
     parser.add_argument("--wandb-entity", type=str, help="Weights & Biases entity name")
     parser.add_argument("--wandb-run-name", type=str, help="Weights & Biases run name")
     return parser.parse_args()
@@ -97,36 +110,37 @@ def main() -> None:
     config = load_phase3_config(args.config)
 
     requested_device = torch.device(
-        "cuda" if args.device == "auto" and torch.cuda.is_available()
-        else "cpu" if args.device == "auto"
+        "cuda"
+        if args.device == "auto" and torch.cuda.is_available()
+        else "cpu"
+        if args.device == "auto"
         else args.device
     )
-
-    # Dynamic VRAM & Batch Size Autotuning
-    import os
-    if args.autotune or os.getenv("AUTOTUNE", "").lower() in {"1", "true", "yes"}:
-        tuned_batch, tuned_acc = autotune_optimal_batch_size(config, requested_device)
-        config = replace(
-            config,
-            data=replace(config.data, batch_size=tuned_batch),
-            schedule=replace(config.schedule, accumulation_steps=tuned_acc),
-        )
 
     if args.epochs is not None or args.no_amp:
         config = replace(
             config,
             schedule=replace(
                 config.schedule,
-                epochs=args.epochs if args.epochs is not None else config.schedule.epochs,
+                epochs=args.epochs
+                if args.epochs is not None
+                else config.schedule.epochs,
                 amp=False if args.no_amp else config.schedule.amp,
             ),
         )
     if args.workers is not None or args.batch_size is not None:
-        config = replace(config, data=replace(
-            config.data,
-            workers=args.workers if args.workers is not None else config.data.workers,
-            batch_size=args.batch_size if args.batch_size is not None else config.data.batch_size,
-        ))
+        config = replace(
+            config,
+            data=replace(
+                config.data,
+                workers=args.workers
+                if args.workers is not None
+                else config.data.workers,
+                batch_size=args.batch_size
+                if args.batch_size is not None
+                else config.data.batch_size,
+            ),
+        )
     if args.seed is not None or args.neck_type is not None:
         config = replace(
             config,
@@ -175,14 +189,11 @@ def main() -> None:
         gradient_accumulation_steps=config.schedule.accumulation_steps,
         split_batches=True,
         mixed_precision=(
-            "fp16"
-            if config.schedule.amp and requested_device.type == "cuda"
-            else "no"
+            "fp16" if config.schedule.amp and requested_device.type == "cuda" else "no"
         ),
+        log_with="wandb" if args.wandb_project else None,
     )
     device = accelerator.device
-    if args.autotune and accelerator.num_processes > 1:
-        raise ValueError("--autotune is not supported with multi-process training")
     # Model construction initializes the proposal head, so seed before creating
     # the dataset, sampler, or model. Seeding only inside the training loop made
     # nominally identical runs start from different heads.
@@ -190,8 +201,11 @@ def main() -> None:
     with accelerator.main_process_first():
         train_dataset = QuadProposalDataset(
             config.data.quad_train_annotations or config.data.train_annotations,
-            config.data.image_root, config.data.index_dir / "quad_train.sqlite",
-            config.data, config.augmentation, training=not overfit,
+            config.data.image_root,
+            config.data.index_dir / "quad_train.sqlite",
+            config.data,
+            config.augmentation,
+            training=not overfit,
             seed=config.schedule.seed,
             force_index=args.force_index,
         )
@@ -203,8 +217,11 @@ def main() -> None:
         val_index = "quad_train.sqlite" if overfit else "quad_val.sqlite"
         val_dataset = QuadProposalDataset(
             val_annotations,
-            config.data.image_root, config.data.index_dir / val_index,
-            config.data, config.augmentation, training=False,
+            config.data.image_root,
+            config.data.index_dir / val_index,
+            config.data,
+            config.augmentation,
+            training=False,
             seed=config.schedule.seed,
             force_index=args.force_index,
         )
@@ -215,7 +232,9 @@ def main() -> None:
             by_id = {record.image_id: record for record in train_dataset.records}
             missing = sorted(set(overfit_image_ids) - set(by_id))
             if missing:
-                raise ValueError(f"overfit image IDs are not in the training manifest: {missing}")
+                raise ValueError(
+                    f"overfit image IDs are not in the training manifest: {missing}"
+                )
             selected = [by_id[image_id] for image_id in overfit_image_ids]
         else:
             ordered_records = sorted(
@@ -231,14 +250,17 @@ def main() -> None:
             selected = [ordered_records[index] for index in selected_in_order]
         train_dataset.records = list(selected)
         val_dataset.records = list(selected)
-        optimizer_steps = math.ceil(
-            (
-                args.batches_per_epoch
-                or config.data.batches_per_epoch
-                or math.ceil(len(selected) / config.data.batch_size)
+        optimizer_steps = (
+            math.ceil(
+                (
+                    args.batches_per_epoch
+                    or config.data.batches_per_epoch
+                    or math.ceil(len(selected) / config.data.batch_size)
+                )
+                / config.schedule.accumulation_steps
             )
-            / config.schedule.accumulation_steps
-        ) * config.schedule.epochs
+            * config.schedule.epochs
+        )
         config = replace(
             config,
             schedule=replace(
@@ -268,9 +290,7 @@ def main() -> None:
             source_weights=config.data.source_weights,
             empty_fraction=config.data.empty_fraction,
             seed=config.schedule.seed,
-            batches_per_epoch=(
-                args.batches_per_epoch or config.data.batches_per_epoch
-            ),
+            batches_per_epoch=(args.batches_per_epoch or config.data.batches_per_epoch),
         )
     train_loader = DataLoader(
         train_dataset,
@@ -301,7 +321,9 @@ def main() -> None:
         pretrained_backbone=config.pretrained_backbone,
         neck_type=config.neck_type,
     )
-    target_builder = QuadTargetBuilder(assigner, weak_negative_weight=config.quad.weak_negative_weight)
+    target_builder = QuadTargetBuilder(
+        assigner, weak_negative_weight=config.quad.weak_negative_weight
+    )
     criterion = QuadProposalLoss(
         strides=config.assignment.strides,
         quality_weight=config.quad.quality_weight,
@@ -314,15 +336,43 @@ def main() -> None:
         quality_blend=config.quad.quality_blend,
         geometry_quality_target=config.quad.geometry_quality_target,
     )
+    resume = args.resume
+    if args.resume_mode == "auto":
+        import os
+
+        if not args.run_id:
+            raise ValueError("--resume-mode auto requires --run-id")
+        bucket = os.getenv("S3_BUCKET")
+        if not bucket:
+            raise ValueError("--resume-mode auto requires S3_BUCKET")
+        resume = resolve_auto_resume(
+            run_id=args.run_id,
+            output_dir=config.output_dir,
+            store=AwsCheckpointStore(bucket, os.getenv("S3_ENDPOINT_URL") or None),
+            expected_contract={
+                "source_commit": os.getenv("SOURCE_COMMIT", ""),
+                "dataset_id": os.getenv("DATASET_ID", ""),
+                "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
+                "config_path": os.getenv("CONFIG_PATH", ""),
+            },
+        )
     result = train_quad_proposals(
-        model, train_loader, val_loader, target_builder, criterion, config, device,
-        max_steps=args.max_steps, max_val_batches=args.max_val_batches,
+        model,
+        train_loader,
+        val_loader,
+        target_builder,
+        criterion,
+        config,
+        device,
+        max_steps=args.max_steps,
+        max_val_batches=args.max_val_batches,
         log_interval=args.log_interval,
-        resume=args.resume,
+        resume=resume,
         validation_interval=args.validation_interval,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         wandb_run_name=args.wandb_run_name,
+        run_id=args.run_id,
         accelerator=accelerator,
     )
     if accelerator.is_main_process:

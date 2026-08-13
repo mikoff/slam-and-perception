@@ -59,7 +59,10 @@ def _load_hbb_baseline(lock: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("HBB report does not use the frozen validation manifest")
     if contract.get("checkpoint_state") != baseline["checkpoint_state"]:
         raise ValueError("HBB report checkpoint state does not match the lock")
-    if report["artifacts"].get("hbb_checkpoint_sha256") != baseline["checkpoint"]["sha256"]:
+    if (
+        report["artifacts"].get("hbb_checkpoint_sha256")
+        != baseline["checkpoint"]["sha256"]
+    ):
         raise ValueError("HBB report checkpoint hash does not match the lock")
     return {
         "neck_type": baseline["name"],
@@ -87,14 +90,14 @@ def _parse_csv(value: str, cast: type) -> list[Any]:
 def prepare_indexes(config_path: Path) -> None:
     """Build shared immutable indexes before parallel neck jobs can race."""
     from student_detector.config import load_phase3_config
-    from student_detector.data import build_coco_parquet_index
+    from student_detector.data import build_coco_sqlite_index
 
     config = load_phase3_config(config_path)
-    build_coco_parquet_index(
+    build_coco_sqlite_index(
         config.data.quad_train_annotations or config.data.train_annotations,
         config.data.index_dir / "quad_train.sqlite",
     )
-    build_coco_parquet_index(
+    build_coco_sqlite_index(
         config.data.quad_val_annotations or config.data.val_annotations,
         config.data.index_dir / "quad_val.sqlite",
     )
@@ -157,17 +160,19 @@ def summarize(
             metrics = checkpoint.get("metrics", {})
             for state in ("raw", "ema"):
                 state_metrics = metrics.get(state, {})
-                rows.append({
-                    "neck_type": neck,
-                    "seed": seed,
-                    "state": state,
-                    "global_step": checkpoint.get("global_step"),
-                    "ar/100": state_metrics.get("ar/100"),
-                    "recall/100@0.50": state_metrics.get("recall/100@0.50"),
-                    "recall/100@0.75": state_metrics.get("recall/100@0.75"),
-                    "matched_iou/median": state_metrics.get("matched_iou/median"),
-                    "checkpoint": str(checkpoint_path),
-                })
+                rows.append(
+                    {
+                        "neck_type": neck,
+                        "seed": seed,
+                        "state": state,
+                        "global_step": checkpoint.get("global_step"),
+                        "ar/100": state_metrics.get("ar/100"),
+                        "recall/100@0.50": state_metrics.get("recall/100@0.50"),
+                        "recall/100@0.75": state_metrics.get("recall/100@0.75"),
+                        "matched_iou/median": state_metrics.get("matched_iou/median"),
+                        "checkpoint": str(checkpoint_path),
+                    }
+                )
     hbb_baseline = _load_hbb_baseline(lock)
     rows.insert(0, hbb_baseline)
     metric_keys = (
@@ -180,7 +185,8 @@ def summarize(
     for neck in variants:
         for state in ("raw", "ema"):
             matching = [
-                row for row in rows
+                row
+                for row in rows
                 if row["neck_type"] == neck and row["state"] == state
             ]
             aggregate: dict[str, Any] = {
@@ -190,42 +196,40 @@ def summarize(
             }
             for key in metric_keys:
                 values = [row[key] for row in matching if row[key] is not None]
-                aggregate[f"{key}/mean"] = (
-                    statistics.fmean(values) if values else None
-                )
+                aggregate[f"{key}/mean"] = statistics.fmean(values) if values else None
                 aggregate[f"{key}/stdev"] = (
                     statistics.stdev(values) if len(values) > 1 else None
                 )
             aggregates.append(aggregate)
-    aggregates.insert(0, {
-        "neck_type": hbb_baseline["neck_type"],
-        "state": hbb_baseline["state"],
-        "runs": 1,
-        **{
-            f"{key}/mean": hbb_baseline[key]
-            for key in metric_keys
+    aggregates.insert(
+        0,
+        {
+            "neck_type": hbb_baseline["neck_type"],
+            "state": hbb_baseline["state"],
+            "runs": 1,
+            **{f"{key}/mean": hbb_baseline[key] for key in metric_keys},
+            **{f"{key}/stdev": None for key in metric_keys},
         },
-        **{f"{key}/stdev": None for key in metric_keys},
-    })
+    )
     paired_deltas: list[dict[str, Any]] = []
-    by_identity = {
-        (row["neck_type"], row["seed"], row["state"]): row for row in rows
-    }
+    by_identity = {(row["neck_type"], row["seed"], row["state"]): row for row in rows}
     for seed in seeds:
         for state in ("raw", "ema"):
             lite = by_identity.get(("lite", seed, state))
             attention = by_identity.get(("attn_res", seed, state))
             if lite is None or attention is None:
                 continue
-            paired_deltas.append({
-                "seed": seed,
-                "state": state,
-                **{
-                    f"delta/{key}": attention[key] - lite[key]
-                    for key in metric_keys
-                    if attention[key] is not None and lite[key] is not None
-                },
-            })
+            paired_deltas.append(
+                {
+                    "seed": seed,
+                    "state": state,
+                    **{
+                        f"delta/{key}": attention[key] - lite[key]
+                        for key in metric_keys
+                        if attention[key] is not None and lite[key] is not None
+                    },
+                }
+            )
     quad_minus_hbb = [
         {
             "neck_type": row["neck_type"],
@@ -309,9 +313,9 @@ def print_summary(summary_path: Path) -> None:
             mean = _format_metric(row.get(f"{key}/mean"))
             stdev = _format_metric(row.get(f"{key}/stdev"))
             values.append(f"{mean} +/- {stdev}" if stdev != "-" else mean)
-        aggregate_rows.append([
-            row["neck_type"], row["state"], str(row["runs"]), *values
-        ])
+        aggregate_rows.append(
+            [row["neck_type"], row["state"], str(row["runs"]), *values]
+        )
     _print_table(
         ["Neck", "State", "Runs", *(label for _, label in metric_keys)],
         aggregate_rows,
@@ -355,6 +359,48 @@ def print_summary(summary_path: Path) -> None:
         print(f"\nNote: {summary['hbb_baseline_note']}")
 
 
+def compare_primary_metrics(candidate_path: Path, baseline_path: Path) -> None:
+    """Require every frozen seed/state metric to match to four decimals."""
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    metric_keys = (
+        "ar/100",
+        "recall/100@0.50",
+        "recall/100@0.75",
+        "matched_iou/median",
+    )
+
+    def indexed(summary: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
+        return {
+            (str(row["neck_type"]), str(row["seed"]), str(row["state"])): row
+            for row in summary["runs"]
+            if row["neck_type"] in {"lite", "attn_res"}
+        }
+
+    expected = indexed(baseline)
+    actual = indexed(candidate)
+    if set(actual) != set(expected):
+        raise ValueError(
+            "benchmark run identities differ: "
+            f"missing={sorted(set(expected) - set(actual))}, "
+            f"unexpected={sorted(set(actual) - set(expected))}"
+        )
+    failures = []
+    for identity, expected_row in expected.items():
+        for metric in metric_keys:
+            wanted = f"{float(expected_row[metric]):.4f}"
+            found = f"{float(actual[identity][metric]):.4f}"
+            if found != wanted:
+                failures.append(
+                    f"{identity} {metric}: expected {wanted}, found {found}"
+                )
+    if failures:
+        raise ValueError("frozen benchmark regression:\n" + "\n".join(failures))
+    print(
+        f"All {len(expected) * len(metric_keys)} primary metric gates match to 4 decimals"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seeds", default="42,43,44")
@@ -372,6 +418,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summarize-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument(
+        "--compare-to",
+        type=Path,
+        help="Fail unless every primary seed/state metric matches this summary to 4 decimals",
+    )
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -443,12 +494,14 @@ def main() -> None:
                 for neck, command, _, assigned_device in pending:
                     environment = os.environ.copy()
                     environment["CUDA_VISIBLE_DEVICES"] = str(assigned_device)
-                    processes.append((
-                        neck,
-                        subprocess.Popen(
-                            command, cwd=PROJECT_ROOT, env=environment
-                        ),
-                    ))
+                    processes.append(
+                        (
+                            neck,
+                            subprocess.Popen(
+                                command, cwd=PROJECT_ROOT, env=environment
+                            ),
+                        )
+                    )
                 failures: list[tuple[str, int]] = []
                 for neck, process in processes:
                     return_code = process.wait()
@@ -463,6 +516,8 @@ def main() -> None:
         target = summarize(output_root, variants, seeds, lock)
         print(f"Wrote {target}")
         print_summary(target)
+        if args.compare_to is not None:
+            compare_primary_metrics(target, args.compare_to.resolve())
 
 
 if __name__ == "__main__":

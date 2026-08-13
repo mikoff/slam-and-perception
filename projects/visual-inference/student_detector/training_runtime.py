@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import math
+import os
 import random
+import signal
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -28,6 +31,7 @@ try:
     from accelerate import Accelerator
 except ImportError:  # pragma: no cover - exercised by the explicit runtime check
     Accelerator = None
+
 
 @dataclass(frozen=True)
 class CheckpointContext:
@@ -71,7 +75,9 @@ class ProposalTrainingTask(Protocol):
 
     def restore_checkpoint_extra(self, state: Mapping[str, Any]) -> None: ...
 
-    def load_model_state(self, model: nn.Module, checkpoint: Mapping[str, Any]) -> None: ...
+    def load_model_state(
+        self, model: nn.Module, checkpoint: Mapping[str, Any]
+    ) -> None: ...
 
     def selection_score(self, metrics: Mapping[str, float]) -> float: ...
 
@@ -106,6 +112,32 @@ def _restore_rng_state(state: Mapping[str, Any]) -> None:
         torch.set_rng_state(state["torch"])
     if "cuda" in state and torch.cuda.is_available():
         torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _runtime_contract() -> dict[str, str]:
+    names = {
+        "run_id": "RUN_ID",
+        "source_commit": "SOURCE_COMMIT",
+        "dataset_id": "DATASET_ID",
+        "dataset_manifest_sha256": "DATASET_MANIFEST_SHA256",
+        "config_path": "CONFIG_PATH",
+    }
+    return {
+        key: value
+        for key, environment_name in names.items()
+        if (value := os.getenv(environment_name, ""))
+    }
+
+
+def _verify_runtime_contract(checkpoint: Mapping[str, Any]) -> None:
+    expected = _runtime_contract()
+    recorded = checkpoint.get("run_contract", {})
+    for key, value in expected.items():
+        if recorded.get(key) != value:
+            raise ValueError(
+                f"checkpoint run contract mismatch for {key}: "
+                f"expected {value!r}, found {recorded.get(key)!r}"
+            )
 
 
 def save_training_checkpoint(
@@ -147,6 +179,40 @@ def save_training_checkpoint(
         "config": asdict(config),
         "metrics": context.metrics,
         "rng_state": _rng_state(),
+        "run_contract": _runtime_contract(),
+        **task.checkpoint_extra(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    save_function(payload, temporary)
+    temporary.replace(path)
+
+
+def save_weights_checkpoint(
+    path: Path,
+    *,
+    model: nn.Module,
+    ema: ExponentialMovingAverage,
+    context: CheckpointContext,
+    config: Phase3Config,
+    task: ProposalTrainingTask,
+    selected_state: str,
+    save_function: Any = torch.save,
+) -> None:
+    """Atomically save inference weights without duplicating optimizer state."""
+    selected_module = model if selected_state == "model" else ema.module
+    payload = {
+        "format_version": 3,
+        "checkpoint_kind": "weights_only",
+        "phase": task.checkpoint_phase,
+        "architecture": task.architecture,
+        "selected_state": selected_state,
+        selected_state: selected_module.state_dict(),
+        "epoch": context.epoch,
+        "global_step": context.global_step,
+        "config": asdict(config),
+        "metrics": context.metrics,
+        "run_contract": _runtime_contract(),
         **task.checkpoint_extra(),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,9 +279,7 @@ def train_proposals(
         warmup_steps=config.schedule.warmup_steps,
         min_ratio=config.schedule.min_lr_ratio,
     )
-    model, optimizer, train_loader = accelerator.prepare(
-        model, optimizer, train_loader
-    )
+    model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
     base_model = accelerator.unwrap_model(model)
     ema = ExponentialMovingAverage(
         base_model, config.schedule.ema_decay, config.schedule.ema_ramp_steps
@@ -225,6 +289,17 @@ def train_proposals(
     start_epoch = 0
     resume_batch = 0
     metrics: dict[str, Any] = {}
+    termination_requested = False
+
+    def request_termination(_signum: int, _frame: object) -> None:
+        nonlocal termination_requested
+        termination_requested = True
+
+    previous_handlers = {
+        signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)
+    }
+    for signum in previous_handlers:
+        signal.signal(signum, request_termination)
 
     if accelerator.is_main_process:
         reporter.on_start(
@@ -239,6 +314,7 @@ def train_proposals(
 
     if resume is not None:
         checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
+        _verify_runtime_contract(checkpoint)
         task.load_model_state(base_model, checkpoint)
         ema.module.load_state_dict(checkpoint["ema_model"], strict=True)
         ema.restore_tracking(
@@ -252,9 +328,7 @@ def train_proposals(
             accelerator.scaler.load_state_dict(checkpoint["scaler"])
         epoch_complete = bool(checkpoint.get("epoch_complete", True))
         start_epoch = int(checkpoint["epoch"]) + int(epoch_complete)
-        resume_batch = 0 if epoch_complete else int(
-            checkpoint.get("batch_in_epoch", 0)
-        )
+        resume_batch = 0 if epoch_complete else int(checkpoint.get("batch_in_epoch", 0))
         global_step = int(checkpoint["global_step"])
         restored_best = checkpoint.get("best_scores")
         if restored_best is not None:
@@ -299,32 +373,63 @@ def train_proposals(
             running: dict[str, Tensor] = {}
             batches = 0
             last_batch_in_epoch = epoch_resume_batch
+            previous_batch_finished = time.perf_counter()
 
             for batch_index, (images, samples) in enumerate(
                 train_loader, start=enumerate_start
             ):
+                batch_started = time.perf_counter()
+                phase_timings = {
+                    "data_wait_host_seconds": batch_started - previous_batch_finished
+                }
                 batch_in_epoch = batch_index + 1
                 if not sampler_skips and batch_in_epoch <= epoch_resume_batch:
                     continue
                 with accelerator.accumulate(model):
-                    images = images.to(
-                        device, non_blocking=device.type == "cuda"
+                    phase_started = time.perf_counter()
+                    images = images.to(device, non_blocking=device.type == "cuda")
+                    phase_timings["h2d_enqueue_seconds"] = (
+                        time.perf_counter() - phase_started
                     )
+                    phase_started = time.perf_counter()
                     with accelerator.autocast():
                         output = model(images)
+                    phase_timings["forward_enqueue_seconds"] = (
+                        time.perf_counter() - phase_started
+                    )
+                    phase_started = time.perf_counter()
                     targets = task.build_targets(samples, output, device)
+                    phase_timings["target_build_seconds"] = (
+                        time.perf_counter() - phase_started
+                    )
+                    phase_started = time.perf_counter()
                     with accelerator.autocast():
                         losses = task.compute_loss(output, targets)
+                    phase_timings["loss_enqueue_seconds"] = (
+                        time.perf_counter() - phase_started
+                    )
                     task.check_finite(output, losses)
+                    phase_started = time.perf_counter()
                     accelerator.backward(losses.total)
+                    phase_timings["backward_enqueue_seconds"] = (
+                        time.perf_counter() - phase_started
+                    )
                     if accelerator.sync_gradients:
                         accelerator.clip_grad_norm_(
                             model.parameters(),
                             config.schedule.gradient_clip_norm,
                         )
+                    phase_started = time.perf_counter()
                     optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
-                    if accelerator.sync_gradients:
+                    phase_timings["optimizer_enqueue_seconds"] = (
+                        time.perf_counter() - phase_started
+                    )
+                    optimizer_step_succeeded = (
+                        accelerator.sync_gradients
+                        and not accelerator.optimizer_step_was_skipped
+                    )
+                    if optimizer_step_succeeded:
                         scheduler.step()
                         ema.update(base_model)
                         global_step += 1
@@ -339,9 +444,13 @@ def train_proposals(
                     running[key] = running.get(key, torch.zeros_like(tensor)) + tensor
                 batches += 1
                 last_batch_in_epoch = batch_in_epoch
-                if accelerator.is_main_process and log_interval and (
-                    batches % log_interval == 0
-                    or batch_in_epoch == len(train_loader)
+                if (
+                    accelerator.is_main_process
+                    and log_interval
+                    and (
+                        batches % log_interval == 0
+                        or batch_in_epoch == len(train_loader)
+                    )
                 ):
                     reporter.on_batch(
                         metrics={
@@ -355,9 +464,13 @@ def train_proposals(
                         batches_per_epoch=len(train_loader),
                         global_step=global_step,
                         optimizer=optimizer,
+                        timings={
+                            **phase_timings,
+                            "batch_host_seconds": time.perf_counter() - batch_started,
+                        },
                     )
 
-                if accelerator.sync_gradients:
+                if optimizer_step_succeeded:
                     checkpoint_interval = config.schedule.checkpoint_every_steps
                     if (
                         accelerator.is_main_process
@@ -372,6 +485,7 @@ def train_proposals(
                             best_scores,
                             metrics,
                         )
+                        checkpoint_started = time.perf_counter()
                         save_training_checkpoint(
                             output_dir / "last.pt",
                             model=base_model,
@@ -389,12 +503,20 @@ def train_proposals(
                             selected_state="model",
                             save_function=accelerator.save,
                         )
-                        reporter.on_checkpoint(output_dir)
+                        reporter.on_checkpoint(
+                            output_dir,
+                            global_step=global_step,
+                            save_duration_seconds=time.perf_counter()
+                            - checkpoint_started,
+                        )
+                previous_batch_finished = time.perf_counter()
+                if termination_requested:
+                    break
                 if max_steps is not None and global_step >= max_steps:
                     break
 
             task.on_epoch_complete(epoch, config.schedule.epochs)
-            should_validate = (
+            should_validate = not termination_requested and (
                 (epoch + 1) % validation_interval == 0
                 or epoch + 1 == config.schedule.epochs
                 or (max_steps is not None and global_step >= max_steps)
@@ -403,19 +525,33 @@ def train_proposals(
             if should_validate:
                 accelerator.wait_for_everyone()
                 if accelerator.is_main_process:
-                    for state in task.validation_states:
-                        state_metrics = task.validate(
-                            _validation_model(state, base_model, ema),
+                    validation_started = time.perf_counter()
+                    if hasattr(task, "validate_states"):
+                        validation_metrics = task.validate_states(
+                            {
+                                state: _validation_model(state, base_model, ema)
+                                for state in task.validation_states
+                            },
                             val_loader,
                             device,
                             max_val_batches,
                         )
-                        validation_metrics[state] = state_metrics
+                    else:
+                        for state in task.validation_states:
+                            validation_metrics[state] = task.validate(
+                                _validation_model(state, base_model, ema),
+                                val_loader,
+                                device,
+                                max_val_batches,
+                            )
+                    validation_duration = time.perf_counter() - validation_started
+                    for state, state_metrics in validation_metrics.items():
                         reporter.on_validation(
                             state=state,
                             metrics=state_metrics,
                             epoch=epoch,
                             global_step=global_step,
+                            duration_seconds=validation_duration,
                         )
                 accelerator.wait_for_everyone()
 
@@ -433,7 +569,9 @@ def train_proposals(
                     optimizer,
                 )
                 reporter.on_epoch(metrics=metrics)
-            epoch_complete = last_batch_in_epoch >= len(train_loader)
+            epoch_complete = (
+                last_batch_in_epoch >= len(train_loader) and not termination_requested
+            )
             is_best = {state: False for state in task.validation_states}
             if accelerator.is_main_process and should_validate:
                 for state, state_metrics in validation_metrics.items():
@@ -466,27 +604,51 @@ def train_proposals(
                     "task": task,
                     "save_function": accelerator.save,
                 }
-                save_training_checkpoint(
-                    output_dir / "last.pt",
-                    selected_state="model",
-                    **checkpoint_args,
+                checkpoint_due = (
+                    termination_requested
+                    or (epoch + 1) % config.schedule.checkpoint_every_epochs == 0
+                    or epoch + 1 == config.schedule.epochs
+                    or (max_steps is not None and global_step >= max_steps)
                 )
+                if checkpoint_due:
+                    checkpoint_started = time.perf_counter()
+                    save_training_checkpoint(
+                        output_dir / "last.pt",
+                        selected_state="model",
+                        **checkpoint_args,
+                    )
                 for state, selected in is_best.items():
                     if not selected:
                         continue
                     selected_state = "model" if state == "raw" else "ema_model"
                     for name in task.best_checkpoint_names(state):
-                        save_training_checkpoint(
+                        save_weights_checkpoint(
                             output_dir / name,
                             selected_state=selected_state,
-                            **checkpoint_args,
+                            model=base_model,
+                            ema=ema,
+                            context=context,
+                            config=config,
+                            task=task,
+                            save_function=accelerator.save,
                         )
-                reporter.on_checkpoint(output_dir)
+                if checkpoint_due:
+                    reporter.on_checkpoint(
+                        output_dir,
+                        global_step=global_step,
+                        save_duration_seconds=time.perf_counter() - checkpoint_started,
+                    )
             accelerator.wait_for_everyone()
-            if max_steps is not None and global_step >= max_steps:
+            if termination_requested or (
+                max_steps is not None and global_step >= max_steps
+            ):
                 break
     finally:
-        reporter.close()
+        try:
+            reporter.close()
+        finally:
+            for signum, handler in previous_handlers.items():
+                signal.signal(signum, handler)
 
     return {
         "global_step": global_step,

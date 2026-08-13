@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import math
 import os
 import random
 import sqlite3
 import tempfile
+import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -61,39 +63,11 @@ class ProposalSample:
 
 
 def _source_signature(path: Path) -> str:
-    stat = path.stat()
-    return f"{stat.st_size}:{stat.st_mtime_ns}"
-
-
-def build_coco_parquet_index(
-    annotations: str | Path,
-    index_path: str | Path,
-    *,
-    force: bool = False,
-) -> tuple[Path, Path]:
-    """Export dataset index to columnar Parquet files using DuckDB."""
-    import duckdb
-    source = Path(annotations).resolve()
-    target_dir = Path(index_path).resolve().parent
-    target_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(index_path).stem
-    images_parquet = target_dir / f"{stem}_images.parquet"
-    annotations_parquet = target_dir / f"{stem}_annotations.parquet"
-
-    sqlite_path = build_coco_sqlite_index(annotations, target_dir / f"{stem}.sqlite", force=force)
-    up_to_date = (
-        images_parquet.exists()
-        and annotations_parquet.exists()
-        and images_parquet.stat().st_mtime >= sqlite_path.stat().st_mtime
-    )
-    if up_to_date and not force:
-        return images_parquet, annotations_parquet
-    con = duckdb.connect()
-    con.execute(f"ATTACH '{sqlite_path}' AS db (TYPE SQLITE)")
-    con.execute(f"COPY (SELECT * FROM db.images ORDER BY row_index) TO '{images_parquet}' (FORMAT PARQUET)")
-    con.execute(f"COPY (SELECT * FROM db.annotations) TO '{annotations_parquet}' (FORMAT PARQUET)")
-    con.close()
-    return images_parquet, annotations_parquet
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(8 * 1024 * 1024):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
 
 
 def build_coco_sqlite_index(
@@ -101,6 +75,7 @@ def build_coco_sqlite_index(
     index_path: str | Path,
     *,
     force: bool = False,
+    build_if_missing: bool = True,
 ) -> Path:
     """Build a compact random-access index without loading COCO JSON into RAM."""
     source = Path(annotations).resolve()
@@ -109,26 +84,39 @@ def build_coco_sqlite_index(
     # first streamed image record: manifests use `image_id`, while COCO uses
     # `id`, and this avoids loading the annotation document.
     destination = Path(index_path).resolve()
+    if destination.parent.exists():
+        cutoff = time.time() - 24 * 60 * 60
+        for stale in destination.parent.glob(f".{destination.name}.*.tmp"):
+            if stale.is_file() and stale.stat().st_mtime < cutoff:
+                stale.unlink()
     signature = _source_signature(source)
     if destination.exists() and not force:
         try:
             with sqlite3.connect(destination) as connection:
-                metadata = dict(connection.execute(
-                    "SELECT key, value FROM metadata"
-                ).fetchall())
-            if (
-                metadata.get("source_signature") == signature
-                and metadata.get("schema_version") in (INDEX_SCHEMA_VERSION, f"{INDEX_SCHEMA_VERSION}:proposal-manifest")
-            ):
+                metadata = dict(
+                    connection.execute("SELECT key, value FROM metadata").fetchall()
+                )
+            if metadata.get("source_signature") == signature and metadata.get(
+                "schema_version"
+            ) in (INDEX_SCHEMA_VERSION, f"{INDEX_SCHEMA_VERSION}:proposal-manifest"):
                 return destination
         except Exception:
             pass
+    if not build_if_missing:
+        raise ValueError(
+            f"prebuilt index is missing, corrupt, or does not match annotations: {destination}"
+        )
 
     with source.open("rb") as stream:
         first_image = next(ijson.items(stream, "images.item"), None)
 
     if isinstance(first_image, dict) and "image_id" in first_image:
-        return build_proposal_manifest_sqlite_index(source, index_path, force=force)
+        return build_proposal_manifest_sqlite_index(
+            source,
+            index_path,
+            force=force,
+            build_if_missing=build_if_missing,
+        )
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, staged_name = tempfile.mkstemp(
@@ -174,9 +162,7 @@ def build_coco_sqlite_index(
             )
             image_sources: dict[int, tuple[str, str]] = {}
             with source.open("rb") as stream:
-                for row_index, image in enumerate(
-                    ijson.items(stream, "images.item")
-                ):
+                for row_index, image in enumerate(ijson.items(stream, "images.item")):
                     image_id = int(image["id"])
                     connection.execute(
                         """
@@ -207,9 +193,7 @@ def build_coco_sqlite_index(
                 for annotation in ijson.items(stream, "annotations.item"):
                     x, y, width, height = map(float, annotation["bbox"])
                     image_id = int(annotation["image_id"])
-                    source_dataset = image_sources.get(
-                        image_id, ("", "")
-                    )[0]
+                    source_dataset = image_sources.get(image_id, ("", ""))[0]
                     # Existing merged artifacts predate the WoodScape
                     # taxonomy correction. Exclude its old canonical name as
                     # a static region until those artifacts are regenerated.
@@ -217,7 +201,8 @@ def build_coco_sqlite_index(
                         source_dataset == "woodscape_rgb_fisheye"
                         and categories.get(
                             int(annotation.get("category_id", -1)), "unknown"
-                        ) == "construction_vehicle"
+                        )
+                        == "construction_vehicle"
                     )
                     ignore = bool(
                         annotation.get("ignore_region")
@@ -227,25 +212,32 @@ def build_coco_sqlite_index(
                     category_name = categories.get(
                         int(annotation.get("category_id", -1)), "unknown"
                     )
-                    rows.append((
-                        image_id,
-                        x,
-                        y,
-                        x + width,
-                        y + height,
-                        int(ignore),
-                        category_name,
-                        str(annotation.get("object_condition", "whole_object")),
-                        json.dumps(
-                            annotation.get("quad")
-                            or [[x, y], [x + width, y], [x + width, y + height], [x, y + height]],
-                            separators=(",", ":"),
-                        ),
-                        str(annotation.get("geometry_tier", "source_hbb")),
-                        float(annotation.get("fit_coverage", 1.0)),
-                        float(annotation.get("fit_tightness", 0.0)),
-                        str(annotation.get("seen_status", "auxiliary")),
-                    ))
+                    rows.append(
+                        (
+                            image_id,
+                            x,
+                            y,
+                            x + width,
+                            y + height,
+                            int(ignore),
+                            category_name,
+                            str(annotation.get("object_condition", "whole_object")),
+                            json.dumps(
+                                annotation.get("quad")
+                                or [
+                                    [x, y],
+                                    [x + width, y],
+                                    [x + width, y + height],
+                                    [x, y + height],
+                                ],
+                                separators=(",", ":"),
+                            ),
+                            str(annotation.get("geometry_tier", "source_hbb")),
+                            float(annotation.get("fit_coverage", 1.0)),
+                            float(annotation.get("fit_tightness", 0.0)),
+                            str(annotation.get("seen_status", "auxiliary")),
+                        )
+                    )
                     if not ignore:
                         positive_counts[image_id] += 1
                     if len(rows) >= 10_000:
@@ -284,6 +276,7 @@ def build_proposal_manifest_sqlite_index(
     index_path: str | Path,
     *,
     force: bool = False,
+    build_if_missing: bool = True,
 ) -> Path:
     """Index the compact proposal manifest without materializing all images."""
     source = Path(annotations).resolve()
@@ -292,9 +285,18 @@ def build_proposal_manifest_sqlite_index(
     schema_version = f"{INDEX_SCHEMA_VERSION}:proposal-manifest"
     if destination.exists() and not force:
         with sqlite3.connect(destination) as connection:
-            metadata = dict(connection.execute("SELECT key, value FROM metadata").fetchall())
-        if metadata.get("source_signature") == signature and metadata.get("schema_version") == schema_version:
+            metadata = dict(
+                connection.execute("SELECT key, value FROM metadata").fetchall()
+            )
+        if (
+            metadata.get("source_signature") == signature
+            and metadata.get("schema_version") == schema_version
+        ):
             return destination
+    if not build_if_missing:
+        raise ValueError(
+            f"prebuilt index is missing or does not match proposal manifest: {destination}"
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, staged_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
@@ -341,8 +343,11 @@ def build_proposal_manifest_sqlite_index(
                     connection.execute(
                         "INSERT INTO images VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
-                            row_index, image_id, str(image["file_name"]),
-                            int(image["width"]), int(image["height"]),
+                            row_index,
+                            image_id,
+                            str(image["file_name"]),
+                            int(image["width"]),
+                            int(image["height"]),
                             str(image.get("source_dataset", "unknown")),
                             str(image.get("camera_type", "perspective")),
                             int(bool(image.get("background_supervision", False))),
@@ -359,21 +364,38 @@ def build_proposal_manifest_sqlite_index(
                             if not record.get("valid", True):
                                 continue
                             x, y, width, height = map(float, record["bbox"])
-                            quad = [[float(point[0]), float(point[1])] for point in record["quad"]]
-                            rows.append((
-                                image_id, x, y, x + width, y + height,
-                                state_code, str(record.get("source_category", "unknown")),
-                                str(record.get("object_condition", "whole_object")),
-                                json.dumps(quad, separators=(",", ":")),
-                                str(record.get("geometry_tier", "source_hbb")),
-                                float(record.get("fit_coverage", 1.0)),
-                                float(record.get("fit_tightness", 0.0)),
-                                str(record.get("seen_status", "auxiliary")),
-                            ))
+                            quad = [
+                                [float(point[0]), float(point[1])]
+                                for point in record["quad"]
+                            ]
+                            rows.append(
+                                (
+                                    image_id,
+                                    x,
+                                    y,
+                                    x + width,
+                                    y + height,
+                                    state_code,
+                                    str(record.get("source_category", "unknown")),
+                                    str(record.get("object_condition", "whole_object")),
+                                    json.dumps(quad, separators=(",", ":")),
+                                    str(record.get("geometry_tier", "source_hbb")),
+                                    float(record.get("fit_coverage", 1.0)),
+                                    float(record.get("fit_tightness", 0.0)),
+                                    str(record.get("seen_status", "auxiliary")),
+                                )
+                            )
                     if rows:
-                        connection.executemany("INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-            connection.execute("INSERT INTO metadata VALUES ('source_signature', ?)", (signature,))
-            connection.execute("INSERT INTO metadata VALUES ('schema_version', ?)", (schema_version,))
+                        connection.executemany(
+                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            rows,
+                        )
+            connection.execute(
+                "INSERT INTO metadata VALUES ('source_signature', ?)", (signature,)
+            )
+            connection.execute(
+                "INSERT INTO metadata VALUES ('schema_version', ?)", (schema_version,)
+            )
             connection.commit()
         os.replace(staged, destination)
     except BaseException:
@@ -384,9 +406,9 @@ def build_proposal_manifest_sqlite_index(
 
 def _pil_to_normalized_tensor(image: Image.Image) -> Tensor:
     width, height = image.size
-    storage = torch.frombuffer(
-        bytearray(image.tobytes()), dtype=torch.uint8
-    ).reshape(height, width, 3)
+    storage = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.uint8).reshape(
+        height, width, 3
+    )
     tensor = storage.permute(2, 0, 1).to(dtype=torch.float32).div_(255.0)
     mean = tensor.new_tensor(IMAGENET_MEAN).view(3, 1, 1)
     std = tensor.new_tensor(IMAGENET_STD).view(3, 1, 1)
@@ -395,9 +417,11 @@ def _pil_to_normalized_tensor(image: Image.Image) -> Tensor:
 
 def _mask_to_tensor(mask: Image.Image) -> Tensor:
     width, height = mask.size
-    return torch.frombuffer(
-        bytearray(mask.tobytes()), dtype=torch.uint8
-    ).reshape(height, width).bool()
+    return (
+        torch.frombuffer(bytearray(mask.tobytes()), dtype=torch.uint8)
+        .reshape(height, width)
+        .bool()
+    )
 
 
 def _boxes_tensor(rows: Sequence[Sequence[float]]) -> Tensor:
@@ -468,16 +492,17 @@ class ProposalTransform:
             else boxes.new_empty((0, 4))
         )
         all_boxes = torch.cat((boxes, ignore_boxes, trusted_background_boxes), dim=0)
-        state = torch.cat((
-            torch.zeros(boxes.shape[0], dtype=torch.long),
-            torch.ones(ignore_boxes.shape[0], dtype=torch.long),
-            torch.full((trusted_background_boxes.shape[0],), 2, dtype=torch.long),
-        ))
+        state = torch.cat(
+            (
+                torch.zeros(boxes.shape[0], dtype=torch.long),
+                torch.ones(ignore_boxes.shape[0], dtype=torch.long),
+                torch.full((trusted_background_boxes.shape[0],), 2, dtype=torch.long),
+            )
+        )
 
         if (
             self.training
-            and generator.random()
-            < self.augmentation.horizontal_flip_probability
+            and generator.random() < self.augmentation.horizontal_flip_probability
         ):
             image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
             if all_boxes.numel():
@@ -525,9 +550,10 @@ class ProposalTransform:
         image_tensor = _pil_to_normalized_tensor(image)
         if self.training and generator.random() < self.augmentation.noise_probability:
             noise_generator = torch.Generator().manual_seed(seed)
-            image_tensor = image_tensor + torch.randn(
-                image_tensor.shape, generator=noise_generator
-            ) * 0.02
+            image_tensor = (
+                image_tensor
+                + torch.randn(image_tensor.shape, generator=noise_generator) * 0.02
+            )
 
         if all_boxes.numel() == 0:
             return (
@@ -541,10 +567,9 @@ class ProposalTransform:
         transformed = all_boxes * scale
         transformed[:, 0::2] += offset_x
         transformed[:, 1::2] += offset_y
-        unclipped_area = (
-            (transformed[:, 2] - transformed[:, 0]).clamp(min=0)
-            * (transformed[:, 3] - transformed[:, 1]).clamp(min=0)
-        )
+        unclipped_area = (transformed[:, 2] - transformed[:, 0]).clamp(min=0) * (
+            transformed[:, 3] - transformed[:, 1]
+        ).clamp(min=0)
         clipped = transformed.clone()
         clipped[:, 0::2].clamp_(0, self.input_size)
         clipped[:, 1::2].clamp_(0, self.input_size)
@@ -640,9 +665,13 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             )
             for row in rows
         ]
-        annotations_by_image: defaultdict[int, list[tuple[float, float, float, float, int, str]]] = defaultdict(list)
+        annotations_by_image: defaultdict[
+            int, list[tuple[float, float, float, float, int, str]]
+        ] = defaultdict(list)
         for row in ann_rows:
-            annotations_by_image[row[0]].append((row[1], row[2], row[3], row[4], row[5], row[6]))
+            annotations_by_image[row[0]].append(
+                (row[1], row[2], row[3], row[4], row[5], row[6])
+            )
         self._annotations_by_image = dict(annotations_by_image)
 
     def set_epoch(self, epoch: int) -> None:
@@ -659,17 +688,19 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
         trusted_rows = [row for row in rows if row[4] == 2]
         component_indices = self._contained_component_indices(positive_rows)
         retained_positive_rows = [
-            row for row_index, row in enumerate(positive_rows)
+            row
+            for row_index, row in enumerate(positive_rows)
             if row_index not in component_indices
         ]
         boxes = _boxes_tensor([row[:4] for row in retained_positive_rows])
-        ignore_boxes = _boxes_tensor([
-            row[:4] for row in ignore_rows
-        ] + [
-            row[:4]
-            for row_index, row in enumerate(positive_rows)
-            if row_index in component_indices
-        ])
+        ignore_boxes = _boxes_tensor(
+            [row[:4] for row in ignore_rows]
+            + [
+                row[:4]
+                for row_index, row in enumerate(positive_rows)
+                if row_index in component_indices
+            ]
+        )
         trusted_background_boxes = _boxes_tensor([row[:4] for row in trusted_rows])
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
@@ -680,9 +711,7 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             trusted_background_boxes,
             seed=self.seed + self.epoch * max(len(self), 1) + index,
         )
-        domain = self.data_config.source_domains.get(
-            record.source_dataset, "unknown"
-        )
+        domain = self.data_config.source_domains.get(record.source_dataset, "unknown")
         background_supervision = bool(transformed[3].numel())
         return ProposalSample(
             transformed[0],
@@ -699,14 +728,10 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             transformed[3],
         )
 
-    def _contained_component_indices(
-        self, rows: Sequence[Sequence[Any]]
-    ) -> set[int]:
+    def _contained_component_indices(self, rows: Sequence[Sequence[Any]]) -> set[int]:
         components = set(self.data_config.component_categories)
         parents = set(self.data_config.parent_categories)
-        parent_boxes = [
-            row[:4] for row in rows if str(row[5]) in parents
-        ]
+        parent_boxes = [row[:4] for row in rows if str(row[5]) in parents]
         if not parent_boxes:
             return set()
         parent_tensor = _boxes_tensor(parent_boxes)
@@ -779,9 +804,7 @@ def select_source_mixture_indices(
         if observed[source] < quotas[source]
     }
     if missing:
-        raise RuntimeError(
-            f"Could not satisfy source-mixture subset quotas: {missing}"
-        )
+        raise RuntimeError(f"Could not satisfy source-mixture subset quotas: {missing}")
     return selected
 
 
@@ -832,9 +855,7 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
 
     def set_start_batch(self, start_batch: int) -> None:
         if not 0 <= start_batch <= self.batches_per_epoch:
-            raise ValueError(
-                f"start_batch must be in [0, {self.batches_per_epoch}]"
-            )
+            raise ValueError(f"start_batch must be in [0, {self.batches_per_epoch}]")
         self.start_batch = start_batch
 
     def __len__(self) -> int:
@@ -869,9 +890,7 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
                 weights = [self.source_weights[source] for source in sources]
                 for _ in range(count):
                     source = generator.choices(sources, weights=weights, k=1)[0]
-                    batch.append(
-                        draw(source, generator.random() < self.empty_fraction)
-                    )
+                    batch.append(draw(source, generator.random() < self.empty_fraction))
             generator.shuffle(batch)
             if batch_index >= self.start_batch:
                 yield batch

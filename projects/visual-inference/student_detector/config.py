@@ -22,27 +22,35 @@ class DataConfig:
     batches_per_epoch: int | None = None
     workers: int = 4
     empty_fraction: float = 0.075
-    domain_weights: dict[str, float] = field(default_factory=lambda: {
-        "general": 0.50,
-        "automotive": 0.30,
-        "fisheye": 0.20,
-    })
-    source_domains: dict[str, str] = field(default_factory=lambda: {
-        "coco_2017": "general",
-        "nuimages": "automotive",
-        "bdd100k_images_100k": "automotive",
-        "woodscape_rgb_fisheye": "fisheye",
-    })
-    source_weights: dict[str, float] = field(default_factory=lambda: {
-        "coco_2017": 0.50,
-        "nuimages": 0.18,
-        "bdd100k_images_100k": 0.12,
-        "woodscape_rgb_fisheye": 0.20,
-    })
+    domain_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "general": 0.50,
+            "automotive": 0.30,
+            "fisheye": 0.20,
+        }
+    )
+    source_domains: dict[str, str] = field(
+        default_factory=lambda: {
+            "coco_2017": "general",
+            "nuimages": "automotive",
+            "bdd100k_images_100k": "automotive",
+            "woodscape_rgb_fisheye": "fisheye",
+        }
+    )
+    source_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "coco_2017": 0.50,
+            "nuimages": 0.18,
+            "bdd100k_images_100k": 0.12,
+            "woodscape_rgb_fisheye": 0.20,
+        }
+    )
     dense_background_sources: tuple[str, ...] = ("coco_2017",)
-    background_loss_weights: dict[str, float] = field(default_factory=lambda: {
-        "woodscape_rgb_fisheye": 0.05,
-    })
+    background_loss_weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "woodscape_rgb_fisheye": 0.05,
+        }
+    )
     tiny_area: float = 100.0
     tiny_min_side: float = 4.0
     quad_regular_min_side: float = 16.0
@@ -50,15 +58,36 @@ class DataConfig:
     thin_aspect_ratio_min: float = 3.0
     thin_area: float = 16.0
     component_categories: tuple[str, ...] = (
-        "face", "head", "hand", "arm", "leg", "foot", "shoe",
-        "wheel", "tire", "license_plate", "mirror", "door",
-        "handle", "screen", "logo",
+        "face",
+        "head",
+        "hand",
+        "arm",
+        "leg",
+        "foot",
+        "shoe",
+        "wheel",
+        "tire",
+        "license_plate",
+        "mirror",
+        "door",
+        "handle",
+        "screen",
+        "logo",
     )
     parent_categories: tuple[str, ...] = (
-        "person", "pedestrian_adult", "pedestrian_child",
-        "pedestrian_other", "pedestrian_construction_worker",
-        "pedestrian_police_officer", "car", "truck", "bus", "van",
-        "motorcycle", "bicycle", "construction_vehicle",
+        "person",
+        "pedestrian_adult",
+        "pedestrian_child",
+        "pedestrian_other",
+        "pedestrian_construction_worker",
+        "pedestrian_police_officer",
+        "car",
+        "truck",
+        "bus",
+        "van",
+        "motorcycle",
+        "bicycle",
+        "construction_vehicle",
     )
     component_containment_threshold: float = 0.8
 
@@ -234,19 +263,16 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("ltrb_weight must be non-negative")
     if config.schedule.checkpoint_every_steps < 0:
         raise ValueError("checkpoint_every_steps must be non-negative")
+    if config.schedule.checkpoint_every_epochs < 1:
+        raise ValueError("checkpoint_every_epochs must be positive")
     if config.data.batches_per_epoch is not None and config.data.batches_per_epoch < 1:
         raise ValueError("batches_per_epoch must be positive when configured")
     if not 0 <= config.schedule.ema_decay < 1:
         raise ValueError("ema_decay must be in [0, 1)")
     if config.schedule.ema_ramp_steps < 0:
         raise ValueError("ema_ramp_steps must be non-negative")
-    if config.inference.score_mode not in {
-        "objectness", "objectness_x_centerness"
-    }:
-        raise ValueError(
-            "score_mode must be 'objectness' or "
-            "'objectness_x_centerness'"
-        )
+    if config.inference.score_mode not in {"objectness", "objectness_x_centerness"}:
+        raise ValueError("score_mode must be 'objectness' or 'objectness_x_centerness'")
     if config.quad.top_k < 1 or config.quad.eligible_levels < 1:
         raise ValueError("quad top_k and eligible_levels must be positive")
     if config.quad.scale_measure not in {"area", "maximum_extent"}:
@@ -259,7 +285,9 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         or config.data.thin_aspect_ratio_min < 1
         or config.data.thin_area <= 0
     ):
-        raise ValueError("quad size thresholds must be positive and aspect ratio must be at least 1")
+        raise ValueError(
+            "quad size thresholds must be positive and aspect ratio must be at least 1"
+        )
     if not 0 <= config.quad.weak_negative_weight <= 1:
         raise ValueError("quad weak_negative_weight must be in [0, 1]")
     if config.quad.gwd_weight < 0:

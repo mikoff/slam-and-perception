@@ -1,220 +1,141 @@
-name: Cloud Production Training (Lean)
+name: Submit Cloud Training
 
 on:
   workflow_dispatch:
     inputs:
       provider:
-        description: 'Cloud GPU Provider'
+        description: Cloud capacity provider
         required: true
-        default: 'packet'
+        default: runpod
+        type: choice
+        options: [runpod, packet]
+      gpu:
+        description: Exact GPU model; RTX6000 means RTX PRO 6000 Blackwell 96GB
+        required: true
+        default: RTX4090
+        type: choice
+        options: [RTX4090, RTX6000, L40S, A100, B200]
+      config:
+        description: Versioned training recipe
+        required: true
+        default: configs/phase3.yaml
         type: choice
         options:
-          - packet
-          - runpod
-      gpu_type:
-        description: 'GPU Type'
+          - configs/phase3.yaml
+          - configs/phase3_attnres.yaml
+      dataset_id:
+        description: Immutable S3 dataset identifier
         required: true
-        default: 'rtx4090'
+        type: string
+      mode:
+        description: Training, bounded smoke, or GPU batch preflight
+        required: true
+        default: production
         type: choice
-        options:
-          - rtx4090
-          - rtx6000
-          - l40s
-          - a100
-          - b200
-      container_image:
-        description: 'Base Docker Image for Training'
+        options: [production, smoke, batch_preflight]
+      batch_candidates:
+        description: Batch sizes tested only in batch_preflight mode
         required: true
-        default: 'nvcr.io/nvidia/pytorch:26.07-py3'
+        default: 16,32,64,96,128
+        type: string
+      run_name:
+        description: Optional display name; run identity remains immutable
+        required: false
         type: string
 
-      config_path:
-        description: 'Training Configuration Path'
-        required: true
-        default: 'configs/phase3_attnres.yaml'
-        type: string
-      wandb_run_name:
-        description: 'W&B Run Name (optional)'
-        required: false
-        type: string
-      resume_path:
-        description: 'Resume Checkpoint Path (optional, e.g. /workspace/runs/my_run/last.pt)'
-        required: false
-        type: string
-      batch_size:
-        description: 'Batch Size Override (optional, leave blank to autotune)'
-        required: false
-        type: string
-      extra_training_args:
-        description: 'Extra python arguments (e.g. --max-steps 5 --max-val-batches 2)'
-        required: false
-        type: string
-      extra_params:
-        description: 'Extra provider parameters (JSON, e.g. {"pool_id": "144"})'
-        required: false
-        type: string
+permissions:
+  contents: read
+
+concurrency:
+  group: visual-inference-cloud-${{ inputs.provider }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
-  cloud-training:
-    name: Run Cloud Training
+  submit:
+    name: Submit ${{ inputs.provider }} training
     runs-on: ubuntu-latest
-    environment: packet-production
+    environment: cloud-production
+    # Covers the bounded 15m host bootstrap and 15m image-pull window,
+    # plus provisioning, dependency setup, and the 1m runtime stability gate.
+    timeout-minutes: 45
+    env:
+      DSTACK_SERVER_URL: ${{ secrets.DSTACK_SERVER_URL }}
+      DSTACK_PROJECT: ${{ secrets.DSTACK_PROJECT }}
+      DSTACK_TOKEN: ${{ secrets.DSTACK_TOKEN }}
+      RUN_ID: vi-${{ github.run_id }}-${{ github.run_attempt }}
+      RUN_DISPLAY_NAME: ${{ inputs.run_name }}
+      DSTACK_GPU: ${{ inputs.gpu }}
+      CONFIG_PATH: ${{ inputs.config }}
+      DATASET_ID: ${{ inputs.dataset_id }}
+      RUN_MODE: ${{ inputs.mode }}
+      BATCH_CANDIDATES: ${{ inputs.batch_candidates }}
+      SOURCE_COMMIT: ${{ github.sha }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      S3_ENDPOINT_URL: ${{ secrets.S3_ENDPOINT_URL }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      WANDB_PROJECT: ${{ secrets.WANDB_PROJECT }}
+      WANDB_ENTITY: ${{ secrets.WANDB_ENTITY }}
+      PACKET_API_KEY: ${{ secrets.PACKET_API_KEY }}
+      PACKET_SSH_PRIVATE_KEY: ${{ secrets.PACKET_SSH_PRIVATE_KEY }}
+      PACKET_SSH_KEY_ID: ${{ secrets.PACKET_SSH_KEY_ID || secrets.CLOUD_SSH_KEY_ID }}
+      PACKET_STORAGE_BLOCK_ID: ${{ secrets.PACKET_STORAGE_BLOCK_ID }}
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - name: Checkout exact source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          fetch-depth: 0
+
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        with:
+          version: 0.11.29
           enable-cache: true
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Run Local Sanity Tests
+      - name: Install locked project and dstack CLI
         working-directory: projects/visual-inference
         run: |
-          uv sync --frozen --group dev
-          uv run pytest -q tests
+          set -euo pipefail
+          uv sync --frozen --group cloud
+          uv tool install --force 'dstack==0.20.28'
 
-      - name: Configure Local SSH Key
-        env:
-          RAW_PRIVATE_KEY: ${{ secrets.CLOUD_SSH_PRIVATE_KEY || secrets.SSH_PRIVATE_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          if [[ -z "${RAW_PRIVATE_KEY:-}" ]]; then
-            echo "--> Error: Neither CLOUD_SSH_PRIVATE_KEY nor SSH_PRIVATE_KEY secret is set in GitHub Secrets!"
-            exit 1
-          fi
-          printf '%s\n' "$RAW_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
-          echo "--> Validating SSH private key format..."
-          if ssh-keygen -l -f ~/.ssh/id_rsa >/dev/null 2>&1; then
-            echo "--> Private key fingerprint: $(ssh-keygen -l -f ~/.ssh/id_rsa)"
-          else
-            echo "--> Error: The key written to ~/.ssh/id_rsa is invalid or corrupted."
-            echo "    Please check your CLOUD_SSH_PRIVATE_KEY secret in GitHub."
-            exit 1
-          fi
-
-      - name: Provision Cloud GPU Instance
-        id: provision
+      - name: Verify dispatch and immutable dataset manifest
         working-directory: projects/visual-inference
-        env:
-          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
-          CLOUD_SSH_KEY_ID: ${{ secrets.CLOUD_SSH_KEY_ID }}
         run: |
-          uv run python scripts/cloud/cli.py start_instance \
-            --provider "${{ inputs.provider }}" \
-            --gpu-type "${{ inputs.gpu_type }}" \
-            --container-image "${{ inputs.container_image }}" \
-            ${{ inputs.extra_params && format('--extra-json ''{0}''', inputs.extra_params) || '' }} > instance.json
-          cat instance.json
-          INSTANCE_ID=$(jq -r .instance_id instance.json)
-          IP_ADDRESS=$(jq -r .ip_address instance.json)
-          SSH_PORT=$(jq -r '.ssh_port // 22' instance.json)
-          SSH_USER=$(jq -r '.ssh_user // "ubuntu"' instance.json)
-          echo "=================================================="
-          echo "🚀 Provisioned Server IP: $IP_ADDRESS"
-          echo "🔌 SSH Port:             $SSH_PORT"
-          echo "👤 SSH User:             $SSH_USER"
-          echo "🆔 Instance ID:          $INSTANCE_ID"
-          echo "=================================================="
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          echo "IP_ADDRESS=$IP_ADDRESS" >> $GITHUB_ENV
-          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
-          echo "SSH_USER=$SSH_USER" >> $GITHUB_ENV
+          set -euo pipefail
+          uv run python scripts/cloud/run_training.py --verify-env --verify-dataset
 
-      - name: Wait for SSH to be ready
+      - name: Submit native RunPod task
+        if: inputs.provider == 'runpod'
+        working-directory: projects/visual-inference
+        run: uv run python scripts/cloud/submit_dstack_task.py
+
+      - name: Provision Packet and submit SSH-fleet task
+        if: inputs.provider == 'packet'
+        working-directory: projects/visual-inference
+        run: uv run python scripts/cloud/packet_bridge.py submit
+
+      - name: Submission summary
         run: |
-          echo "--> Waiting for SSH daemon to become responsive..."
-          for i in {1..30}; do
-            if ssh -i ~/.ssh/id_rsa -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} "echo 'SSH is ready!'"; then
-              echo "--> SSH connection established successfully."
-              exit 0
+          {
+            echo '### Cloud training started'
+            echo ''
+            echo "- Run ID: \`${RUN_ID}\`"
+            echo "- Provider: \`${{ inputs.provider }}\`"
+            echo "- GPU: \`${DSTACK_GPU}\`"
+            echo "- Config: \`${CONFIG_PATH}\`"
+            echo "- Dataset: \`${DATASET_ID}\`"
+            echo "- Mode: \`${RUN_MODE}\`"
+            if [[ "${RUN_MODE}" == 'batch_preflight' ]]; then
+              echo "- Candidates: \`${BATCH_CANDIDATES}\`"
+              echo "- Durable report: \`s3://${S3_BUCKET}/runs/${RUN_ID}/batch-preflight.json\`"
             fi
-            echo "--> Attempt $i failed. Retrying in 10 seconds..."
-            sleep 10
-          done
-          echo "--> Error: SSH never became available."
-          exit 1
-
-      - name: Register Instance with Janitor
-        run: |
-          echo '{"instance_id": "${{ env.INSTANCE_ID }}", "provider": "${{ inputs.provider }}", "timestamp": '$(date +%s)'}' > instance_janitor.json
-          aws s3 cp instance_janitor.json s3://${{ secrets.S3_BUCKET }}/janitor/${{ env.INSTANCE_ID }}.json --endpoint-url ${{ secrets.S3_ENDPOINT_URL }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
-
-      - name: Execute Remote Cloud Training (Async via tmux)
-        run: |
-          echo "--> Creating local environment file..."
-          cat << 'EOF' > gha_env
-          REPO_URL=https://github.com/${{ github.repository }}.git
-          COMMIT_SHA=${{ github.sha }}
-          S3_BUCKET=${{ secrets.S3_BUCKET }}
-          S3_ENDPOINT_URL=${{ secrets.S3_ENDPOINT_URL }}
-          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
-          WANDB_API_KEY=${{ secrets.WANDB_API_KEY }}
-          WANDB_PROJECT=${{ secrets.WANDB_PROJECT }}
-          WANDB_ENTITY=${{ secrets.WANDB_ENTITY }}
-          CONFIG_PATH=${{ inputs.config_path }}
-          WANDB_RUN_NAME=${{ inputs.wandb_run_name }}
-          RESUME_PATH=${{ inputs.resume_path }}
-          CLOUD_API_KEY="${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}"
-          CLOUD_PROVIDER="${{ inputs.provider }}"
-          INSTANCE_ID="${{ env.INSTANCE_ID }}"
-          BATCH_SIZE="${{ inputs.batch_size }}"
-          EXTRA_TRAINING_ARGS="${{ inputs.extra_training_args }}"
-          EOF
-
-          echo "--> Uploading entrypoint script and env file to ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}..."
-          scp -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -P ${{ env.SSH_PORT }} projects/visual-inference/scripts/cloud/remote_entrypoint.sh gha_env ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }}:/tmp/
-          
-          echo "--> Scrubbing local secrets file..."
-          rm gha_env
-          
-          echo "--> Launching training in the background using nohup..."
-          ssh -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} bash -s << 'EOF'
-            nohup bash -c 'set -a; source /tmp/gha_env; bash /tmp/remote_entrypoint.sh' > /tmp/training.log 2>&1 &
-          EOF
-
-      - name: Wait for Training Startup Confirmation
-        run: |
-          echo "--> Tailing logs to ensure PyTorch and Autotune start correctly..."
-          ssh -i ~/.ssh/id_rsa -o ServerAliveInterval=60 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p ${{ env.SSH_PORT }} ${{ env.SSH_USER }}@${{ env.IP_ADDRESS }} bash -s << 'EOF'
-            timeout 900 tail -f /tmp/training.log | while read line; do
-              echo "$line"
-              if [[ "$line" == *'Starting quad proposal training'* ]] || [[ "$line" == *'Starting background periodic sync'* ]] || [[ "$line" == *'Autotune benchmark script crashed'* ]]; then
-                echo "--> 🚀 Training startup confirmed! Disconnecting GitHub Action safely..."
-                pkill -P $$ tail || true
-                exit 0
-              fi
-            done
-          EOF
-
-      - name: Mark Disconnect Safe
-        run: echo "DISCONNECT_SAFE=true" >> $GITHUB_ENV
-
-      - name: Terminate Cloud GPU Instance (Cleanup)
-        if: always() && env.DISCONNECT_SAFE != 'true'
-        working-directory: projects/visual-inference
-        env:
-          CLOUD_API_KEY: ${{ secrets.CLOUD_API_KEY || secrets.RUNPOD_API_KEY || secrets.PACKET_API_KEY }}
-        run: |
-          if [ -n "${{ env.INSTANCE_ID }}" ]; then
-            echo "Killing instance ${{ env.INSTANCE_ID }} on provider ${{ inputs.provider }}..."
-            uv run python scripts/cloud/cli.py kill_instance \
-              --provider "${{ inputs.provider }}" \
-              --instance-id "${{ env.INSTANCE_ID }}"
-          fi
-
-
+            echo ''
+            if [[ '${{ inputs.provider }}' == 'packet' ]]; then
+              echo 'The Packet job waits until dstack reports the task running.'
+            fi
+            echo 'dstack and W&B are the authoritative runtime status and log sources.'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,65 @@
+type: task
+name: visual-inference
+
+image: nvcr.io/nvidia/pytorch:26.07-py3@sha256:2140e699b3beaf7f96a0081fd9c9406bc3832b435cdb60dfa2d261f7d2f34a1c
+shell: bash
+working_dir: /dstack/repo/projects/visual-inference
+
+repos:
+  - ../..
+
+env:
+  - RUN_ID
+  - RUN_DISPLAY_NAME
+  - CONFIG_PATH
+  - DATASET_ID
+  - RUN_MODE
+  - BATCH_CANDIDATES
+  - SOURCE_COMMIT
+  - S3_BUCKET
+  - S3_ENDPOINT_URL
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  - AWS_DEFAULT_REGION
+  - WANDB_API_KEY
+  - WANDB_PROJECT
+  - WANDB_ENTITY
+  - REQUIRE_PREBUILT_INDEX=1
+
+commands:
+  - |
+    if [ ! -f pyproject.toml ] || [ ! -f uv.lock ]; then
+      echo "Invalid project working directory: $PWD" >&2
+      find /dstack -maxdepth 4 -name pyproject.toml -print >&2
+      exit 2
+    fi
+    shm_kib=$(df -Pk /dev/shm | awk 'NR == 2 {print $2}')
+    if [ "${shm_kib:-0}" -lt 16777216 ]; then
+      echo "Container /dev/shm is too small: need at least 16 GiB" >&2
+      df -h /dev/shm >&2
+      exit 3
+    fi
+    echo "Container shared memory: $(df -h /dev/shm | awk 'NR == 2 {print $2}')"
+  - python -m pip install --disable-pip-version-check 'uv==0.11.29'
+  - uv sync --frozen --group cloud
+  - uv run python scripts/cloud/run_training.py
+
+resources:
+  gpu: RTX4090:1
+  cpu: 8..
+  memory: 32GB..
+  shm_size: 32GB
+  disk: 300GB
+
+backends: [runpod]
+spot_policy: on-demand
+max_duration: 24h
+stop_duration: 10m
+max_price: 5.0
+idle_duration: 5m
+retry:
+  on_events: [no-capacity, interruption]
+  duration: 24h
+tags:
+  workload: visual-inference
+  run_id: visual-inference

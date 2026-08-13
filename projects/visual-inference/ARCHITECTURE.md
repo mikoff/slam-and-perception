@@ -1,77 +1,79 @@
 # Module Purpose & Boundaries
 
-This project trains proposal detectors that answer where objects are. The HBB
-path remains a comparison control; the quad path is class-agnostic and has no
-SigLIP, prompt, or semantic classification dependency.
+This project trains class-agnostic HBB and quad proposal detectors. The exported
+network ends at dense P3-P5 outputs; decoding, polygon NMS, and metrics are kept
+outside the model. HBB is a comparison control, while LiteFPN and AttnResLiteFPN
+are the production quad variants.
 
-The exported neural network ends at dense P3-P5 outputs. Quad decoding,
-canonicalization, top-K, exact polygon IoU/NMS, and metrics run outside it.
+GitHub Actions dispatches cloud work but never owns a GPU directly. dstack owns
+RunPod tasks. Packet.ai instances are provisioned by the small desired-state
+bridge in `scripts/cloud/packet_bridge.py`, registered as a dstack SSH fleet,
+and then run through the same dstack task contract.
 
 # Technical Contracts & Interfaces
 
-- Input images are normalized FP32 tensors `[B, 3, H, W]`; `H` and `W` are
-  divisible by 32 and production configuration currently uses 384 x 384.
-- MobileNetV4 with exactly one of `LiteFPN` (`neck_type: "lite"`) or
-  `AttnResLiteFPN` (`"attn_res"`) emits P3/P4/P5 `[B, 96, H/s, W/s]` at
-  strides 8/16/32; checkpoints carry a neck-specific architecture ID.
-- `AttnResLiteFPN` (`neck_type: "attn_res"`) calculates dynamic per-pixel Softmax depth weights ($\alpha_{l,3}, \alpha_{l,4}, \alpha_{l,5}$) via $1\times1$ Conv projection across resized lateral maps.
-- `SharedQuadProposalHead` initializes `corner_offsets.bias` to explicit HBB
-  grid prior `[-1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0]` (in stride units)
-  with zero weight initialization to eliminate Step 1 zero-area box collapse.
-- Stride-normalized targets ($t_i = \frac{P_i - G}{s_l}$) handle level scaling
-  statically; `self.scales` parameters are removed to prevent AdamW distortion.
-- `decode_dense_quad_output` applies 0-cost Centerness Score Modulation:
-  $S_{\text{final}} = S_{\text{quality}}^{0.7} \times S_{\text{grid\_centerness}}^{0.3}$.
-- The decoder returns canonical `[K, 4, 2]` quads and `[K]` quality scores,
-  with at most 100 deployed proposals after reference polygon NMS.
+- Input tensors are FP32 `[B, 3, H, W]`, with dimensions divisible by 32.
+- Accelerate owns device placement, FP16, accumulation, tracker dispatch, and
+  distributed synchronization; the training runtime owns checkpoint lifecycle.
+- `DATASET_ID` identifies an immutable S3 prefix containing `dataset.tar.gz`
+  and a v1 manifest with byte size and SHA-256 for the archive and every file.
+- Large production bundles stream directly to S3 while hashing archive bytes;
+  file symlinks are dereferenced into regular tar members. The manifest is
+  uploaded only after the archive command completes successfully.
+- Cloud datasets must contain prebuilt `indexes/quad_train.sqlite` and
+  `indexes/quad_val.sqlite`; a cloud worker may not silently rebuild an index.
+- Each worker lazily opens its SQLite index read-only and fetches annotations per
+  image. The full annotation table is never loaded into process memory.
+- Full `last.pt` checkpoints contain deterministic resume state. Best model
+  checkpoints are weights-only and declare whether raw or EMA weights won.
+- S3 checkpoint manifests are published only after immutable object upload and
+  contain the latest plus two previous recovery candidates with SHA-256 hashes.
+- Run contracts bind checkpoints to source commit, dataset ID and manifest,
+  config path, phase, and model architecture. Mismatches fail closed.
 
 # Active Design Patterns & Decisions
 
-- Static assignment uses full-quad inclusion, area centroid, PCA local axes,
-  normalized elliptical center distance, and scale compatibility (`scale_sigma: 0.75`, `eligible_levels: 2`).
-- Direct-corner Smooth-L1 ($\beta=1.0$) minimizes over four cyclic starts;
-  GT diagonal ($d_{\text{GT}}$) loss normalization balances multi-scale gradients.
-- AttnRes performs learned per-pixel depth selection; LiteFPN remains the
-  required control until paired multi-seed evidence establishes a winner.
-- Quality Focal Loss uses normalized target groups; centerness modulation
-  filters peripheral boundary noise during inference decoding.
-- Accelerate owns device placement, FP16 scaling, gradient accumulation, and
-  distributed synchronization. Global batches are split across GPUs so GPU
-  count does not change benchmark optimizer steps or effective batch size.
-- `training_runtime` owns the lifecycle, `training_optimization` owns optimizer/
-  EMA state, and `training_reporting` isolates external side effects; small HBB
-  and quad adapters retain target, loss, decode, validation, and selection policy.
-- Validation records raw and EMA metrics independently; `best_raw.pt`,
-  `best_ema.pt`, and the backward-compatible raw `best.pt` are distinct.
-- Every checkpoint declares `selected_state` (`model` or `ema_model`), so
-  evaluators never infer which stored weights a filename is meant to deploy.
-- Quad checkpoints contain model/EMA, EMA ramp state, optimizer, scheduler, AMP
-  scaler, complete config, curriculum, epoch/batch position, and deterministic
-  resume state.
-- Checkpoint loads infer legacy necks from state keys, validate phase/neck, and
-  use strict tensor loading; silent partial architecture loads are forbidden.
-- Every run writes `run_contract.json` with resolved config, manifest/lock
-  hashes, Git state, runtime versions, model signature, and optimizer-step count.
-- `configs/benchmarks/phase3_bounded_v1.*` freezes the 364-train/36-validation
-  benchmark at batch 20, 19 batches/epoch, 40 epochs, and 760 updates; its lock
-  also pins the fixed `hbb_control_v1` checkpoint and same-manifest raw report.
-- Lean cloud training pipeline (RunPod / Packet.ai + GHA) stages datasets from S3 to NVMe via `aws s3 sync`, loads annotation index into memory to avoid SQLite worker locks, logs to W&B, executes via robust Python process daemon (`scripts/cloud/run_cloud_daemon.py`) with signal traps and periodic S3 sync, and guarantees node self-termination upon completion.
-- Validation caches GT/proposal IoU matrices under `@torch.no_grad()`, streams real-time evaluation math progress logs to prevent watchdog timeouts, and writes atomic checkpoints (`last.pt.tmp` -> `last.pt`).
+- Training reports structured JSONL locally and namespaced `train/`, `val_raw/`,
+  and `val_ema/` metrics through Accelerate's W&B tracker.
+- SIGINT/SIGTERM is handled at a safe batch boundary. An incomplete-epoch
+  checkpoint records batch position so restarted work skips completed batches.
+- A single bounded background uploader serializes S3 checkpoint writes and is
+  flushed before tracker shutdown; local atomic writes precede remote upload.
+- Validation computes each image's polygon overlaps on the accelerator, then
+  immediately folds them into counters and compact one-dimensional CPU
+  diagnostics. No validation-long proposal or ground-truth tensors are kept.
+- Raw and EMA states share one dataloader traversal and target construction
+  pass; each state owns an independent streaming metric accumulator.
+- Production validates every five epochs and at completion. Frozen benchmark
+  recipes validate every epoch so their comparison contract is unchanged.
+- `batch_preflight` tests real benchmark samples in isolated FP16 subprocesses,
+  recommends the smallest batch within 95% of peak throughput with 15% VRAM
+  headroom, and uploads its report to S3. It never edits a training recipe.
+- Assignment and positive offset construction are vectorized; only the rare
+  no-candidate fallback remains per-object.
+- dstack retries capacity failures and host interruptions, not application
+  errors. The Packet reconciler replaces interrupted hosts with a bounded retry
+  count and cleans orphaned instances after a grace period.
+- Frozen bounded-v1 results are accepted only when every seed/state primary
+  metric matches the reference to four decimal places.
 
 # Local Constraints & Gotchas
 
-- Historical v11 LiteFPN and v12 AttnRes reports used different manifest hashes;
-  their one-seed numbers are hypotheses, not a production selection gate.
-- HBB control v1 is a valid same-validation deployment baseline but trained for
-  1,240 updates; it is not a schedule-matched ablation against the 760-step runs.
-- Bounded v1 quad training clamps its configured 1,000-step warmup to all 760
-  updates; preserve v1 and correct this only in a separately locked v2 recipe.
-- Historical v12 raw R@50 was 0.2948, while its EMA validation was near zero;
-  never compare an EMA training log with a raw checkpoint report.
-- The old v12 HBB delta is invalid because the evaluator partially loaded a
-  LiteFPN HBB checkpoint into an AttnRes model; strict loading now prevents it.
-- AttnRes attention can become near-hard depth gating, especially at P5; inspect
-  paired-seed variance before attributing slice gains to the neck.
-- Exact quad decode plus polygon NMS runs in ~11.2 ms/image; forward pass is ~3.09 ms/image on GPU.
-- The current lock targets PyTorch 2.13.0+cu130; historical 2.6.0+cu124 results
-  are not bitwise-reproducible without the old lock and manifest bytes.
+- The full cloud/GPU matrix is seeds 42/43/44 for LiteFPN and AttnResLiteFPN;
+  CPU-only development can verify contracts but cannot certify this gate.
+- Validation score quantiles retain scalar FP32 scores on CPU for exact results;
+  their host-memory cost scales with feature-point count, not proposal geometry.
+- Exact polygon NMS remains a measurable inference cost and should be profiled
+  separately.
+- A dataset ID is immutable. Publish changed bytes under a new ID instead of
+  replacing an existing S3 prefix or local staged directory.
+- Production images are local symlinks into raw sources and exceed available
+  archive scratch space; use `upload_dataset_bundle.py`, not a local tar file.
+- RunPod needs a configured dstack backend. Packet also needs its API key, SSH
+  public/private key pair, and the scheduled reconciler to remain enabled.
+- W&B is observability, not checkpoint durability. S3 versioning and lifecycle
+  policy are still required for recovery from accidental object replacement.
+- Historical runs used different manifests and PyTorch versions; do not compare
+  them as paired ablations. The lock and run contract are part of the result.
+- TensorBoard remains only in the optional inspection dependency group; training
+  has one reporting path and does not write parallel TensorBoard event streams.
