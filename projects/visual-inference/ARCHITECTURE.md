@@ -22,8 +22,8 @@ and then run through the same dstack task contract.
   uploaded only after the archive command completes successfully.
 - Cloud datasets must contain prebuilt `indexes/quad_train.sqlite` and
   `indexes/quad_val.sqlite`; a cloud worker may not silently rebuild an index.
-- Each worker lazily opens its SQLite index read-only and fetches annotations per
-  image. The full annotation table is never loaded into process memory.
+- Spawned CUDA workers use file-system tensor sharing, lazily reopen SQLite
+  read-only, and never load the full annotation table.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - S3 checkpoint manifests are published only after immutable object upload and
@@ -48,12 +48,13 @@ and then run through the same dstack task contract.
   recipes validate every epoch so their comparison contract is unchanged.
 - `batch_preflight` tests real benchmark samples in isolated FP16 subprocesses,
   recommends the smallest batch within 95% of peak throughput with 15% VRAM
-  headroom, and uploads its report to S3. It never edits a training recipe.
+  headroom, stops on the first OOM/error/timeout, and uploads its report to S3.
 - Assignment and positive offset construction are vectorized; only the rare
   no-candidate fallback remains per-object.
-- dstack retries capacity failures and host interruptions, not application
-  errors. The Packet reconciler replaces interrupted hosts with a bounded retry
-  count and cleans orphaned instances after a grace period.
+- Packet cleanup is exact-name; disk derives from manifests; dstack status uses `run_spec.run_name`.
+- dstack clones to `/dstack/repo`; tasks run in the project subdirectory.
+- Packet allows 15m image pull plus 1m stable execution; running tasks survive local gate errors.
+- The reconciler retries interrupted hosts and cleans old orphans.
 - Frozen bounded-v1 results are accepted only when every seed/state primary
   metric matches the reference to four decimal places.
 
@@ -63,17 +64,17 @@ and then run through the same dstack task contract.
   CPU-only development can verify contracts but cannot certify this gate.
 - Validation score quantiles retain scalar FP32 scores on CPU for exact results;
   their host-memory cost scales with feature-point count, not proposal geometry.
-- Exact polygon NMS remains a measurable inference cost and should be profiled
-  separately.
 - A dataset ID is immutable. Publish changed bytes under a new ID instead of
   replacing an existing S3 prefix or local staged directory.
 - Production images are local symlinks into raw sources and exceed available
   archive scratch space; use `upload_dataset_bundle.py`, not a local tar file.
-- RunPod needs a configured dstack backend. Packet also needs its API key, SSH
-  public/private key pair, and the scheduled reconciler to remain enabled.
-- W&B is observability, not checkpoint durability. S3 versioning and lifecycle
-  policy are still required for recovery from accidental object replacement.
-- Historical runs used different manifests and PyTorch versions; do not compare
-  them as paired ablations. The lock and run contract are part of the result.
-- TensorBoard remains only in the optional inspection dependency group; training
-  has one reporting path and does not write parallel TensorBoard event streams.
+- RunPod needs a configured dstack backend; Packet needs its registered SSH key.
+- `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
+  keys/versions, sets Docker's 32G shm default, then verifies before dstack.
+- All task submissions render concrete run IDs, tags, repo commits, and GPU
+  resources before dstack; Packet targets its unique attempt-specific fleet.
+- Packet rotates valid pool/region placements; it never combines them freely.
+- Packet servers are never adopted; ambiguous launches are only destroyed.
+- A 30-minute lease prevents races. After expiry, started tasks are monitored;
+  otherwise resources are replaced. dstack checks out the recorded commit.
+- W&B is observability, not durability; S3 versioning/lifecycle protect recovery.
