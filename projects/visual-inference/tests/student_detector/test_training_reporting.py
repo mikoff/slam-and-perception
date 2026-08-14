@@ -52,7 +52,8 @@ def test_dataset_artifact_failure_does_not_abort_training_start(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def add_reference(self, _uri: str) -> None:
+        def add_reference(self, _uri: str, *, checksum: bool) -> None:
+            assert checksum is False
             raise RuntimeError("reference unavailable")
 
     accelerator = _Accelerator()

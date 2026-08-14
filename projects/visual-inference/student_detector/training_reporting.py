@@ -127,7 +127,8 @@ class StandardReporter:
 
             artifact = wandb.Artifact(f"dataset-{dataset_id}", type="dataset")
             artifact.add_reference(
-                f"s3://{bucket}/datasets/{dataset_id}/dataset-manifest.json"
+                f"s3://{bucket}/datasets/{dataset_id}/dataset-manifest.json",
+                checksum=False,
             )
             self.accelerator.get_tracker("wandb", unwrap=True).log_artifact(
                 artifact, aliases=["used"]
