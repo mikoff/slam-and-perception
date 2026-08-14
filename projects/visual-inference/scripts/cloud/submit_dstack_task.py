@@ -20,6 +20,7 @@ def main() -> None:
         source_commit=os.environ["SOURCE_COMMIT"],
         display_name=os.getenv("RUN_DISPLAY_NAME", ""),
         batch_candidates=os.getenv("BATCH_CANDIDATES", "16,32,64,96,128"),
+        resume_from_run_id=os.getenv("RESUME_FROM_RUN_ID", ""),
     )
     DstackClient().submit(state)
 

@@ -124,7 +124,9 @@ def validate_quad_states(
     """Evaluate multiple weight states in one loader pass on the target device."""
     for model in models.values():
         model.eval()
-    accumulators = {state: QuadEvaluationAccumulator() for state in models}
+    accumulators = {
+        state: QuadEvaluationAccumulator(state=state) for state in models
+    }
     if device.type == "cuda":
         print("[Validation] Warming exact quadrilateral IoU kernel", flush=True)
         warmup = torch.tensor(
@@ -391,6 +393,7 @@ def train_quad_proposals(
     max_val_batches: int | None = None,
     log_interval: int = 50,
     resume: Path | None = None,
+    resume_contract: Mapping[str, str] | None = None,
     validation_interval: int = 1,
     wandb_project: str | None = None,
     wandb_entity: str | None = None,
@@ -411,6 +414,7 @@ def train_quad_proposals(
         max_val_batches=max_val_batches,
         log_interval=log_interval,
         resume=resume,
+        resume_contract=resume_contract,
         validation_interval=validation_interval,
         accelerator=accelerator,
         reporter=StandardReporter(

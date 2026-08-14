@@ -43,6 +43,10 @@ on:
         description: Optional display name; run identity remains immutable
         required: false
         type: string
+      resume_from_run_id:
+        description: Optional previous run whose latest checkpoint seeds this new run
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -69,6 +73,7 @@ jobs:
       CONFIG_PATH: ${{ inputs.config }}
       DATASET_ID: ${{ inputs.dataset_id }}
       RUN_MODE: ${{ inputs.mode }}
+      RESUME_FROM_RUN_ID: ${{ inputs.resume_from_run_id }}
       BATCH_CANDIDATES: ${{ inputs.batch_candidates }}
       SOURCE_COMMIT: ${{ github.sha }}
       S3_BUCKET: ${{ secrets.S3_BUCKET }}
@@ -130,6 +135,9 @@ jobs:
             echo "- Config: \`${CONFIG_PATH}\`"
             echo "- Dataset: \`${DATASET_ID}\`"
             echo "- Mode: \`${RUN_MODE}\`"
+            if [[ -n "${RESUME_FROM_RUN_ID}" ]]; then
+              echo "- Resume parent: \`${RESUME_FROM_RUN_ID}\`"
+            fi
             if [[ "${RUN_MODE}" == 'batch_preflight' ]]; then
               echo "- Candidates: \`${BATCH_CANDIDATES}\`"
               echo "- Durable report: \`s3://${S3_BUCKET}/runs/${RUN_ID}/batch-preflight.json\`"

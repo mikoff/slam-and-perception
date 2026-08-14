@@ -136,6 +136,7 @@ class RunState:
     source_commit: str = ""
     display_name: str = ""
     batch_candidates: str = "16,32,64,96,128"
+    resume_from_run_id: str = ""
     ssh_key_id: str = ""
     status: str = "desired"
     attempts: int = 0
@@ -918,6 +919,7 @@ class DstackClient:
                 "DATASET_ID": state.dataset_id,
                 "RUN_MODE": state.mode,
                 "BATCH_CANDIDATES": state.batch_candidates,
+                "RESUME_FROM_RUN_ID": state.resume_from_run_id,
                 "SOURCE_COMMIT": state.source_commit,
             }
         )
@@ -1620,6 +1622,7 @@ def main() -> None:
                 source_commit=os.environ.get("SOURCE_COMMIT", ""),
                 display_name=os.environ.get("RUN_DISPLAY_NAME", ""),
                 batch_candidates=os.environ.get("BATCH_CANDIDATES", "16,32,64,96,128"),
+                resume_from_run_id=os.environ.get("RESUME_FROM_RUN_ID", ""),
                 ssh_key_id=ssh_key_id,
                 required_disk_bytes=_dataset_disk_requirement(
                     os.environ["DATASET_ID"],

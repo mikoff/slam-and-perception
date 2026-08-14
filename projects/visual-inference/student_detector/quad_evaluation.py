@@ -6,6 +6,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
+import math
 
 import torch
 from torch import Tensor
@@ -108,17 +109,47 @@ def _normalized_corner_errors(image: QuadEvaluationImage) -> Tensor:
     return errors
 
 
-def _quantiles(values: list[Tensor], prefix: str, metrics: dict[str, float]) -> None:
-    nonempty = [
-        value.flatten() for value in values if value is not None and value.numel()
-    ]
-    if not nonempty:
-        metrics[f"score/{prefix}/count"] = 0.0
-        return
-    joined = torch.cat(nonempty).float()
-    metrics[f"score/{prefix}/count"] = float(joined.numel())
-    for probability, name in ((0.1, "p10"), (0.5, "p50"), (0.9, "p90")):
-        metrics[f"score/{prefix}/{name}"] = float(torch.quantile(joined, probability))
+class _ScoreHistogram:
+    """Constant-memory quantiles for sigmoid scores in the closed unit interval."""
+
+    _bins = 65_536
+
+    def __init__(self) -> None:
+        self.counts = torch.zeros(self._bins, dtype=torch.int64)
+        self.total = 0
+
+    def update(self, values: Tensor) -> None:
+        scores = values.detach().flatten().float().cpu()
+        if not scores.numel():
+            return
+        if not torch.isfinite(scores).all():
+            raise FloatingPointError("non-finite validation quality score")
+        if bool((scores < 0).any() or (scores > 1).any()):
+            raise ValueError("validation quality scores must be in [0, 1]")
+        indices = (scores * self._bins).to(torch.int64).clamp(max=self._bins - 1)
+        self.counts += torch.bincount(indices, minlength=self._bins)
+        self.total += scores.numel()
+
+    def write_metrics(self, prefix: str, metrics: dict[str, float]) -> None:
+        metrics[f"score/{prefix}/count"] = float(self.total)
+        if not self.total:
+            return
+        cumulative = self.counts.cumsum(dim=0)
+        for probability, name in ((0.1, "p10"), (0.5, "p50"), (0.9, "p90")):
+            rank = probability * (self.total - 1)
+            lower_rank = math.floor(rank)
+            upper_rank = math.ceil(rank)
+            lower_index = int(
+                torch.searchsorted(cumulative, lower_rank + 1).item()
+            )
+            upper_index = int(
+                torch.searchsorted(cumulative, upper_rank + 1).item()
+            )
+            lower = (lower_index + 0.5) / self._bins
+            upper = (upper_index + 0.5) / self._bins
+            metrics[f"score/{prefix}/{name}"] = lower + (rank - lower_rank) * (
+                upper - lower
+            )
 
 
 class QuadEvaluationAccumulator:
@@ -134,8 +165,9 @@ class QuadEvaluationAccumulator:
         ("radial_bins", "radial"),
     )
 
-    def __init__(self, *, log_interval: int = 500) -> None:
+    def __init__(self, *, log_interval: int = 500, state: str = "model") -> None:
         self.log_interval = log_interval
+        self.state = state
         self.image_count = 0
         self.total_gt = 0
         self.hits: dict[tuple[int, float], int] = defaultdict(int)
@@ -145,6 +177,10 @@ class QuadEvaluationAccumulator:
         )
         self.pre_hits: dict[float, int] = defaultdict(int)
         self.values: dict[str, list[Tensor]] = defaultdict(list)
+        self.score_histograms = {
+            name: _ScoreHistogram()
+            for name in ("positive", "trusted_background", "weak_background")
+        }
         self.candidates = 0
         self.invalid_candidates = 0
         self.post_nms_invalid = 0
@@ -156,8 +192,27 @@ class QuadEvaluationAccumulator:
     @torch.no_grad()
     def update(self, images: Iterable[QuadEvaluationImage]) -> None:
         """Consume images and retain only counters and one-dimensional CPU values."""
+        score_buffers: dict[str, list[Tensor]] = defaultdict(list)
+        score_buffer_sizes: dict[str, int] = defaultdict(int)
+
+        def flush_scores(name: str) -> None:
+            if score_buffers[name]:
+                self.score_histograms[name].update(torch.cat(score_buffers[name]))
+                score_buffers[name].clear()
+                score_buffer_sizes[name] = 0
+
         for image in images:
             self._update_image(image)
+            for name in ("positive", "trusted_background", "weak_background"):
+                scores = getattr(image, f"{name}_scores")
+                if scores is None or not scores.numel():
+                    continue
+                score_buffers[name].append(scores.detach().flatten())
+                score_buffer_sizes[name] += scores.numel()
+                if score_buffer_sizes[name] >= 1_000_000:
+                    flush_scores(name)
+        for name in score_buffers:
+            flush_scores(name)
 
     def _update_image(self, image: QuadEvaluationImage) -> None:
         self.image_count += 1
@@ -226,15 +281,11 @@ class QuadEvaluationAccumulator:
         )
         if image.detection.quads.numel():
             self.post_nms_invalid += int((~quad_validity(image.detection.quads)).sum())
-        for name in ("positive", "trusted_background", "weak_background"):
-            scores = getattr(image, f"{name}_scores")
-            if scores is not None and scores.numel():
-                self.values[name].append(self._keep_cpu(scores))
-
         if self.log_interval and self.image_count % self.log_interval == 0:
             timestamp = datetime.now().strftime("%H:%M:%S")
             print(
-                f"[{timestamp}] [Evaluation Math] Aggregated {self.image_count} images",
+                f"[{timestamp}] [Evaluation Math] state={self.state} "
+                f"aggregated={self.image_count} images",
                 flush=True,
             )
 
@@ -304,7 +355,7 @@ class QuadEvaluationAccumulator:
         )
         metrics["decoder/post_nms_invalid_count"] = float(self.post_nms_invalid)
         for name in ("positive", "trusted_background", "weak_background"):
-            _quantiles(self.values[name], name, metrics)
+            self.score_histograms[name].write_metrics(name, metrics)
         return metrics
 
 

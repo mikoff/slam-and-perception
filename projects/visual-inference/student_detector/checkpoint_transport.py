@@ -36,6 +36,15 @@ class CheckpointObject:
     global_step: int
 
 
+@dataclass(frozen=True)
+class ResolvedCheckpoint:
+    """A verified checkpoint plus the immutable contract of its source run."""
+
+    path: Path
+    run_id: str
+    contract: dict[str, str]
+
+
 class ObjectStore(Protocol):
     def upload(self, source: Path, key: str) -> None: ...
     def download(self, key: str, destination: Path) -> bool: ...
@@ -100,13 +109,13 @@ def _manifest_key(run_id: str) -> str:
     return f"runs/{run_id}/checkpoints/latest.json"
 
 
-def resolve_auto_resume(
+def resolve_resume_checkpoint(
     *,
     run_id: str,
     output_dir: Path,
     store: ObjectStore,
     expected_contract: dict[str, str] | None = None,
-) -> Path | None:
+) -> ResolvedCheckpoint | None:
     """Download the newest valid checkpoint, falling back through history."""
     with tempfile.TemporaryDirectory(prefix="checkpoint-resume-") as temporary_name:
         temporary = Path(temporary_name)
@@ -141,8 +150,31 @@ def resolve_auto_resume(
             destination = output_dir / "resume.pt"
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staged, destination)
-            return destination
+            contract = manifest.get("contract", {})
+            if not isinstance(contract, dict) or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in contract.items()
+            ):
+                raise ValueError("remote checkpoint manifest contract is invalid")
+            return ResolvedCheckpoint(destination, run_id, dict(contract))
     raise RuntimeError("remote checkpoint manifest contains no valid checkpoint")
+
+
+def resolve_auto_resume(
+    *,
+    run_id: str,
+    output_dir: Path,
+    store: ObjectStore,
+    expected_contract: dict[str, str] | None = None,
+) -> Path | None:
+    """Compatibility wrapper returning only the verified checkpoint path."""
+    resolved = resolve_resume_checkpoint(
+        run_id=run_id,
+        output_dir=output_dir,
+        store=store,
+        expected_contract=expected_contract,
+    )
+    return resolved.path if resolved is not None else None
 
 
 @dataclass(frozen=True)
@@ -296,16 +328,19 @@ def uploader_from_environment(
     bucket = os.getenv("S3_BUCKET")
     if not bucket or not run_id:
         return None
+    contract = {
+        "source_commit": os.getenv("SOURCE_COMMIT", ""),
+        "dataset_id": os.getenv("DATASET_ID", ""),
+        "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
+        "config_path": os.getenv("CONFIG_PATH", ""),
+    }
+    if parent_run_id := os.getenv("RESUME_FROM_RUN_ID", ""):
+        contract["resume_from_run_id"] = parent_run_id
     return CheckpointUploader(
         run_id=run_id,
         output_dir=output_dir,
         store=AwsCheckpointStore(bucket, os.getenv("S3_ENDPOINT_URL") or None),
-        contract={
-            "source_commit": os.getenv("SOURCE_COMMIT", ""),
-            "dataset_id": os.getenv("DATASET_ID", ""),
-            "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
-            "config_path": os.getenv("CONFIG_PATH", ""),
-        },
+        contract=contract,
     )
 
 
@@ -314,6 +349,8 @@ __all__ = [
     "CheckpointObject",
     "CheckpointUploader",
     "MANIFEST_SCHEMA",
+    "ResolvedCheckpoint",
     "resolve_auto_resume",
+    "resolve_resume_checkpoint",
     "uploader_from_environment",
 ]

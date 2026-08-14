@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -109,6 +110,7 @@ def write_run_contract(
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
             "uv_lock_sha256": sha256_file(lockfile) if lockfile.exists() else None,
+            "resume_from_run_id": os.getenv("RESUME_FROM_RUN_ID") or None,
         },
         "git": {
             "commit": _git_value(repository, "rev-parse", "HEAD"),

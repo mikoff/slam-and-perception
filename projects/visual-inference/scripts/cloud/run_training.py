@@ -50,6 +50,7 @@ def verify_environment() -> dict[str, str]:
     dataset_id = _required("DATASET_ID")
     config = _required("CONFIG_PATH")
     mode = _required("RUN_MODE")
+    resume_from_run_id = os.getenv("RESUME_FROM_RUN_ID", "").strip()
     if SAFE_ID.fullmatch(run_id) is None:
         raise ValueError("RUN_ID contains unsupported characters")
     if SAFE_ID.fullmatch(dataset_id) is None:
@@ -58,6 +59,13 @@ def verify_environment() -> dict[str, str]:
         raise ValueError(f"CONFIG_PATH must be one of {sorted(ALLOWED_CONFIGS)}")
     if mode not in {"production", "smoke", "batch_preflight"}:
         raise ValueError("RUN_MODE must be production, smoke, or batch_preflight")
+    if resume_from_run_id:
+        if SAFE_ID.fullmatch(resume_from_run_id) is None:
+            raise ValueError("RESUME_FROM_RUN_ID contains unsupported characters")
+        if resume_from_run_id == run_id:
+            raise ValueError("RESUME_FROM_RUN_ID must identify a previous run")
+        if mode != "production":
+            raise ValueError("RESUME_FROM_RUN_ID is supported only in production mode")
     batch_candidates = os.getenv("BATCH_CANDIDATES", "16,32,64,96,128").strip()
     try:
         parsed_candidates = [
@@ -72,6 +80,7 @@ def verify_environment() -> dict[str, str]:
         "dataset_id": dataset_id,
         "config": config,
         "mode": mode,
+        "resume_from_run_id": resume_from_run_id,
         "batch_candidates": ",".join(str(value) for value in parsed_candidates),
     }
 
@@ -114,6 +123,63 @@ def verify_checkpoint_io(values: dict[str, str], *, bucket: str, aws: AwsCli) ->
             raise ValueError("S3 checkpoint I/O probe read-back mismatch")
 
 
+def verify_resume_source(
+    values: dict[str, str], *, bucket: str, aws: AwsCli
+) -> None:
+    """Fail before GPU allocation when an explicit resume parent is incompatible."""
+    parent_run_id = values["resume_from_run_id"]
+    if not parent_run_id:
+        return
+    with tempfile.TemporaryDirectory(prefix="resume-manifest-") as temporary_name:
+        manifest_path = Path(temporary_name) / "latest.json"
+        aws.download(
+            f"s3://{bucket}/runs/{parent_run_id}/checkpoints/latest.json",
+            manifest_path,
+        )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != "visual-inference-checkpoints.v1":
+        raise ValueError("resume parent has an unsupported checkpoint manifest")
+    if manifest.get("run_id") != parent_run_id:
+        raise ValueError("resume parent checkpoint manifest run ID mismatch")
+    contract = manifest.get("contract", {})
+    for key, expected in (
+        ("dataset_id", values["dataset_id"]),
+        ("config_path", values["config"]),
+    ):
+        if contract.get(key) != expected:
+            raise ValueError(
+                f"resume parent contract mismatch for {key}: "
+                f"expected {expected!r}, found {contract.get(key)!r}"
+            )
+    parent_commit = contract.get("source_commit", "")
+    current_commit = os.getenv("SOURCE_COMMIT", "")
+    if not parent_commit or not current_commit:
+        raise ValueError("resume parent and current source commits are required")
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", parent_commit, current_commit],
+        cwd=REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if ancestry.returncode == 1:
+        raise ValueError("resume parent source is not an ancestor of current source")
+    if ancestry.returncode != 0:
+        raise RuntimeError(
+            "could not verify resume parent ancestry: "
+            f"{ancestry.stderr.strip() or f'git exited {ancestry.returncode}'}"
+        )
+    latest = manifest.get("latest", {})
+    if (
+        not isinstance(latest, dict)
+        or int(latest.get("global_step", 0)) < 1
+        or not str(latest.get("key", "")).startswith(
+            f"runs/{parent_run_id}/checkpoints/last/"
+        )
+    ):
+        raise ValueError("resume parent manifest has no valid latest checkpoint")
+
+
 def build_training_command(values: dict[str, str], output_dir: Path) -> list[str]:
     command = [
         sys.executable,
@@ -139,6 +205,8 @@ def build_training_command(values: dict[str, str], output_dir: Path) -> list[str
         "--validation-interval",
         "5" if values["mode"] == "production" else "1",
     ]
+    if values["resume_from_run_id"]:
+        command.extend(["--resume-from-run-id", values["resume_from_run_id"]])
     if values["mode"] == "smoke":
         command.extend(
             [
@@ -211,6 +279,16 @@ def main() -> None:
         )
         print("Remote immutable dataset manifest verified")
     if args.verify_env:
+        verify_resume_source(
+            values,
+            bucket=_required("S3_BUCKET"),
+            aws=AwsCli(os.getenv("S3_ENDPOINT_URL") or None),
+        )
+        if values["resume_from_run_id"]:
+            print(
+                f"Resume parent {values['resume_from_run_id']} verified",
+                flush=True,
+            )
         print("Cloud training environment verified")
         return
 

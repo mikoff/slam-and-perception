@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from student_detector.head import QuadDetectorOutput
@@ -80,3 +81,28 @@ def test_quad_evaluation_accumulates_batches_without_changing_metrics() -> None:
     accumulator.update(images[1:])
 
     assert accumulator.compute() == expected
+    assert expected["score/positive/count"] == 2.0
+    assert expected["score/positive/p50"] == pytest.approx(0.8, abs=2e-5)
+    assert expected["score/trusted_background/count"] == 4.0
+    assert expected["score/trusted_background/p50"] == pytest.approx(0.15, abs=2e-5)
+
+
+def test_quad_evaluation_progress_identifies_weight_state(capsys) -> None:
+    quad = quad_from_bbox([4.0, 4.0, 12.0, 12.0])
+    detection = type(
+        "D", (), {"quads": quad.unsqueeze(0), "scores": torch.tensor([0.8])}
+    )()
+    image = QuadEvaluationImage(
+        image_id=1,
+        domain="general",
+        camera_type="perspective",
+        image_size=(16, 16),
+        ground_truth=quad.unsqueeze(0),
+        ignore_quads=torch.empty((0, 4, 2)),
+        detection=detection,
+    )
+
+    accumulator = QuadEvaluationAccumulator(log_interval=1, state="raw")
+    accumulator.update([image])
+
+    assert "state=raw aggregated=1 images" in capsys.readouterr().out

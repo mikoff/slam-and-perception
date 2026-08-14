@@ -10,6 +10,7 @@ from student_detector.checkpoint_transport import (
     AwsCheckpointStore,
     CheckpointUploader,
     resolve_auto_resume,
+    resolve_resume_checkpoint,
 )
 
 
@@ -53,6 +54,37 @@ def test_uploader_serializes_and_resume_falls_back(tmp_path: Path) -> None:
     restored = resolve_auto_resume(run_id="run-1", output_dir=tmp_path, store=store)
     assert restored is not None
     assert restored.read_bytes() == b"first"
+
+
+def test_resolved_checkpoint_preserves_parent_contract(tmp_path: Path) -> None:
+    store = _Store()
+    contract = {
+        "source_commit": "parent-commit",
+        "dataset_id": "dataset-1",
+        "config_path": "configs/phase3.yaml",
+    }
+    uploader = CheckpointUploader(
+        run_id="parent-run",
+        output_dir=tmp_path,
+        store=store,
+        contract=contract,
+    )
+    checkpoint = tmp_path / "last.pt"
+    checkpoint.write_bytes(b"checkpoint")
+    uploader.enqueue(checkpoint, 100)
+    uploader.close()
+
+    resolved = resolve_resume_checkpoint(
+        run_id="parent-run",
+        output_dir=tmp_path,
+        store=store,
+        expected_contract={"dataset_id": "dataset-1"},
+    )
+
+    assert resolved is not None
+    assert resolved.run_id == "parent-run"
+    assert resolved.contract == contract
+    assert resolved.path.read_bytes() == b"checkpoint"
 
 
 def test_best_checkpoint_does_not_replace_resume_pointer(tmp_path: Path) -> None:

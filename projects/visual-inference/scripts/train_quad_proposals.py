@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import pathlib
+import subprocess
 import sys
 import types
 from dataclasses import replace
@@ -26,7 +28,8 @@ from torch.utils.data import DataLoader
 
 from student_detector.checkpoint_transport import (
     AwsCheckpointStore,
-    resolve_auto_resume,
+    ResolvedCheckpoint,
+    resolve_resume_checkpoint,
 )
 from student_detector.config import load_phase3_config
 from student_detector.data import (
@@ -82,6 +85,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--resume", type=Path)
     parser.add_argument("--resume-mode", choices=("none", "auto"), default="none")
+    parser.add_argument("--resume-from-run-id")
     parser.add_argument("--run-id", type=str)
     parser.add_argument("--validation-interval", type=int, default=1)
     parser.add_argument("--force-index", action="store_true")
@@ -91,6 +95,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-entity", type=str, help="Weights & Biases entity name")
     parser.add_argument("--wandb-run-name", type=str, help="Weights & Biases run name")
     return parser.parse_args()
+
+
+def _verify_resume_ancestry(parent: ResolvedCheckpoint) -> None:
+    parent_commit = parent.contract.get("source_commit", "")
+    current_commit = os.getenv("SOURCE_COMMIT", "")
+    if not parent_commit or not current_commit:
+        raise ValueError("cross-run resume requires both source commits")
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", parent_commit, current_commit],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 1:
+        raise ValueError(
+            "resume source commit is not an ancestor of the current source commit"
+        )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "could not verify resume source ancestry: "
+            f"{result.stderr.strip() or f'git exited {result.returncode}'}"
+        )
 
 
 def main() -> None:
@@ -336,25 +363,58 @@ def main() -> None:
         geometry_quality_target=config.quad.geometry_quality_target,
     )
     resume = args.resume
+    resume_contract: dict[str, str] | None = None
     if args.resume_mode == "auto":
-        import os
-
         if not args.run_id:
             raise ValueError("--resume-mode auto requires --run-id")
         bucket = os.getenv("S3_BUCKET")
         if not bucket:
             raise ValueError("--resume-mode auto requires S3_BUCKET")
-        resume = resolve_auto_resume(
+        expected_contract = {
+            "source_commit": os.getenv("SOURCE_COMMIT", ""),
+            "dataset_id": os.getenv("DATASET_ID", ""),
+            "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
+            "config_path": os.getenv("CONFIG_PATH", ""),
+        }
+        if args.resume_from_run_id:
+            expected_contract["resume_from_run_id"] = args.resume_from_run_id
+        resolved = resolve_resume_checkpoint(
             run_id=args.run_id,
             output_dir=config.output_dir,
             store=AwsCheckpointStore(bucket, os.getenv("S3_ENDPOINT_URL") or None),
-            expected_contract={
-                "source_commit": os.getenv("SOURCE_COMMIT", ""),
-                "dataset_id": os.getenv("DATASET_ID", ""),
-                "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
-                "config_path": os.getenv("CONFIG_PATH", ""),
-            },
+            expected_contract=expected_contract,
         )
+        if resolved is None and args.resume_from_run_id:
+            parent_expected = {
+                key: expected_contract[key]
+                for key in (
+                    "dataset_id",
+                    "dataset_manifest_sha256",
+                    "config_path",
+                )
+            }
+            resolved = resolve_resume_checkpoint(
+                run_id=args.resume_from_run_id,
+                output_dir=config.output_dir,
+                store=AwsCheckpointStore(
+                    bucket, os.getenv("S3_ENDPOINT_URL") or None
+                ),
+                expected_contract=parent_expected,
+            )
+            if resolved is None:
+                raise FileNotFoundError(
+                    "resume parent has no checkpoint manifest: "
+                    f"{args.resume_from_run_id}"
+                )
+            _verify_resume_ancestry(resolved)
+            print(
+                "Cross-run resume: "
+                f"parent={resolved.run_id} source={resolved.contract['source_commit']}",
+                flush=True,
+            )
+        if resolved is not None:
+            resume = resolved.path
+            resume_contract = {"run_id": resolved.run_id, **resolved.contract}
     result = train_quad_proposals(
         model,
         train_loader,
@@ -367,6 +427,7 @@ def main() -> None:
         max_val_batches=args.max_val_batches,
         log_interval=args.log_interval,
         resume=resume,
+        resume_contract=resume_contract,
         validation_interval=args.validation_interval,
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,

@@ -121,6 +121,7 @@ def _runtime_contract() -> dict[str, str]:
         "dataset_id": "DATASET_ID",
         "dataset_manifest_sha256": "DATASET_MANIFEST_SHA256",
         "config_path": "CONFIG_PATH",
+        "resume_from_run_id": "RESUME_FROM_RUN_ID",
     }
     return {
         key: value
@@ -129,8 +130,11 @@ def _runtime_contract() -> dict[str, str]:
     }
 
 
-def _verify_runtime_contract(checkpoint: Mapping[str, Any]) -> None:
-    expected = _runtime_contract()
+def _verify_runtime_contract(
+    checkpoint: Mapping[str, Any],
+    resume_contract: Mapping[str, str] | None = None,
+) -> None:
+    expected = dict(resume_contract) if resume_contract is not None else _runtime_contract()
     recorded = checkpoint.get("run_contract", {})
     for key, value in expected.items():
         if recorded.get(key) != value:
@@ -243,6 +247,7 @@ def train_proposals(
     max_val_batches: int | None = None,
     log_interval: int = 50,
     resume: Path | None = None,
+    resume_contract: Mapping[str, str] | None = None,
     validation_interval: int = 1,
     accelerator: Any | None = None,
     reporter: Any | None = None,
@@ -314,7 +319,7 @@ def train_proposals(
 
     if resume is not None:
         checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
-        _verify_runtime_contract(checkpoint)
+        _verify_runtime_contract(checkpoint, resume_contract)
         task.load_model_state(base_model, checkpoint)
         ema.module.load_state_dict(checkpoint["ema_model"], strict=True)
         ema.restore_tracking(
@@ -343,6 +348,15 @@ def train_proposals(
         task.restore_checkpoint_extra(checkpoint)
         if checkpoint.get("rng_state"):
             _restore_rng_state(checkpoint["rng_state"])
+        if accelerator.is_main_process:
+            recorded_contract = checkpoint.get("run_contract", {})
+            print(
+                "Training resumed: "
+                f"source_run={recorded_contract.get('run_id', 'local')} "
+                f"step={global_step} epoch={int(checkpoint['epoch']) + 1} "
+                f"batch={int(checkpoint.get('batch_in_epoch', 0))}",
+                flush=True,
+            )
 
     if max_steps is not None and global_step >= max_steps:
         reporter.close()

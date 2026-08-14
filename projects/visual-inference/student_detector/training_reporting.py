@@ -69,6 +69,7 @@ class StandardReporter:
             batch_size=config.data.batch_size,
             epochs=config.schedule.epochs,
             world_size=context["world_size"],
+            resume_from_run_id=os.getenv("RESUME_FROM_RUN_ID") or None,
         )
         print(
             "Training started: "
@@ -94,6 +95,7 @@ class StandardReporter:
                                 "DATASET_MANIFEST_SHA256"
                             ),
                             "config_path": os.getenv("CONFIG_PATH"),
+                            "resume_from_run_id": os.getenv("RESUME_FROM_RUN_ID"),
                         },
                     },
                     init_kwargs={

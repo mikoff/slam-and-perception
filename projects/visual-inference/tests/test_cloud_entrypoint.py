@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from scripts.cloud.run_training import (
     verify_checkpoint_io,
     verify_environment,
     verify_remote_dataset,
+    verify_resume_source,
 )
 
 
@@ -37,6 +39,59 @@ def test_cloud_environment_accepts_rtx4090_production_recipe(
     _environment(monkeypatch)
     monkeypatch.setenv("CONFIG_PATH", "configs/phase3_rtx4090_bs128_v1.yaml")
     assert verify_environment()["config"] == "configs/phase3_rtx4090_bs128_v1.yaml"
+
+
+def test_production_command_can_resume_from_an_immutable_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _environment(monkeypatch)
+    monkeypatch.setenv("RESUME_FROM_RUN_ID", "vi-parent-1")
+    values = verify_environment()
+
+    command = build_training_command(values, Path("/runs/vi-123-1"))
+
+    assert command[command.index("--resume-from-run-id") + 1] == "vi-parent-1"
+
+
+def test_smoke_rejects_cross_run_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    _environment(monkeypatch)
+    monkeypatch.setenv("RUN_MODE", "smoke")
+    monkeypatch.setenv("RESUME_FROM_RUN_ID", "vi-parent-1")
+    with pytest.raises(ValueError, match="only in production"):
+        verify_environment()
+
+
+def test_resume_parent_manifest_is_verified_before_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _environment(monkeypatch)
+    monkeypatch.setenv("SOURCE_COMMIT", "child-commit")
+    monkeypatch.setenv("RESUME_FROM_RUN_ID", "vi-parent-1")
+    values = verify_environment()
+    manifest = {
+        "schema_version": "visual-inference-checkpoints.v1",
+        "run_id": "vi-parent-1",
+        "contract": {
+            "source_commit": "parent-commit",
+            "dataset_id": values["dataset_id"],
+            "config_path": values["config"],
+        },
+        "latest": {
+            "global_step": 100,
+            "key": "runs/vi-parent-1/checkpoints/last/last-step-100.pt",
+        },
+    }
+
+    class Aws:
+        def download(self, _uri: str, destination: Path) -> None:
+            destination.write_text(json.dumps(manifest), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "scripts.cloud.run_training.subprocess.run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stderr=""),
+    )
+
+    verify_resume_source(values, bucket="bucket", aws=Aws())
 
 
 def test_smoke_command_is_bounded_and_resume_enabled(
