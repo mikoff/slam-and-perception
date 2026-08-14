@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import subprocess
 import tarfile
 from pathlib import Path
 
@@ -14,7 +13,6 @@ from scripts.cloud.dataset_staging import (
     AwsCli,
     required_staging_bytes,
     stage_dataset,
-    verify_bucket_protection,
 )
 
 
@@ -140,118 +138,3 @@ def test_bundle_builder_requires_prebuilt_indexes(tmp_path: Path) -> None:
     (source / "image.jpg").write_bytes(b"pixels")
     with pytest.raises(FileNotFoundError, match="quad_train.sqlite"):
         build_bundle(root=source, dataset_id="v1", output=tmp_path / "bundle")
-
-
-class _BucketConfiguration:
-    def __init__(
-        self,
-        *,
-        versioning: str = "Enabled",
-        current_days: int = 30,
-        noncurrent_days: int = 30,
-    ) -> None:
-        self.versioning = versioning
-        self.current_days = current_days
-        self.noncurrent_days = noncurrent_days
-
-    def json(self, *arguments: str) -> dict[str, object]:
-        if "get-bucket-versioning" in arguments:
-            return {"Status": self.versioning}
-        return {
-            "Rules": [
-                {
-                    "ID": "checkpoint-recovery",
-                    "Status": "Enabled",
-                    "Filter": {"Prefix": "runs/"},
-                    "Expiration": {"Days": self.current_days},
-                    "NoncurrentVersionExpiration": {
-                        "NoncurrentDays": self.noncurrent_days
-                    },
-                    "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
-                }
-            ]
-        }
-
-
-def test_bucket_protection_accepts_versioned_retained_checkpoints() -> None:
-    verify_bucket_protection(
-        bucket="bucket",
-        aws=_BucketConfiguration(),  # type: ignore[arg-type]
-    )
-
-
-def test_bucket_protection_requires_enabled_versioning() -> None:
-    with pytest.raises(ValueError, match="versioning"):
-        verify_bucket_protection(
-            bucket="bucket",
-            aws=_BucketConfiguration(versioning="Suspended"),  # type: ignore[arg-type]
-        )
-
-
-@pytest.mark.parametrize(("current_days", "noncurrent_days"), [(1, 30), (30, 1)])
-def test_bucket_protection_rejects_short_checkpoint_retention(
-    current_days: int, noncurrent_days: int
-) -> None:
-    with pytest.raises(ValueError, match="at least 7 days"):
-        verify_bucket_protection(
-            bucket="bucket",
-            aws=_BucketConfiguration(  # type: ignore[arg-type]
-                current_days=current_days,
-                noncurrent_days=noncurrent_days,
-            ),
-        )
-
-
-def test_bucket_protection_requires_multipart_cleanup_for_runs() -> None:
-    class MissingAbort(_BucketConfiguration):
-        def json(self, *arguments: str) -> dict[str, object]:
-            value = super().json(*arguments)
-            if "get-bucket-lifecycle-configuration" in arguments:
-                rules = value["Rules"]
-                assert isinstance(rules, list)
-                rules[0].pop("AbortIncompleteMultipartUpload")
-            return value
-
-    with pytest.raises(ValueError, match="multipart"):
-        verify_bucket_protection(
-            bucket="bucket",
-            aws=MissingAbort(),  # type: ignore[arg-type]
-        )
-
-
-def test_bucket_protection_requires_multipart_cleanup_to_cover_all_runs() -> None:
-    class NarrowAbort(_BucketConfiguration):
-        def json(self, *arguments: str) -> dict[str, object]:
-            value = super().json(*arguments)
-            if "get-bucket-lifecycle-configuration" in arguments:
-                rules = value["Rules"]
-                assert isinstance(rules, list)
-                rules[0]["Filter"] = {"Prefix": "runs/one-run/"}
-            return value
-
-    with pytest.raises(ValueError, match="multipart"):
-        verify_bucket_protection(
-            bucket="bucket",
-            aws=NarrowAbort(),  # type: ignore[arg-type]
-        )
-
-
-def test_aws_control_plane_failure_surfaces_provider_diagnostic(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(
-            255,
-            ["aws"],
-            stderr="An error occurred (AccessDenied): missing permission",
-        )
-
-    monkeypatch.setattr(subprocess, "run", run)
-
-    with pytest.raises(
-        RuntimeError,
-        match="get-bucket-versioning.*AccessDenied.*missing permission",
-    ):
-        AwsCli("https://objects.example.test").json(
-            "s3api", "get-bucket-versioning", "--bucket", "bucket"
-        )

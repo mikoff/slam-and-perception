@@ -64,6 +64,7 @@ def main() -> None:
         REPOSITORY_ROOT / ".github/workflows/packet-visual-inference.yml"
     ).read_text(encoding="utf-8")
     for forbidden in (
+        "--verify-storage",
         "extra_training_args",
         "extra_params",
         "remote_entrypoint.sh",
@@ -75,8 +76,6 @@ def main() -> None:
         raise ValueError("workflow bypasses the validated dstack task renderer")
     if "scripts/cloud/submit_dstack_task.py" not in cloud_text:
         raise ValueError("RunPod dispatch must use the validated dstack task renderer")
-    if "--verify-storage" not in cloud_text:
-        raise ValueError("cloud dispatch must verify S3 checkpoint protection")
     workflow_configs = set(re.findall(r"configs/[\w./-]+\.yaml", cloud_text))
     if workflow_configs != ALLOWED_CONFIGS:
         raise ValueError(

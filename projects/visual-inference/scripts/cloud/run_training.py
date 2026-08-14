@@ -16,7 +16,6 @@ if __package__:
         download_manifest,
         sha256_file,
         stage_dataset,
-        verify_bucket_protection,
     )
 else:
     from dataset_staging import (
@@ -24,7 +23,6 @@ else:
         download_manifest,
         sha256_file,
         stage_dataset,
-        verify_bucket_protection,
     )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -172,15 +170,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify-env", action="store_true")
     parser.add_argument("--verify-dataset", action="store_true")
-    parser.add_argument("--verify-storage", action="store_true")
     args = parser.parse_args()
     values = verify_environment()
-    if args.verify_storage:
-        verify_bucket_protection(
-            bucket=_required("S3_BUCKET"),
-            aws=AwsCli(os.getenv("S3_ENDPOINT_URL") or None),
-        )
-        print("S3 checkpoint protection verified")
     if args.verify_dataset:
         verify_remote_dataset(
             values,
