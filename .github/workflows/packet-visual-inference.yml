@@ -103,11 +103,11 @@ jobs:
           uv sync --frozen --group cloud
           uv tool install --force 'dstack==0.20.28'
 
-      - name: Verify dispatch and immutable dataset manifest
+      - name: Verify dispatch, checkpoint I/O, and immutable dataset manifest
         working-directory: projects/visual-inference
         run: |
           set -euo pipefail
-          uv run python scripts/cloud/run_training.py --verify-env --verify-dataset
+          uv run python scripts/cloud/run_training.py --verify-env --verify-checkpoint-io --verify-dataset
 
       - name: Submit native RunPod task
         if: inputs.provider == 'runpod'

@@ -9,6 +9,7 @@ from scripts.cloud.run_training import (
     build_training_command,
     build_workload_command,
     upload_batch_preflight_report,
+    verify_checkpoint_io,
     verify_environment,
     verify_remote_dataset,
 )
@@ -127,3 +128,26 @@ def test_remote_dataset_check_downloads_only_manifest(
     verify_remote_dataset(values, bucket="bucket", aws=_ManifestStore())  # type: ignore[arg-type]
 
     assert downloads == ["s3://bucket/datasets/phase3-release-1/dataset-manifest.json"]
+
+
+def test_checkpoint_io_probe_uploads_and_reads_back_run_scoped_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _environment(monkeypatch)
+    values = verify_environment()
+    objects: dict[str, bytes] = {}
+
+    class Store:
+        def upload(self, source: Path, uri: str) -> None:
+            objects[uri] = source.read_bytes()
+
+        def download(self, uri: str, destination: Path) -> None:
+            destination.write_bytes(objects[uri])
+
+    verify_checkpoint_io(values, bucket="bucket", aws=Store())  # type: ignore[arg-type]
+
+    uri = "s3://bucket/runs/vi-123-1/preflight/checkpoint-io.json"
+    assert json.loads(objects[uri]) == {
+        "run_id": "vi-123-1",
+        "schema_version": "visual-inference-checkpoint-io.v1",
+    }

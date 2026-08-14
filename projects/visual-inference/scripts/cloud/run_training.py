@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 if __package__:
@@ -91,6 +93,27 @@ def verify_remote_dataset(values: dict[str, str], *, bucket: str, aws: AwsCli) -
     download_manifest(bucket=bucket, dataset_id=values["dataset_id"], aws=aws)
 
 
+def verify_checkpoint_io(values: dict[str, str], *, bucket: str, aws: AwsCli) -> None:
+    """Prove checkpoint-prefix write and read access without bucket-admin APIs."""
+    payload = json.dumps(
+        {
+            "run_id": values["run_id"],
+            "schema_version": "visual-inference-checkpoint-io.v1",
+        },
+        sort_keys=True,
+    ).encode()
+    uri = f"s3://{bucket}/runs/{values['run_id']}/preflight/checkpoint-io.json"
+    with tempfile.TemporaryDirectory(prefix="checkpoint-io-") as temporary_name:
+        temporary = Path(temporary_name)
+        source = temporary / "source.json"
+        restored = temporary / "restored.json"
+        source.write_bytes(payload)
+        aws.upload(source, uri)
+        aws.download(uri, restored)
+        if restored.read_bytes() != payload:
+            raise ValueError("S3 checkpoint I/O probe read-back mismatch")
+
+
 def build_training_command(values: dict[str, str], output_dir: Path) -> list[str]:
     command = [
         sys.executable,
@@ -170,8 +193,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--verify-env", action="store_true")
     parser.add_argument("--verify-dataset", action="store_true")
+    parser.add_argument("--verify-checkpoint-io", action="store_true")
     args = parser.parse_args()
     values = verify_environment()
+    if args.verify_checkpoint_io:
+        verify_checkpoint_io(
+            values,
+            bucket=_required("S3_BUCKET"),
+            aws=AwsCli(os.getenv("S3_ENDPOINT_URL") or None),
+        )
+        print("S3 checkpoint object write/read verified")
     if args.verify_dataset:
         verify_remote_dataset(
             values,

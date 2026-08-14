@@ -76,6 +76,8 @@ def main() -> None:
         raise ValueError("workflow bypasses the validated dstack task renderer")
     if "scripts/cloud/submit_dstack_task.py" not in cloud_text:
         raise ValueError("RunPod dispatch must use the validated dstack task renderer")
+    if "--verify-checkpoint-io" not in cloud_text:
+        raise ValueError("cloud dispatch must verify checkpoint object I/O")
     workflow_configs = set(re.findall(r"configs/[\w./-]+\.yaml", cloud_text))
     if workflow_configs != ALLOWED_CONFIGS:
         raise ValueError(
