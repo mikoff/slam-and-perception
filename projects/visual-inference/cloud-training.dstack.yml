@@ -53,7 +53,7 @@ resources:
 
 backends: [runpod]
 spot_policy: on-demand
-max_duration: 48h
+max_duration: 72h
 stop_duration: 10m
 max_price: 5.0
 idle_duration: 5m
