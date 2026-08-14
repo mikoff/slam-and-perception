@@ -107,13 +107,26 @@ class AwsCli:
 
     def json(self, *arguments: str) -> dict[str, Any]:
         """Run a bounded AWS control-plane query and decode its JSON object."""
-        result = subprocess.run(
-            self._command(*arguments),
-            check=True,
-            text=True,
-            capture_output=True,
-            timeout=AWS_CONTROL_PLANE_TIMEOUT_SECONDS,
-        )
+        operation = " ".join(arguments[:2]) or "unknown operation"
+        try:
+            result = subprocess.run(
+                self._command(*arguments),
+                check=True,
+                text=True,
+                capture_output=True,
+                timeout=AWS_CONTROL_PLANE_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise RuntimeError(
+                f"AWS control-plane request '{operation}' timed out after "
+                f"{AWS_CONTROL_PLANE_TIMEOUT_SECONDS}s"
+            ) from error
+        except subprocess.CalledProcessError as error:
+            details = str(error.stderr or error.stdout or "").strip()
+            raise RuntimeError(
+                f"AWS control-plane request '{operation}' failed: "
+                f"{details or f'AWS CLI exited {error.returncode}'}"
+            ) from error
         value = json.loads(result.stdout or "{}")
         if not isinstance(value, dict):
             raise ValueError("AWS CLI returned a non-object JSON response")

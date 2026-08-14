@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import pytest
 
 from scripts.cloud.build_dataset_bundle import build_bundle
 from scripts.cloud.dataset_staging import (
+    AwsCli,
     required_staging_bytes,
     stage_dataset,
     verify_bucket_protection,
@@ -231,4 +233,25 @@ def test_bucket_protection_requires_multipart_cleanup_to_cover_all_runs() -> Non
         verify_bucket_protection(
             bucket="bucket",
             aws=NarrowAbort(),  # type: ignore[arg-type]
+        )
+
+
+def test_aws_control_plane_failure_surfaces_provider_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(
+            255,
+            ["aws"],
+            stderr="An error occurred (AccessDenied): missing permission",
+        )
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(
+        RuntimeError,
+        match="get-bucket-versioning.*AccessDenied.*missing permission",
+    ):
+        AwsCli("https://objects.example.test").json(
+            "s3api", "get-bucket-versioning", "--bucket", "bucket"
         )
