@@ -1118,6 +1118,52 @@ def test_stale_provisioning_without_task_replaces_server(tmp_path: Path) -> None
     assert state.status == "submitted"
 
 
+def test_missing_host_with_successful_dstack_run_is_cleaned_not_replaced(
+    tmp_path: Path,
+) -> None:
+    store = _Store()
+    dstack = _Dstack([("done", "")])
+    packet = _Packet()
+    coordinator = _coordinator(packet, dstack, store, identity_file=tmp_path / "key")
+    state = _state()
+    state.status = "submitted"
+    state.attempts = 1
+    state.instance_id = "missing-instance"
+    state.fleet_name = "packet-r1-1"
+
+    coordinator.reconcile(state, {})
+
+    assert state.status == "succeeded"
+    assert state.attempts == 1
+    assert packet.terminated == ["missing-instance"]
+    assert packet.launched == 0
+    assert dstack.deleted == ["packet-r1-1"]
+
+
+def test_ambiguous_submitted_run_is_preserved_without_replacement(
+    tmp_path: Path,
+) -> None:
+    store = _Store()
+    dstack = _Dstack([(None, "run not found")])
+    packet = _Packet()
+    coordinator = _coordinator(packet, dstack, store, identity_file=tmp_path / "key")
+    state = _state()
+    state.status = "submitting"
+    state.attempts = 1
+    state.instance_id = "missing-instance"
+    state.fleet_name = "packet-r1-1"
+    state.updated_at = (datetime.now(UTC) - timedelta(minutes=31)).isoformat()
+
+    coordinator.reconcile(state, {})
+
+    assert state.status == "submitting"
+    assert state.attempts == 1
+    assert "refusing to launch replacement" in (state.last_error or "")
+    assert packet.terminated == []
+    assert packet.launched == 0
+    assert dstack.deleted == []
+
+
 def test_terminal_legacy_state_is_cleaned_without_reuse(tmp_path: Path) -> None:
     store = _Store()
     dstack = _Dstack([])

@@ -1415,6 +1415,12 @@ class PacketCoordinator:
     def reconcile(
         self, state: RunState, actual_instances: dict[str, dict[str, Any]]
     ) -> None:
+        print(
+            "Reconciling Packet run "
+            f"{state.run_id}: state={state.status} attempt={state.attempts} "
+            f"instance={state.instance_id or 'none'}",
+            flush=True,
+        )
         if state.status in {"succeeded", "failed"}:
             if state.instance_id or state.fleet_name:
                 self._cleanup(state)
@@ -1437,11 +1443,6 @@ class PacketCoordinator:
                 )
                 self.launch_attempt(state)
                 return
-        if state.instance_id and state.instance_id not in actual_instances:
-            self._cleanup(state)
-            state.last_error = "Packet host disappeared"
-            self.launch_attempt(state)
-            return
         if state.status == "desired":
             if state.instance_id or state.fleet_name:
                 self._cleanup(state)
@@ -1449,6 +1450,15 @@ class PacketCoordinator:
             self.launch_attempt(state)
             return
         status, reason = self.dstack.run_status(state.dstack_run_name or state.run_id)
+        host_missing = bool(
+            state.instance_id and state.instance_id not in actual_instances
+        )
+        print(
+            f"Observed dstack run {state.dstack_run_name or state.run_id}: "
+            f"status={status or 'not-found'} reason={reason or 'none'} "
+            f"packet_host_missing={host_missing}",
+            flush=True,
+        )
         if status in TERMINAL_DSTACK_SUCCESS:
             self._cleanup(state)
             state.status = "succeeded"
@@ -1463,8 +1473,13 @@ class PacketCoordinator:
                 self.store.put(state)
         elif status is not None:
             state.status = "running"
+            state.last_error = (
+                "Packet host is absent while dstack still reports a nonterminal run"
+                if host_missing
+                else None
+            )
             self.store.put(state)
-        elif state.status in {"provisioning", "submitting"}:
+        elif state.status == "provisioning":
             self._cleanup(state)
             if not state.instance_id:
                 self.packet.terminate_named(
@@ -1472,6 +1487,13 @@ class PacketCoordinator:
                 )
             state.last_error = "stale provisioning attempt had no submitted dstack task"
             self.launch_attempt(state)
+        else:
+            state.last_error = (
+                "dstack run status is unavailable; preserving existing state and "
+                "refusing to launch replacement capacity"
+            )
+            self.store.put(state)
+            print(f"Reconciliation deferred: {state.last_error}", flush=True)
 
     def sweep_orphans(
         self, states: list[RunState], instances: list[dict[str, Any]]
