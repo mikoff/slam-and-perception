@@ -178,6 +178,7 @@ class ScheduleConfig:
     seed: int = 42
     checkpoint_every_epochs: int = 1
     checkpoint_every_steps: int = 500
+    validation_interval: int = 1
 
 
 @dataclass(frozen=True)
@@ -265,6 +266,8 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("checkpoint_every_steps must be non-negative")
     if config.schedule.checkpoint_every_epochs < 1:
         raise ValueError("checkpoint_every_epochs must be positive")
+    if config.schedule.validation_interval < 1:
+        raise ValueError("validation_interval must be positive")
     if config.data.batches_per_epoch is not None and config.data.batches_per_epoch < 1:
         raise ValueError("batches_per_epoch must be positive when configured")
     if not 0 <= config.schedule.ema_decay < 1:

@@ -25,7 +25,7 @@ from .training_optimization import (
     set_backbone_trainable,
     set_reproducibility_seed,
 )
-from .training_reporting import StandardReporter
+from .training_reporting import StandardReporter, timestamped_print
 
 try:
     from accelerate import Accelerator
@@ -350,12 +350,11 @@ def train_proposals(
             _restore_rng_state(checkpoint["rng_state"])
         if accelerator.is_main_process:
             recorded_contract = checkpoint.get("run_contract", {})
-            print(
+            timestamped_print(
                 "Training resumed: "
                 f"source_run={recorded_contract.get('run_id', 'local')} "
                 f"step={global_step} epoch={int(checkpoint['epoch']) + 1} "
                 f"batch={int(checkpoint.get('batch_in_epoch', 0))}",
-                flush=True,
             )
 
     if max_steps is not None and global_step >= max_steps:

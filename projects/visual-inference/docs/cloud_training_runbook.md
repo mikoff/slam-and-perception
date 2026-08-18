@@ -33,12 +33,16 @@ also discover the key from Packet's full key, SHA-256 fingerprint, or key
 preview. It deliberately does not create keys through Packet's API because the
 live endpoint's validation contract currently disagrees with its OpenAPI schema.
 
-Enable S3 versioning. Add an enabled lifecycle rule applying to `runs/` that
-aborts incomplete multipart uploads. If that rule expires current objects or
-noncurrent versions, it must retain them for at least seven days and must not
-use a fixed expiration date. Every GitHub dispatch verifies these properties
-before allocating a GPU. W&B is not a backup: S3 is the durable source for
-resume state.
+As a one-time administrator task, enable S3 versioning and add a lifecycle rule
+that aborts incomplete multipart uploads. Do not expire checkpoint objects
+under `runs/` before the required recovery window. The per-run training
+credentials deliberately are not required to read bucket-level configuration:
+dispatch validates object access by downloading the immutable dataset manifest
+and uploading then reading back a tiny run-scoped checkpoint probe. Checkpoint
+uploads/downloads fail closed. W&B is not a backup; S3 is the durable source for
+resume state. Versioning remains extra protection for manual recovery of the
+mutable `latest.json` pointer; automatic resume validates that pointer and its
+three immutable checkpoint candidates, but does not read prior S3 versions.
 
 ## Publish an immutable dataset
 
@@ -243,12 +247,13 @@ First classify the failure:
 |---|---|
 | no capacity | dstack retries within the task duration |
 | Packet launch HTTP 429/5xx/timeout | GitHub cleans the exact attempt and retries fresh capacity up to three total attempts |
-| provider interruption / missing Packet host | dstack or Packet reconciler replaces host |
+| explicit terminal infrastructure failure | Packet reconciler replaces the host |
+| missing Packet host or unavailable dstack status | preserve state and capacity; never infer permission to launch a replacement |
 | Packet bootstrap/preflight failure | read the remote log tail or named missing prerequisite in GitHub; Packet attempt is terminated |
 | direct preflight passes but dstack stays pending | GitHub fails after 15 minutes with the dstack reason, stops the run, and removes Packet capacity; inspect the run and fleet events |
 | OOM, bad data, assertion, user-code exception | no automatic retry; fix and dispatch a new run |
 | GitHub interruption before dstack accepts the task | stale attempt is destroyed; reconciler creates fresh capacity |
-| GitHub interruption after dstack accepts the task | reconciler monitors the existing dstack task without reconnecting to the server |
+| GitHub interruption after dstack accepts the task | reconciler monitors it; ambiguous status is preserved without replacement |
 | corrupt newest checkpoint | auto-resume verifies hashes and falls back to an older manifest entry |
 | S3 authentication, timeout, or service failure | fail before training; only an authoritative missing-object response permits a fresh run |
 | W&B dataset artifact reference failure | record and print the observability error; continue because the immutable dataset contract is already captured |
@@ -257,6 +262,17 @@ First classify the failure:
 On a replacement host, `--resume-mode auto` downloads the newest verified full
 checkpoint from S3. Incomplete epochs resume at the recorded batch. Scheduler,
 EMA, and global step advance only after a successful optimizer step.
+
+To continue a failed run after a code-only compatibility fix, dispatch a new
+production run with the same dataset and config and set `resume_from_run_id` to
+the failed run ID. The new run first prefers its own checkpoints (important for
+provider retries), then falls back to the named parent. GitHub verifies that the
+parent manifest matches the dataset/config and that its source commit is an
+ancestor of the new commit. The worker additionally verifies the dataset
+manifest hash and checkpoint SHA-256 before restoring model, EMA, optimizer,
+scheduler, RNG, epoch, and batch state. New checkpoints use the new run ID and
+record the parent ID; the parent prefix is never overwritten. Do not use this
+path for a changed recipe, dataset, or divergent source branch.
 
 Do not delete an instance merely because GitHub submission ended: the 30-minute
 lease allows the submission to finish, after which the Packet reconciler owns
@@ -267,7 +283,9 @@ cleanup or task monitoring. Inspect desired state beneath
 
 Production validation runs every five epochs plus the final epoch. Raw and EMA
 models use a single validation-loader traversal and keep IoU evaluation on the
-accelerator, preventing the old CPU-validation/GPU-idle phase.
+accelerator. Progress identifies `state=raw` and `state=ema`. Dense score
+quantiles use fixed-memory 65,536-bin histograms over sigmoid scores, avoiding
+dataset-cardinality limits with less than one-bin absolute quantile error.
 
 Before accepting the refactor, run the frozen matrix on GPU for seeds 42, 43,
 and 44 with both `phase3_bounded_v1` LiteFPN and AttnRes recipes. Compare each

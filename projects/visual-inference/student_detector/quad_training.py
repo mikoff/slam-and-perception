@@ -17,7 +17,7 @@ from .quad_evaluation import QuadEvaluationAccumulator, QuadEvaluationImage
 from .quad_geometry import pairwise_quad_iou, quad_validity
 from .quad_losses import QuadLossOutput, QuadProposalLoss
 from .quad_targets import QuadTargetBuilder
-from .training_reporting import StandardReporter
+from .training_reporting import StandardReporter, timestamped_print
 from .training_runtime import train_proposals
 
 
@@ -128,7 +128,7 @@ def validate_quad_states(
         state: QuadEvaluationAccumulator(state=state) for state in models
     }
     if device.type == "cuda":
-        print("[Validation] Warming exact quadrilateral IoU kernel", flush=True)
+        timestamped_print("[Validation] Warming exact quadrilateral IoU kernel")
         warmup = torch.tensor(
             [[[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]]],
             device=device,
@@ -304,6 +304,10 @@ class _QuadTask:
             )
 
     def on_epoch_complete(self, epoch: int, total_epochs: int) -> None:
+        # An explicit geometry/blend recipe is fixed. Only legacy recipes that
+        # start from centerness opt into the staged quality curriculum.
+        if self.config.quad.quality_target_mode != "centerness":
+            return
         warmup_epochs = max(1, total_epochs // 5)
         if epoch + 1 < warmup_epochs:
             self.criterion.quality_target_mode = "centerness"

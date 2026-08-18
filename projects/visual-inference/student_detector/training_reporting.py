@@ -8,6 +8,7 @@ import shutil
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,10 +18,21 @@ from .checkpoint_transport import CheckpointUploader, uploader_from_environment
 from .config import Phase3Config
 
 
+def utc_timestamp() -> str:
+    """Return a millisecond-resolution UTC timestamp for durable run logs."""
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def timestamped_print(*values: object, file: Any | None = None) -> None:
+    """Print a flushed training message with the same timestamp format as JSONL."""
+    print(utc_timestamp(), *values, file=file, flush=True)
+
+
 def _write_jsonl(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"timestamp": utc_timestamp(), **dict(value)}
     with path.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(dict(value), sort_keys=True) + "\n")
+        stream.write(json.dumps(record, sort_keys=True) + "\n")
 
 
 class StandardReporter:
@@ -71,13 +83,12 @@ class StandardReporter:
             world_size=context["world_size"],
             resume_from_run_id=os.getenv("RESUME_FROM_RUN_ID") or None,
         )
-        print(
+        timestamped_print(
             "Training started: "
             f"run={self.run_id or 'local'} "
             f"train_images={len(context['train_loader'].dataset)} "
             f"validation_images={len(context['val_loader'].dataset)} "
             f"batch_size={config.data.batch_size} epochs={config.schedule.epochs}",
-            flush=True,
         )
         if self.wandb_project is not None:
             if self.accelerator is None:
@@ -139,10 +150,9 @@ class StandardReporter:
             self._event(
                 "tracking_error", operation="dataset_artifact", error=str(error)
             )
-            print(
+            timestamped_print(
                 f"W&B dataset artifact reference failed: {error}",
                 file=sys.stderr,
-                flush=True,
             )
 
     def _record(self, record: Mapping[str, Any], *, step: int) -> None:
@@ -155,7 +165,9 @@ class StandardReporter:
                 self._event(
                     "tracking_error", operation="log", error=str(error), step=step
                 )
-                print(f"W&B logging failed at step {step}: {error}", file=sys.stderr)
+                timestamped_print(
+                    f"W&B logging failed at step {step}: {error}", file=sys.stderr
+                )
 
     def on_batch(
         self,
@@ -178,11 +190,10 @@ class StandardReporter:
             **{f"timing/{key}": value for key, value in (timings or {}).items()},
         }
         self._record(record, step=global_step)
-        print(
+        timestamped_print(
             "Training progress: "
             f"epoch={epoch + 1} batch={batch}/{batches_per_epoch} "
             f"step={global_step} loss={float(metrics.get('loss', 0.0)):.6f}",
-            flush=True,
         )
 
     def on_validation(
@@ -202,10 +213,9 @@ class StandardReporter:
         if duration_seconds is not None:
             record[f"timing/{prefix}_seconds"] = duration_seconds
         self._record(record, step=global_step)
-        print(
+        timestamped_print(
             f"Validation complete: state={state} epoch={epoch + 1} "
             f"step={global_step} duration={duration_seconds or 0.0:.1f}s",
-            flush=True,
         )
 
     def on_epoch(self, *, metrics: Mapping[str, Any]) -> None:
@@ -244,10 +254,9 @@ class StandardReporter:
                     best, global_step, logical_name=best.name
                 )
                 self._best_signatures[best.name] = signature
-        print(
+        timestamped_print(
             f"Checkpoint saved: step={global_step} path={checkpoint}",
             f"upload_queue={self.checkpoint_uploader.pending if self.checkpoint_uploader else 0}",
-            flush=True,
         )
 
     def close(self) -> None:

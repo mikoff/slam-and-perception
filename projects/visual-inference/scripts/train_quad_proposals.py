@@ -31,6 +31,11 @@ from student_detector.checkpoint_transport import (
     ResolvedCheckpoint,
     resolve_resume_checkpoint,
 )
+from student_detector.checkpoints import (
+    NeckType,
+    load_model_state_strict,
+    selected_checkpoint_state,
+)
 from student_detector.config import load_phase3_config
 from student_detector.data import (
     DomainMixtureBatchSampler,
@@ -47,6 +52,8 @@ from student_detector.quad_losses import QuadProposalLoss
 from student_detector.quad_targets import QuadTargetBuilder
 from student_detector.quad_training import train_quad_proposals
 from student_detector.training_optimization import set_reproducibility_seed
+from student_detector.training_reporting import timestamped_print
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -84,10 +91,22 @@ def parse_args() -> argparse.Namespace:
         help="Override the positive Smooth-L1 transition for corner regression",
     )
     parser.add_argument("--resume", type=Path)
+    parser.add_argument(
+        "--initialize-from",
+        type=Path,
+        help=(
+            "Warm-start model weights while resetting optimizer, scheduler, and EMA; "
+            "used only when no resume checkpoint is found"
+        ),
+    )
     parser.add_argument("--resume-mode", choices=("none", "auto"), default="none")
     parser.add_argument("--resume-from-run-id")
     parser.add_argument("--run-id", type=str)
-    parser.add_argument("--validation-interval", type=int, default=1)
+    parser.add_argument(
+        "--validation-interval",
+        type=int,
+        help="Override the configured number of epochs between validations",
+    )
     parser.add_argument("--force-index", action="store_true")
     parser.add_argument(
         "--wandb-project", type=str, help="Weights & Biases project name"
@@ -120,8 +139,32 @@ def _verify_resume_ancestry(parent: ResolvedCheckpoint) -> None:
         )
 
 
+def _initialize_model(
+    model: QuadProposalDetector,
+    checkpoint_path: Path,
+    *,
+    neck_type: NeckType,
+) -> str:
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    state_key = selected_checkpoint_state(checkpoint)
+    load_model_state_strict(
+        model,
+        checkpoint,
+        kind="quad",
+        neck_type=neck_type,
+        state_key=state_key,
+    )
+    return state_key
+
+
 def main() -> None:
     args = parse_args()
+    if args.resume is not None and args.initialize_from is not None:
+        raise ValueError("--resume and --initialize-from are mutually exclusive")
+    if args.resume_from_run_id and args.initialize_from is not None:
+        raise ValueError(
+            "--resume-from-run-id and --initialize-from are mutually exclusive"
+        )
     overfit_image_ids = (
         tuple(int(value) for value in args.overfit_image_ids.split(",") if value)
         if args.overfit_image_ids
@@ -396,9 +439,7 @@ def main() -> None:
             resolved = resolve_resume_checkpoint(
                 run_id=args.resume_from_run_id,
                 output_dir=config.output_dir,
-                store=AwsCheckpointStore(
-                    bucket, os.getenv("S3_ENDPOINT_URL") or None
-                ),
+                store=AwsCheckpointStore(bucket, os.getenv("S3_ENDPOINT_URL") or None),
                 expected_contract=parent_expected,
             )
             if resolved is None:
@@ -407,14 +448,24 @@ def main() -> None:
                     f"{args.resume_from_run_id}"
                 )
             _verify_resume_ancestry(resolved)
-            print(
+            timestamped_print(
                 "Cross-run resume: "
                 f"parent={resolved.run_id} source={resolved.contract['source_commit']}",
-                flush=True,
             )
         if resolved is not None:
             resume = resolved.path
             resume_contract = {"run_id": resolved.run_id, **resolved.contract}
+    if resume is None and args.initialize_from is not None:
+        state_key = _initialize_model(
+            model,
+            args.initialize_from.resolve(),
+            neck_type=config.neck_type,
+        )
+        timestamped_print(
+            "Training initialized from weights: "
+            f"path={args.initialize_from.resolve()} state={state_key}; "
+            "optimizer, scheduler, and EMA start fresh",
+        )
     result = train_quad_proposals(
         model,
         train_loader,
@@ -428,7 +479,11 @@ def main() -> None:
         log_interval=args.log_interval,
         resume=resume,
         resume_contract=resume_contract,
-        validation_interval=args.validation_interval,
+        validation_interval=(
+            args.validation_interval
+            if args.validation_interval is not None
+            else config.schedule.validation_interval
+        ),
         wandb_project=args.wandb_project,
         wandb_entity=args.wandb_entity,
         wandb_run_name=args.wandb_run_name,

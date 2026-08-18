@@ -86,4 +86,30 @@ def test_dataset_artifact_failure_does_not_abort_training_start(
     ]
     assert events[-1]["operation"] == "dataset_artifact"
     assert events[-1]["error"] == "reference unavailable"
+    assert events[-1]["timestamp"].endswith("Z")
     assert os.environ["AWS_S3_ENDPOINT_URL"] == "https://objects.example.test"
+
+
+def test_console_and_jsonl_records_have_utc_timestamps(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    reporter = StandardReporter(tmp_path, batch_log="metrics.jsonl")
+    optimizer = SimpleNamespace(param_groups=[{"lr": 1e-5}, {"lr": 1e-4}])
+
+    reporter.on_batch(
+        metrics={"loss": 0.25},
+        epoch=0,
+        batch=10,
+        batches_per_epoch=100,
+        global_step=1,
+        optimizer=optimizer,
+    )
+
+    output = capsys.readouterr().out
+    assert output.startswith("20")
+    assert "Z Training progress: epoch=1 batch=10/100 step=1 loss=0.250000" in output
+    record = json.loads(
+        (tmp_path / "metrics.jsonl").read_text(encoding="utf-8").strip()
+    )
+    assert record["timestamp"].endswith("Z")
