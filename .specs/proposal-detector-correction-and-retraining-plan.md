@@ -18,6 +18,9 @@ cannot be solved by simply training for more epochs:
 - small local batches do not reproduce the configured domain proportions;
 - some COCO instance identity and crowd semantics may have been lost during
   source conversion and deduplication;
+- the HBB training path applies the configured photometric augmentations, while
+  the quad training path currently applies only horizontal flip, scale, and
+  translation even though both paths receive the same augmentation config;
 - the quadrilateral head and polygon post-processing may be more complex than
   the downstream rectangular SigLIP crop contract requires;
 - loss weights are hand-selected even though their effective contributions and
@@ -282,7 +285,80 @@ annotation-density, and failure-rate summaries. Dataset-size proportionality is
 not automatically optimal; WoodScape may deserve intentional oversampling to
 address fisheye failures.
 
-#### 1.7 Run a full, streaming, hash-bound production audit
+#### 1.7 Unify augmentation across HBB and quad training
+
+**AI AGENT** Replace the separate effective augmentation behaviors with one
+shared augmentation contract used by both HBB and quad datasets. The current
+quad path uses horizontal flip, scale jitter, and translation, but silently
+ignores configured color jitter, blur, JPEG degradation, and noise. The HBB path
+uses all of those operations. This divergence makes architecture comparisons
+unfair and makes the recorded quad run configuration misleading.
+
+The shared training pipeline must initially contain:
+
+- horizontal flip with the configured probability;
+- aspect-preserving letterbox plus random scale in the configured range;
+- horizontal and vertical translation within the configured fraction;
+- brightness, contrast, and saturation jitter;
+- bounded Gaussian blur;
+- bounded JPEG recompression;
+- bounded additive image noise;
+- common padding, normalization, valid-mask, clipping, and visibility behavior.
+
+Rotation, perspective distortion, Mosaic, MixUp, CutMix, and synthetic object
+insertion remain excluded from the initial correction. They materially change
+geometry, scene composition, or label meaning and require separate controlled
+ablations rather than being added under the parity fix.
+
+**AI AGENT** Centralize stochastic image operations and random-parameter
+sampling. Geometry-specific code may transform HBB coordinates or quad vertices,
+but it must consume the same sampled flip, scale, translation, and photometric
+parameters. With the same source image, seed, and epoch, the two paths must
+produce:
+
+- pixel-identical augmented image tensors;
+- identical valid masks and affine transform metadata;
+- equivalent transformed geometry when an HBB is represented as its four
+  rectangular corners;
+- equivalent visibility and positive/ignore/trusted-state decisions where the
+  geometry itself is equivalent.
+
+**AI AGENT** Keep augmentation deterministic per image and epoch, while changing
+the deterministic seed between training epochs. Ensure persistent data-loader
+workers observe the updated epoch. Exact-resume behavior must reproduce the same
+augmentation sequence after restoration.
+
+**AI AGENT** Make validation, visualization, NMS sweeps, and full evaluation use
+deterministic letterboxing only. They must not apply stochastic photometric or
+geometric training augmentation. Tiny-overfit mode may disable augmentation when
+the purpose is a pure learnability check, but that behavior must be explicit in
+the run contract.
+
+**AI AGENT** Validate the augmentation configuration at startup and fail on
+unknown or unsupported fields. Log the effective augmentation policy—not just
+the requested config—to the run contract and W&B. Add per-epoch counters or a
+bounded debug report showing how often every stochastic operation was selected,
+so a configured but inactive augmentation cannot remain unnoticed.
+
+**JOINT** Generate a before/after audit grid for every dataset, including
+day/night, fisheye, tiny-object, boundary-object, and trusted-background samples.
+You approve that augmentations remain physically plausible, preserve target
+meaning, and do not systematically erase the small objects the new dataset is
+intended to retain.
+
+**Acceptance criteria**
+
+- Every configured augmentation field is either applied by both HBB and quad
+  training or rejected explicitly.
+- Same-image/same-seed parity holds for image tensors, valid masks, transforms,
+  and equivalent geometry/state decisions.
+- Augmentation varies between epochs and is reproducible across worker counts
+  and exact-contract resume.
+- Validation and evaluation are deterministic and augmentation-free.
+- The visual audit shows no unacceptable corruption or systematic loss of
+  important tiny/thin instances.
+
+#### 1.8 Run a full, streaming, hash-bound production audit
 
 **AI AGENT** Replace small bounded audit reports with a streaming audit over every
 generated production record. The report must be bound to the exact raw-source
@@ -306,7 +382,7 @@ The audit must report at least:
 can flag anomalies and propose mappings, but a person should sign off on semantic
 correctness.
 
-#### 1.8 Regenerate and publish an immutable dataset version
+#### 1.9 Regenerate and publish an immutable dataset version
 
 **AI AGENT** Regenerate filtered annotations, normalized detections, proposal
 manifests, validation manifests, and training indexes from the approved policy.
@@ -332,6 +408,8 @@ short batch without accessing unstaged local data.
 - Immutable regenerated dataset with cryptographic contract.
 - Full production audit report and stratified visual review bundle.
 - Corrected domain sampler and observed-mixture report.
+- Shared, parity-tested HBB/quad training augmentation with an effective-policy
+  report and augmentation audit grid.
 
 #### Phase 1 stop/go gate
 
@@ -340,6 +418,7 @@ Do not start architecture comparison until all of the following are true:
 - all source categories are accounted for;
 - WoodScape validation is measurable;
 - COCO identity/crowd audit passes;
+- HBB/quad augmentation parity and deterministic-validation tests pass;
 - no overlap or split-leakage hard errors remain;
 - the chosen small-object policy is representable by the candidate architecture;
 - you manually approve the visual audit;
@@ -844,9 +923,10 @@ The phases are sequential at their gates, but preparatory engineering can overla
 
 Tasks that are especially suitable for outsourcing to an AI coding agent are
 converter refactors, schema/provenance work, deterministic regeneration,
-streaming audits, test fixtures, sampler correction, model-head implementation,
-decode/export parity, gradient instrumentation, experiment configuration,
-checkpoint/resume validation, W&B dashboards, and report generation.
+streaming audits, test fixtures, sampler correction, shared augmentation and
+parity tests, model-head implementation, decode/export parity, gradient
+instrumentation, experiment configuration, checkpoint/resume validation, W&B
+dashboards, and report generation.
 
 Tasks that should remain manual are the object contract, ambiguous semantic
 adjudication, minimum useful object/crop definition, domain weighting intent,
@@ -865,6 +945,14 @@ visual audits, and final promotion/rollback decisions.
   as equivalent to trusted background.
 - Positive overrides trusted background spatially; ignore overrides negative;
   unknown remains weak.
+- HBB and quad training share one augmentation parameter sampler and one
+  photometric implementation. Geometry adapters may differ, but identical
+  source image, seed, and epoch must yield identical pixels, valid masks, affine
+  metadata, and equivalent state decisions. Validation never uses stochastic
+  augmentation.
+- The initial shared augmentation contract contains flip, scale, translation,
+  color jitter, blur, JPEG degradation, and noise. Rotation, perspective,
+  Mosaic, MixUp, CutMix, and synthetic insertion require separate ablations.
 - HBB is the preferred deployment hypothesis because SigLIP ultimately consumes
   rectangular crops, but it is not selected without a matched empirical test.
 - Quad remains the control and can win if its tighter/perspective-aware crops
@@ -921,21 +1009,36 @@ Required tests and validations are:
    - invalid polygons are repaired deterministically or ignored;
    - HBB and quad loaders consume identical states.
 
-3. **Split and corpus tests**
+3. **Augmentation contract tests**
+   - same-image/same-seed HBB and quad outputs have pixel-identical image
+     tensors, masks, and affine metadata;
+   - an HBB and its equivalent four-corner rectangle remain geometrically
+     equivalent after flip, scale, translation, clipping, and visibility rules;
+   - every configured photometric operation can be forced independently and is
+     applied identically to both geometry paths;
+   - unknown or unsupported augmentation settings fail configuration validation;
+   - epoch changes alter the deterministic augmentation sequence, while fixed
+     seed/epoch results reproduce across worker counts and exact resume;
+   - validation, visualization, NMS sweep, and evaluation outputs are
+     deterministic and contain no stochastic training augmentation;
+   - a high-seam paired-dataset fixture exercises source record through final
+     transformed HBB and quad samples rather than testing private helper calls.
+
+4. **Split and corpus tests**
    - no image or sequence leakage;
    - no unexpected source identity collisions;
    - all validation domains contain usable labels;
    - full streaming counts reconcile with generated contracts;
    - unreadable images and missing artifacts fail explicitly.
 
-4. **Sampler tests**
+5. **Sampler tests**
    - observed epoch mixture matches the configured quota within one-sample
      rounding tolerance;
    - local microbatch and cloud batch paths preserve the same long-run mixture;
    - fixed seeds reproduce sample order;
    - resume behavior follows the declared sampler-position policy.
 
-5. **Model and decoder tests**
+6. **Model and decoder tests**
    - output shapes and coordinate ranges for every head/pyramid candidate;
    - letterbox transform round trips;
    - HBB and polygon IoU/NMS against trusted reference cases;
@@ -943,7 +1046,7 @@ Required tests and validations are:
    - final top-K and duplicate accounting;
    - eager-versus-export numerical parity.
 
-6. **Loss tests**
+7. **Loss tests**
    - exact analytical cases for positive, trusted, weak, and ignore states;
    - no gradients from ignore regions;
    - normalized loss invariance to duplicated samples and accumulation partition;
@@ -952,7 +1055,7 @@ Required tests and validations are:
      diagnostics are disabled;
    - a tiny overfit case improves both ranking and geometry.
 
-7. **Training lifecycle tests**
+8. **Training lifecycle tests**
    - timestamped progress and `state=raw` / `state=ema` validation logs;
    - local checkpoint, remote upload, checksum, and latest/previous manifests;
    - exact-contract full resume continuity;
@@ -960,7 +1063,7 @@ Required tests and validations are:
    - W&B reconnect/resume semantics and unique run identity;
    - graceful behavior after upload or validation failure.
 
-8. **Acceptance evaluation**
+9. **Acceptance evaluation**
    - full validation metrics per domain and failure slice;
    - balanced interactive visual audit;
    - downstream SigLIP utility at fixed proposal budgets;
