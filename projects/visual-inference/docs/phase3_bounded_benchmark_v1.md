@@ -4,6 +4,12 @@ This document is the canonical record for regenerating the completed bounded
 LiteFPN/AttnRes experiment and comparing it with `hbb_control_v1`. Do not edit
 the v1 recipe to improve a result; create a new benchmark version instead.
 
+This is historical evidence within the original project Phase 3, not “Phase 3”
+of the correction plan. See the [proposal detector roadmap](proposal_detector_roadmap.md).
+Its recorded values and reproduction requirements remain unchanged. Corrected
+data, augmentation and sampler behavior require a separately versioned run;
+current source is not automatically a reproduction of v1.
+
 ## What was measured
 
 | Contract item | Frozen value |
@@ -172,6 +178,11 @@ hashed. Archive the entire dataset workspace together with the repository
 commit, `uv.lock`, benchmark outputs, and run contracts for disaster recovery.
 
 ## Required follow-up benchmark
+
+The following is the historical schedule-matching recommendation. For the
+active corrected-data milestone, freeze a new comparison contract after the
+small-object/P2 decision; do not silently adopt these old dataset sizes or
+require another AttnRes run without a new justification. SigLIP is deferred.
 
 Preserve v1 unchanged. A schedule-matched v2 should train HBB, LiteFPN quad,
 and AttnRes quad with seeds 42/43/44, batch 12, 31 batches per epoch, 40 epochs,

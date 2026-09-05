@@ -14,6 +14,7 @@ from typing import Any
 
 import torch
 
+from .augmentation import effective_augmentation_policy
 from .checkpoint_transport import CheckpointUploader, uploader_from_environment
 from .config import Phase3Config
 
@@ -98,6 +99,9 @@ class StandardReporter:
                     self.wandb_project,
                     config={
                         "training": asdict(config),
+                        "augmentation_effective": effective_augmentation_policy(
+                            config.augmentation
+                        ),
                         "run": {
                             "run_id": self.run_id,
                             "source_commit": os.getenv("SOURCE_COMMIT"),
@@ -221,6 +225,46 @@ class StandardReporter:
     def on_epoch(self, *, metrics: Mapping[str, Any]) -> None:
         if self.epoch_path is not None:
             _write_jsonl(self.epoch_path, metrics)
+
+    def on_mixture(
+        self,
+        *,
+        scope: str,
+        epoch: int,
+        batch: int,
+        global_step: int,
+        intended_sources: Mapping[str, int],
+        observed_sources: Mapping[str, int],
+        intended_domains: Mapping[str, int],
+        observed_domains: Mapping[str, int],
+    ) -> None:
+        """Persist intended and observed source/domain counts for one window."""
+        counts = {
+            "intended_sources": dict(intended_sources),
+            "observed_sources": dict(observed_sources),
+            "intended_domains": dict(intended_domains),
+            "observed_domains": dict(observed_domains),
+        }
+        self._event(
+            "training_mixture",
+            scope=scope,
+            epoch=epoch,
+            batch=batch,
+            global_step=global_step,
+            **counts,
+        )
+        if self.tracking_started:
+            record: dict[str, int] = {}
+            for state in ("intended", "observed"):
+                for kind in ("source", "domain"):
+                    values = counts[f"{state}_{kind}s"]
+                    record.update(
+                        {
+                            f"mixture/{scope}/{state}/{kind}/{name}": value
+                            for name, value in values.items()
+                        }
+                    )
+            self.accelerator.log(record, step=global_step)
 
     def on_checkpoint(
         self,

@@ -45,11 +45,19 @@ class Taxonomy:
         for guard, terms in required_guard_terms.items():
             statement = str(guards.get(guard, "")).lower()
             if not all(term in statement for term in terms):
-                raise ValueError(f"Taxonomy mapping guard {guard!r} is missing required semantic assertions")
+                raise ValueError(
+                    f"Taxonomy mapping guard {guard!r} is missing required semantic assertions"
+                )
         for dataset, mapping in data.get("dataset_mappings", {}).items():
-            unknown = {self._mapping_target(value) for value in mapping.values()} - set(order) - self.ignore_tokens
+            unknown = (
+                {self._mapping_target(value) for value in mapping.values()}
+                - set(order)
+                - self.ignore_tokens
+            )
             if unknown:
-                raise ValueError(f"{dataset} maps to unknown canonical categories: {sorted(unknown)}")
+                raise ValueError(
+                    f"{dataset} maps to unknown canonical categories: {sorted(unknown)}"
+                )
 
     def _mapping_target(self, value: Any) -> str:
         if isinstance(value, str):
@@ -71,12 +79,14 @@ class Taxonomy:
             {"id": category_id, "name": name, "supercategory": "object"}
             for name, category_id in self.category_ids.items()
         ]
-        categories.append({
-            "id": self.ignore_region_category_id,
-            "name": self.ignore_region_token,
-            "supercategory": "ignore",
-            "ignore_region": True,
-        })
+        categories.append(
+            {
+                "id": self.ignore_region_category_id,
+                "name": self.ignore_region_token,
+                "supercategory": "ignore",
+                "ignore_region": True,
+            }
+        )
         return categories
 
     @property
@@ -91,18 +101,60 @@ class Taxonomy:
         value = re.sub(r"[^a-zA-Z0-9]+", replacement, value)
         if rules.get("collapse_repeated_underscores", True):
             value = re.sub(r"_+", "_", value)
-        return value.strip("_") if rules.get("strip_leading_trailing_underscores", True) else value
+        return (
+            value.strip("_")
+            if rules.get("strip_leading_trailing_underscores", True)
+            else value
+        )
 
-    def map(self, dataset: str, source_name: str, description: str | None = None) -> MappingResult:
+    def contract_policy(self, dataset: str, source_name: str) -> dict[str, str]:
+        """Return the owner-approved semantic category and supervision state."""
+        normalized = self.normalize(source_name)
+        contract = self.data.get("proposal_object_contract", {})
+        override = (
+            contract.get("category_overrides", {}).get(dataset, {}).get(normalized)
+        )
+        approved = (
+            contract.get("approved_category_states", {})
+            .get(dataset, {})
+            .get(normalized)
+        )
+        if override is None:
+            mapping = self.map(dataset, source_name)
+            if mapping.canonical is None or mapping.ignore_region or mapping.ignored:
+                raise ValueError(
+                    f"{dataset}:{normalized} has no explicit approved non-positive policy"
+                )
+            return {
+                "normalized_category": mapping.canonical,
+                "supervision_state": "positive",
+            }
+        state = str((approved or {}).get("state", override.get("proposed_state", "")))
+        if state not in {"positive", "trusted_negative", "ignore", "drop"}:
+            raise ValueError(
+                f"{dataset}:{normalized} has invalid contract state {state!r}"
+            )
+        return {
+            "normalized_category": str(override["normalized_category"]),
+            "supervision_state": state,
+        }
+
+    def map(
+        self, dataset: str, source_name: str, description: str | None = None
+    ) -> MappingResult:
         normalized = self.normalize(source_name)
         if dataset in self.identity_datasets:
             canonical = normalized
             if canonical not in self.category_ids:
-                raise UnmappedCategoryError(f"{dataset}: unexpected identity category {source_name!r}")
+                raise UnmappedCategoryError(
+                    f"{dataset}: unexpected identity category {source_name!r}"
+                )
         else:
             mapping = self.data.get("dataset_mappings", {}).get(dataset)
             if mapping is None or normalized not in mapping:
-                raise UnmappedCategoryError(f"{dataset}: unmapped category {source_name!r} ({normalized!r})")
+                raise UnmappedCategoryError(
+                    f"{dataset}: unmapped category {source_name!r} ({normalized!r})"
+                )
             canonical = self._mapping_target(mapping[normalized])
         if canonical == self.ignore_region_token:
             return MappingResult(
@@ -125,13 +177,27 @@ class Taxonomy:
             False,
         )
 
-    def _check_guard(self, dataset: str, normalized: str, description: str | None) -> None:
+    def _check_guard(
+        self, dataset: str, normalized: str, description: str | None
+    ) -> None:
         if dataset == "nuimages" and normalized == "other":
             if description and "pedestrian" not in description.lower():
-                raise ValueError("nuimages 'other' guard failed: metadata must describe a pedestrian class")
+                raise ValueError(
+                    "nuimages 'other' guard failed: metadata must describe a pedestrian class"
+                )
         if dataset == "woodscape_rgb_fisheye" and normalized == "construction":
-            if description and not any(token in description.lower() for token in ("vehicle", "instance", "construction")):
-                raise ValueError("WoodScape 'construction' guard contradicts construction-vehicle assumption")
+            if description and not any(
+                token in description.lower()
+                for token in ("vehicle", "instance", "construction")
+            ):
+                raise ValueError(
+                    "WoodScape 'construction' guard contradicts construction-vehicle assumption"
+                )
 
-    def validate_classes(self, dataset: str, classes: list[dict[str, Any]]) -> list[MappingResult]:
-        return [self.map(dataset, item["title"], item.get("description")) for item in classes]
+    def validate_classes(
+        self, dataset: str, classes: list[dict[str, Any]]
+    ) -> list[MappingResult]:
+        return [
+            self.map(dataset, item["title"], item.get("description"))
+            for item in classes
+        ]

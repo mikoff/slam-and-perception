@@ -22,10 +22,15 @@ def _background(seed: int, color: tuple[int, int, int]) -> Image.Image:
     for _ in range(80):
         x = generator.randrange(384)
         y = generator.randrange(384)
-        shade = tuple(max(0, min(255, channel + generator.randrange(-12, 13))) for channel in color)
+        shade = tuple(
+            max(0, min(255, channel + generator.randrange(-12, 13)))
+            for channel in color
+        )
         draw.rectangle((x, y, min(x + 3, 383), min(y + 3, 383)), fill=shade)
     for offset in range(0, 384, 32):
-        draw.line((0, offset, 383, offset), fill=tuple(channel + 4 for channel in color))
+        draw.line(
+            (0, offset, 383, offset), fill=tuple(channel + 4 for channel in color)
+        )
     return image
 
 
@@ -39,7 +44,9 @@ def _draw_object(
     draw.polygon(points, fill=fill, outline=(245, 245, 245), width=3)
     center_x = round(sum(point[0] for point in quad) / 4)
     center_y = round(sum(point[1] for point in quad) / 4)
-    draw.ellipse((center_x - 6, center_y - 6, center_x + 6, center_y + 6), fill=(20, 20, 20))
+    draw.ellipse(
+        (center_x - 6, center_y - 6, center_x + 6, center_y + 6), fill=(20, 20, 20)
+    )
 
 
 def _record(
@@ -108,20 +115,47 @@ def create_g6_microfixture(output_dir: str | Path) -> dict[str, str]:
         (1, [(rectangle, (210, 55, 55))], [], True),
         (2, [(rotated, (50, 105, 220)), (trapezoid, (230, 175, 40))], [], False),
         (3, [(thin, (45, 205, 190))], [], False),
-        (4, [(parent, (65, 170, 80)), (nested, (205, 55, 190))], [(ignored, (230, 115, 35))], True),
+        (
+            4,
+            [(parent, (65, 170, 80)), (nested, (205, 55, 190))],
+            [(ignored, (230, 115, 35))],
+            True,
+        ),
         (5, [], [], True),
         (6, [], [], False),
     ]
     records_by_id = {
-        1: [_record(rectangle, tier="source_hbb", category="crate", condition="whole_object")],
-        2: [
-            _record(rotated, tier="rotated_rect", category="rotated_panel", condition="whole_object"),
-            _record(trapezoid, tier="source_quad", category="perspective_sign", condition="perspective_object"),
+        1: [
+            _record(
+                rectangle, tier="source_hbb", category="crate", condition="whole_object"
+            )
         ],
-        3: [_record(thin, tier="fitted_quad", category="thin_beam", condition="thin_object")],
+        2: [
+            _record(
+                rotated,
+                tier="rotated_rect",
+                category="rotated_panel",
+                condition="whole_object",
+            ),
+            _record(
+                trapezoid,
+                tier="source_quad",
+                category="perspective_sign",
+                condition="perspective_object",
+            ),
+        ],
+        3: [
+            _record(
+                thin, tier="fitted_quad", category="thin_beam", condition="thin_object"
+            )
+        ],
         4: [
-            _record(parent, tier="source_hbb", category="vehicle", condition="whole_object"),
-            _record(nested, tier="source_hbb", category="display", condition="nested_part"),
+            _record(
+                parent, tier="source_hbb", category="vehicle", condition="whole_object"
+            ),
+            _record(
+                nested, tier="source_hbb", category="display", condition="nested_part"
+            ),
         ],
         5: [],
         6: [],
@@ -136,7 +170,9 @@ def create_g6_microfixture(output_dir: str | Path) -> dict[str, str]:
 
     manifest_images: list[dict[str, Any]] = []
     for image_id, objects, ignored_objects, trusted in definitions:
-        image = _background(image_id, (92 + image_id * 4, 98 + image_id * 3, 106 + image_id * 2))
+        image = _background(
+            image_id, (92 + image_id * 4, 98 + image_id * 3, 106 + image_id * 2)
+        )
         for quad, color in objects:
             _draw_object(image, quad, color)
         for quad, color in ignored_objects:
@@ -157,7 +193,7 @@ def create_g6_microfixture(output_dir: str | Path) -> dict[str, str]:
         "fixture_schema": FIXTURE_SCHEMA,
         "images": manifest_images,
         "object_contract": "bounded_promptable_physical_instance",
-        "schema_version": "quad-proposal-manifest.v1",
+        "schema_version": "proposal-manifest.v2",
         "split": "train",
     }
     manifest_path = root / "proposals_g6.json"
@@ -196,8 +232,16 @@ def create_g6_microfixture(output_dir: str | Path) -> dict[str, str]:
             "positive_visible_fraction": 0.6,
             "ignore_visible_fraction": 0.2,
         },
-        "assignment": {"strides": [8, 16, 32], "prior_sizes": [64, 128, 256], "top_k": 9},
-        "inference": {"pre_nms_top_k": 300, "nms_iou_threshold": 0.9, "max_proposals": 100},
+        "assignment": {
+            "strides": [8, 16, 32],
+            "prior_sizes": [64, 128, 256],
+            "top_k": 9,
+        },
+        "inference": {
+            "pre_nms_top_k": 300,
+            "nms_iou_threshold": 0.9,
+            "max_proposals": 100,
+        },
         "quad": {
             "top_k": 9,
             "gamma": 2.0,

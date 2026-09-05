@@ -1,6 +1,6 @@
 data:
-  train_annotations: ../../../data/visual-inference-datasets/output/annotations/instances_train.json
-  val_annotations: ../../../data/visual-inference-datasets/output/annotations/instances_val.json
+  train_annotations: ../../../data/visual-inference-datasets/output/annotations/proposals_train.json
+  val_annotations: ../../../data/visual-inference-datasets/output/annotations/proposals_val.json
   quad_train_annotations: ../../../data/visual-inference-datasets/output/annotations/proposals_train.json
   quad_val_annotations: ../../../data/visual-inference-datasets/output/annotations/proposals_val.json
   image_root: ../../../data/visual-inference-datasets/output
@@ -33,15 +33,6 @@ data:
   thin_major_axis_min: 8
   thin_aspect_ratio_min: 3
   thin_area: 16
-  component_categories:
-    [face, head, hand, arm, leg, foot, shoe, wheel, tire, license_plate,
-     mirror, door, handle, screen, logo]
-  parent_categories:
-    [person, pedestrian_adult, pedestrian_child, pedestrian_other,
-     pedestrian_construction_worker, pedestrian_police_officer,
-     car, truck, bus, van, motorcycle, bicycle, construction_vehicle]
-  component_containment_threshold: 0.8
-
 augmentation:
   horizontal_flip_probability: 0.5
   color_jitter_probability: 0.8

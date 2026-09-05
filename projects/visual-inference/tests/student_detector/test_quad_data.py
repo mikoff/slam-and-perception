@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import torch
 from PIL import Image
 
 from student_detector.config import AugmentationConfig, DataConfig
+from student_detector.data import IndexedCocoProposalDataset
 from student_detector.quad_data import QuadProposalDataset, QuadProposalTransform
 
 
@@ -14,25 +16,48 @@ def test_quad_dataset_reads_quad_manifest(tmp_path) -> None:
     image_root.mkdir()
     Image.new("RGB", (32, 24), "white").save(image_root / "one.jpg")
     annotations = tmp_path / "instances.json"
-    annotations.write_text(json.dumps({
-        "images": [{
-            "id": 1, "file_name": "one.jpg", "width": 32, "height": 24,
-            "source_dataset": "coco_2017", "camera_type": "perspective",
-        }],
-        "annotations": [{
-            "id": 1, "image_id": 1, "category_id": 1,
-            "bbox": [4, 3, 16, 12], "quad": [[4, 3], [20, 3], [19, 15], [5, 15]],
-            "geometry_tier": "source_quad", "fit_coverage": 1.0,
-            "iscrowd": 0,
-        }],
-        "categories": [{"id": 1, "name": "car"}],
-    }))
+    annotations.write_text(
+        json.dumps(
+            {
+                "images": [
+                    {
+                        "id": 1,
+                        "file_name": "one.jpg",
+                        "width": 32,
+                        "height": 24,
+                        "source_dataset": "coco_2017",
+                        "camera_type": "perspective",
+                    }
+                ],
+                "annotations": [
+                    {
+                        "id": 1,
+                        "image_id": 1,
+                        "category_id": 1,
+                        "bbox": [4, 3, 16, 12],
+                        "quad": [[4, 3], [20, 3], [19, 15], [5, 15]],
+                        "geometry_tier": "source_quad",
+                        "fit_coverage": 1.0,
+                        "iscrowd": 0,
+                    }
+                ],
+                "categories": [{"id": 1, "name": "car"}],
+            }
+        )
+    )
     config = DataConfig(
-        annotations, annotations, image_root, tmp_path / "index",
-        input_size=32, quad_regular_min_side=8,
+        annotations,
+        annotations,
+        image_root,
+        tmp_path / "index",
+        input_size=32,
+        quad_regular_min_side=8,
     )
     dataset = QuadProposalDataset(
-        annotations, image_root, tmp_path / "index.sqlite", config,
+        annotations,
+        image_root,
+        tmp_path / "index.sqlite",
+        config,
         AugmentationConfig(horizontal_flip_probability=0, color_jitter_probability=0),
         training=False,
     )
@@ -48,34 +73,70 @@ def test_quad_dataset_reads_compact_proposal_manifest(tmp_path) -> None:
     image_root.mkdir()
     Image.new("RGB", (32, 24), "white").save(image_root / "one.jpg")
     annotations = tmp_path / "proposals.json"
-    annotations.write_text(json.dumps({
-        "schema_version": "quad-proposal-manifest.v1",
-        "split": "train",
-        "object_contract": {"positive": "visually distinct object"},
-        "images": [{
-            "image_id": 1, "file_name": "one.jpg", "width": 32, "height": 24,
-            "source_dataset": "coco_2017", "camera_type": "perspective",
-            "positive": [{
-                "bbox": [4, 3, 16, 12],
-                "quad": [[4, 3], [20, 3], [19, 15], [5, 15]],
-                "geometry_tier": "source_quad", "fit_coverage": 1.0,
-                "fit_tightness": 0.25, "valid": True,
-            }],
-            "ignore": [],
-            "trusted_background": [{
-                "bbox": [0, 16, 32, 8],
-                "quad": [[0, 16], [32, 16], [32, 24], [0, 24]],
-                "geometry_tier": "trusted_stuff_tile", "fit_coverage": 1.0,
-                "fit_tightness": 1.0, "state": "trusted_background", "valid": True,
-            }],
-        }],
-    }))
+    annotations.write_text(
+        json.dumps(
+            {
+                "schema_version": "proposal-manifest.v2",
+                "split": "train",
+                "object_contract": {"positive": "visually distinct object"},
+                "images": [
+                    {
+                        "image_id": 1,
+                        "file_name": "one.jpg",
+                        "width": 32,
+                        "height": 24,
+                        "source_dataset": "coco_2017",
+                        "camera_type": "perspective",
+                        "positive": [
+                            {
+                                "bbox": [4, 3, 16, 12],
+                                "quad": [[4, 3], [20, 3], [19, 15], [5, 15]],
+                                "geometry_tier": "source_quad",
+                                "fit_coverage": 1.0,
+                                "fit_tightness": 0.25,
+                                "canonical_category": "car",
+                                "attributes": {"distance": 15.0},
+                                "valid": True,
+                            }
+                        ],
+                        "ignore": [],
+                        "trusted_background": [
+                            {
+                                "bbox": [0, 16, 32, 8],
+                                "quad": [[0, 16], [32, 16], [32, 24], [0, 24]],
+                                "geometry_tier": "trusted_stuff_tile",
+                                "fit_coverage": 1.0,
+                                "fit_tightness": 1.0,
+                                "state": "trusted_background",
+                                "valid": True,
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
     config = DataConfig(
-        annotations, annotations, image_root, tmp_path / "index",
-        input_size=32, quad_regular_min_side=8,
+        annotations,
+        annotations,
+        image_root,
+        tmp_path / "index",
+        input_size=32,
+        quad_regular_min_side=8,
     )
     dataset = QuadProposalDataset(
-        annotations, image_root, tmp_path / "manifest.sqlite", config,
+        annotations,
+        image_root,
+        tmp_path / "manifest.sqlite",
+        config,
+        AugmentationConfig(horizontal_flip_probability=0, color_jitter_probability=0),
+        training=False,
+    )
+    hbb_dataset = IndexedCocoProposalDataset(
+        annotations,
+        image_root,
+        tmp_path / "manifest-hbb.sqlite",
+        config,
         AugmentationConfig(horizontal_flip_probability=0, color_jitter_probability=0),
         training=False,
     )
@@ -84,12 +145,30 @@ def test_quad_dataset_reads_compact_proposal_manifest(tmp_path) -> None:
     assert sample.geometry_tiers == ("source_quad",)
     assert sample.trusted_background_quads is not None
     assert sample.trusted_background_quads.shape == (1, 4, 2)
+    with sqlite3.connect(dataset.index_path) as connection:
+        category_name, attributes_json = connection.execute(
+            "SELECT category_name, attributes_json FROM annotations "
+            "WHERE ignore_region = 0"
+        ).fetchone()
+    assert category_name == "car"
+    assert json.loads(attributes_json) == {"distance": 15.0}
+    assert (
+        dataset.state_counts
+        == hbb_dataset.state_counts
+        == {
+            "positive": 1,
+            "ignore": 0,
+            "trusted_background": 1,
+        }
+    )
 
 
 def test_thin_long_quad_uses_major_axis_size_tier() -> None:
     transform = QuadProposalTransform(
         input_size=384,
-        augmentation=AugmentationConfig(horizontal_flip_probability=0, color_jitter_probability=0),
+        augmentation=AugmentationConfig(
+            horizontal_flip_probability=0, color_jitter_probability=0
+        ),
         training=False,
         regular_min_side=16,
         thin_major_axis_min=8,
@@ -99,7 +178,9 @@ def test_thin_long_quad_uses_major_axis_size_tier() -> None:
     image = Image.new("RGB", (1280, 966), "white")
     # After the 0.3 resize this is approximately 15 x 1.5 px: too thin for
     # the regular gate, but large enough for the explicit thin-object tier.
-    quad = torch.tensor([[[100.0, 100.0], [150.0, 100.0], [150.0, 105.0], [100.0, 105.0]]])
+    quad = torch.tensor(
+        [[[100.0, 100.0], [150.0, 100.0], [150.0, 105.0], [100.0, 105.0]]]
+    )
     _, positives, ignores, _, _, _, _ = transform(
         image, quad, torch.empty((0, 4, 2)), seed=0
     )
@@ -110,7 +191,9 @@ def test_thin_long_quad_uses_major_axis_size_tier() -> None:
 def test_transform_preserves_unclipped_trapezoid() -> None:
     transform = QuadProposalTransform(
         input_size=64,
-        augmentation=AugmentationConfig(horizontal_flip_probability=0, color_jitter_probability=0),
+        augmentation=AugmentationConfig(
+            horizontal_flip_probability=0, color_jitter_probability=0
+        ),
         training=False,
         regular_min_side=16,
     )

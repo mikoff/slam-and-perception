@@ -57,39 +57,6 @@ class DataConfig:
     thin_major_axis_min: float = 8.0
     thin_aspect_ratio_min: float = 3.0
     thin_area: float = 16.0
-    component_categories: tuple[str, ...] = (
-        "face",
-        "head",
-        "hand",
-        "arm",
-        "leg",
-        "foot",
-        "shoe",
-        "wheel",
-        "tire",
-        "license_plate",
-        "mirror",
-        "door",
-        "handle",
-        "screen",
-        "logo",
-    )
-    parent_categories: tuple[str, ...] = (
-        "person",
-        "pedestrian_adult",
-        "pedestrian_child",
-        "pedestrian_other",
-        "pedestrian_construction_worker",
-        "pedestrian_police_officer",
-        "car",
-        "truck",
-        "bus",
-        "van",
-        "motorcycle",
-        "bicycle",
-        "construction_vehicle",
-    )
-    component_containment_threshold: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -196,7 +163,45 @@ class Phase3Config:
 
 
 def _construct(cls: type, values: dict[str, Any] | None):
-    return cls(**(values or {}))
+    try:
+        return cls(**(values or {}))
+    except TypeError as error:
+        raise ValueError(f"invalid {cls.__name__} fields: {error}") from error
+
+
+def _validate_augmentation(config: AugmentationConfig) -> None:
+    probabilities = {
+        "horizontal_flip_probability": config.horizontal_flip_probability,
+        "color_jitter_probability": config.color_jitter_probability,
+        "blur_probability": config.blur_probability,
+        "noise_probability": config.noise_probability,
+        "jpeg_probability": config.jpeg_probability,
+        "positive_visible_fraction": config.positive_visible_fraction,
+        "ignore_visible_fraction": config.ignore_visible_fraction,
+    }
+    invalid_probabilities = {
+        name: value for name, value in probabilities.items() if not 0 <= value <= 1
+    }
+    if invalid_probabilities:
+        raise ValueError(
+            "augmentation probabilities/fractions must be in [0, 1]: "
+            f"{invalid_probabilities}"
+        )
+    magnitudes = {
+        "brightness": config.brightness,
+        "contrast": config.contrast,
+        "saturation": config.saturation,
+        "translation_fraction": config.translation_fraction,
+    }
+    invalid_magnitudes = {
+        name: value for name, value in magnitudes.items() if not 0 <= value <= 1
+    }
+    if invalid_magnitudes:
+        raise ValueError(
+            f"augmentation magnitudes must be in [0, 1]: {invalid_magnitudes}"
+        )
+    if config.scale_min <= 0 or config.scale_max < config.scale_min:
+        raise ValueError("augmentation scale range must satisfy 0 < min <= max")
 
 
 def _resolve(base: Path, value: str | Path) -> Path:
@@ -218,11 +223,7 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
     for key in ("quad_train_annotations", "quad_val_annotations"):
         if data_raw.get(key) is not None:
             data_raw[key] = _resolve(config_path.parent, data_raw[key])
-    for key in (
-        "dense_background_sources",
-        "component_categories",
-        "parent_categories",
-    ):
+    for key in ("dense_background_sources",):
         if key in data_raw:
             data_raw[key] = tuple(data_raw[key])
     assignment_raw = dict(raw.get("assignment") or {})
@@ -241,6 +242,7 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         pretrained_backbone=bool(raw.get("pretrained_backbone", True)),
         neck_type=str(raw.get("neck_type", "lite")),
     )
+    _validate_augmentation(config.augmentation)
     if config.data.input_size % max(config.assignment.strides) != 0:
         raise ValueError("input_size must be divisible by the largest stride")
     if config.neck_type not in {"lite", "attn_res"}:

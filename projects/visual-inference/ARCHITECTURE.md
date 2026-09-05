@@ -1,8 +1,8 @@
 # Module Purpose & Boundaries
 
-This project trains class-agnostic HBB and quad proposal detectors. Dense P3-P5
-outputs exclude decoding, polygon NMS, and metrics. HBB is a comparison control;
-LiteFPN and AttnResLiteFPN are the production quad variants.
+This project owns the approved proposal-object contract and trains class-agnostic
+HBB and quad detectors. Dense P3-P5 outputs exclude decoding, NMS, and metrics;
+LiteFPN/AttnResLiteFPN are quad variants; `docs/proposal_detector_roadmap.md` sets scope.
 
 GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridge
 provisions hosts and registers dstack SSH fleets using the same task contract.
@@ -12,17 +12,18 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
 - Input tensors are FP32 `[B, 3, H, W]`, with dimensions divisible by 32.
 - Accelerate owns device placement, FP16, accumulation, tracker dispatch, and
   distributed synchronization; the training runtime owns checkpoint lifecycle.
-- `DATASET_ID` identifies an immutable S3 prefix containing `dataset.tar.gz`
-  and a v1 manifest with byte size and SHA-256 for the archive and every file.
-- Large production bundles stream directly to S3 while hashing archive bytes;
-  file symlinks are dereferenced into regular tar members. The manifest is
-  uploaded only after the archive command completes successfully.
+- `DATASET_ID` identifies an immutable S3 prefix with an archive-level hash manifest.
+- Production bundles use native tar/pigz/AWS streaming while hashing and
+  dereferencing symlinks; the manifest uploads only after archive verification.
 - Cloud datasets must contain prebuilt `indexes/quad_train.sqlite` and
   `indexes/quad_val.sqlite`; a cloud worker may not silently rebuild an index.
-- Spawned CUDA workers use file-system tensor sharing, lazily reopen SQLite
-  read-only, and never load the full annotation table.
-- The RTX 3060 min-8 recipe uses FP16 `[B=8, 3, 384, 384]` plus eight-step
-  accumulation; its 20-epoch EMA fine-tune uses `1e-4`/`1e-5` LR and 5-epoch validation.
+- HBB/quad workers lazily reopen SQLite read-only per process and fetch one
+  image's annotations; shared epoch tensors propagate to persistent workers.
+- HBB/quad share `proposal-manifest.v2`; state is fixed before geometry encoding.
+- Phase 1.8 hard-fails effective state conflicts/leakage; raw precedence overlaps warn.
+- Both geometry adapters consume one sampled affine/photometric policy; validation
+  is letterbox-only and effective bounds/exclusions are recorded in run metadata.
+- RTX 3060 uses FP16 `[B=8, 3, 384, 384]`, eight-step accumulation, and 5-epoch validation.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - A weights-only warm start resets optimizer, scheduler, and EMA; full resume
@@ -34,10 +35,10 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
 
 # Active Design Patterns & Decisions
 
-- Training console messages and JSONL records carry millisecond UTC timestamps;
-  W&B metrics are namespaced and dataset references are observability-only links.
-- SIGINT/SIGTERM is handled at a safe batch boundary. An incomplete-epoch
-  checkpoint records batch position so restarted work skips completed batches.
+- Console and JSONL use millisecond UTC; W&B metrics are namespaced.
+- SIGINT/SIGTERM checkpoints at safe batch boundaries for deterministic resume.
+- Source sampling uses cumulative residual quotas; intended/observed source and
+  domain counts are reduced across workers and logged per optimizer window/epoch.
 - A single bounded background uploader serializes S3 checkpoint writes and is
   flushed before tracker shutdown; local atomic writes precede remote upload.
 - Validation computes each image's polygon overlaps on the accelerator, then
@@ -54,10 +55,10 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   headroom, stops on the first OOM/error/timeout, and uploads its report to S3.
 - Assignment and positive offset construction are vectorized; only the rare
   no-candidate fallback remains per-object.
-- Packet cleanup is exact-name; disk derives from manifests; dstack status uses
-  `run_spec.run_name`. Tasks clone to `/dstack/repo` and run in the project.
 - Frozen bounded-v1 results are accepted only when every seed/state primary
   metric matches the reference to four decimal places.
+- Phase 3 HBB and quad recipes share proposal manifests; historical benchmarks stay frozen.
+- `analyze_small_object_policy.py` streams model-coordinate policy evidence from SQLite.
 
 # Local Constraints & Gotchas
 
@@ -66,15 +67,14 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   independent of dataset size and absolute quantile error is below one bin.
 - A dataset ID is immutable. Publish changed bytes under a new ID instead of
   replacing an existing S3 prefix or local staged directory.
-- Production images are local symlinks into raw sources and exceed available
-  archive scratch space; use `upload_dataset_bundle.py`, not a local tar file.
+- Production images are local symlinks and exceed archive scratch space; use the
+  runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
+- The v2 candidate is published; Phase 1.9 clean-worker staging/smoke is pending.
 - RunPod needs a configured dstack backend; Packet needs its registered SSH key.
 - `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
   keys/versions, sets Docker's 32G shm default, then verifies before dstack.
-- All task submissions render concrete run IDs, tags, repo commits, and GPU
-  resources before dstack; Packet targets its unique attempt-specific fleet.
+- Task submissions render concrete run IDs, tags, commits, and GPU resources;
+  Packet targets its unique attempt-specific fleet.
 - Packet rotates valid pool/region placements and never adopts existing servers.
-- A 30-minute lease prevents races. Pre-submission failures may be replaced;
-  accepted or ambiguous tasks wait for an explicit terminal dstack result.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
 - Versioning aids manual recovery; automatic resume does not read prior versions.

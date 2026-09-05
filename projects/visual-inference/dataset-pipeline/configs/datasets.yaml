@@ -18,6 +18,13 @@ datasets:
     archive: /media/sashamikoff/fb.com-mikoff/datasets/public/coco-2017-DatasetNinja.tar
     extracted_dir: raw/coco_2017
     project_subpath: null
+    official_annotations:
+      train2017:
+        path: raw/coco_2017/official/annotations/instances_train2017.json
+        sha256: 610fce4944abdeb15354cc765333805529359d12d88f2f711393ca586901d01d
+      val2017:
+        path: raw/coco_2017/official/annotations/instances_val2017.json
+        sha256: e8c7f7908f1d7278341fae127d0da654f102f11bd7b21d8aeefa635b8c810b6f
 
 storage:
   image_link_mode: symlink
@@ -34,4 +41,4 @@ validation:
   random_seed: 42
   validation_fraction: 0.1
   clip_boxes_to_image: true
-  source_test_as_validation: [woodscape_rgb_fisheye]
+  source_test_as_validation: []

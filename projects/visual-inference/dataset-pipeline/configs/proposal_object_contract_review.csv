@@ -1,0 +1,31 @@
+source_dataset,source_category,decision,approved_state,notes,reviewer
+bdd100k_images_100k,drivable_area,EXCEPTION,trusted_negative,"Coverage is often partial or limited to one lane; only annotated pixels are trusted negative.",mikoff
+bdd100k_images_100k,lane,REJECT,drop,The line annotations are too narrow to provide useful supervision.,mikoff
+nuimages,construction,ACCEPT,positive,,mikoff
+nuimages,driveable_surface,REJECT,drop,The annotation often covers only a small part of the complete driving area.,mikoff
+nuimages,ego,ACCEPT,trusted_negative,,mikoff
+woodscape_rgb_fisheye,cats_eyes_and_botts_dots,REJECT,drop,The regions are too small and behave as noise.,mikoff
+woodscape_rgb_fisheye,clean,ACCEPT,ignore,,mikoff
+woodscape_rgb_fisheye,construction,EXCEPTION,trusted_negative,"Many regions are tiny and roughly 20 percent look like building parts; retain only annotated pixels as negative.",mikoff
+woodscape_rgb_fisheye,curb,REJECT,drop,The regions are too small to provide useful supervision.,mikoff
+woodscape_rgb_fisheye,ego_vehicle,ACCEPT,trusted_negative,Some source annotations are incorrect and require later integrity handling.,mikoff
+woodscape_rgb_fisheye,fence,REJECT,positive,The annotations depict recognizable fences that are useful proposal targets.,mikoff
+woodscape_rgb_fisheye,free_space,REJECT,drop,Scene-layout annotation is not useful or reliable enough for supervision.,mikoff
+woodscape_rgb_fisheye,green_strip,REJECT,drop,The annotations often appear as an incorrect line at the camera boundary.,mikoff
+woodscape_rgb_fisheye,grouped_animals,ACCEPT,ignore,Approved with a two-instance source-scarcity exception.,mikoff
+woodscape_rgb_fisheye,grouped_botts_dots,REJECT,ignore,"Only 33 grouped, ambiguous examples exist; do not treat them as confident negatives.",mikoff
+woodscape_rgb_fisheye,grouped_pedestrian_and_animals,REJECT,positive,The region often depicts a recognizable person and should remain a proposal target.,mikoff
+woodscape_rgb_fisheye,grouped_vehicles,ACCEPT,ignore,,mikoff
+woodscape_rgb_fisheye,lane_marking,REJECT,drop,The regions are too small to provide useful supervision.,mikoff
+woodscape_rgb_fisheye,nature,REJECT,positive,Trees and grass are useful detection targets for this product.,mikoff
+woodscape_rgb_fisheye,opaque,ACCEPT,ignore,,mikoff
+woodscape_rgb_fisheye,other_ground_marking,REJECT,positive,Open-vocabulary classification may make these road markings useful proposal targets.,mikoff
+woodscape_rgb_fisheye,parking_line,ACCEPT,trusted_negative,,mikoff
+woodscape_rgb_fisheye,parking_marking,REJECT,positive,The markings are useful proposal targets.,mikoff
+woodscape_rgb_fisheye,road_surface,ACCEPT,trusted_negative,,mikoff
+woodscape_rgb_fisheye,semi_transparent,ACCEPT,ignore,,mikoff
+woodscape_rgb_fisheye,sky,ACCEPT,trusted_negative,,mikoff
+woodscape_rgb_fisheye,structure,OWNER_DEFAULT,trusted_negative,No source instances exist; future building or wall annotations default to trusted negative.,mikoff
+woodscape_rgb_fisheye,transparent,ACCEPT,ignore,,mikoff
+woodscape_rgb_fisheye,void,ACCEPT,ignore,,mikoff
+woodscape_rgb_fisheye,zebra_crossing,REJECT,drop,The source highlights individual zebra-stripe rectangles rather than a useful crossing instance.,mikoff

@@ -1,5 +1,41 @@
 # Proposal Detector Correction and Retraining Plan
 
+## Active scope: proposal detector stopping point
+
+This plan is a correction/retraining sequence within the original project's
+detector implementation and training phases. Its phase numbers do not replace
+`docs/phase2.md` or `docs/phase3.md`. See the
+[project roadmap](../projects/visual-inference/docs/proposal_detector_roadmap.md).
+
+The owner-approved current milestone ends after controlled retraining and
+acceptance of HBB/quad proposal outputs. The following scope rules take
+precedence over downstream/full-release requirements retained below:
+
+- Phase 2.1 compares proposals using corrected data and matched short runs.
+  Include the P2/min-4 ablation justified by the 16px source-object requirement.
+  Quad P2 needs proposal-level justification; no SigLIP experiment is required.
+- Phase 2.2 currently fixes K and the common decoded proposal record, source
+  coordinates and transform inversion. SigLIP crop rate, crop generation and
+  semantic crop audits are deferred.
+- Phase 2.3–2.4 use proposal recall, duplicates, background false proposals,
+  size/domain slices and inference/postprocessing cost. Downstream crop metrics
+  and SigLIP evaluation, including the proposed 1–2 point tolerance, are deferred.
+- Phase 2 selects a working architecture for loss validation and retraining,
+  retaining a control. This is not final HBB/quad selection for the semantic
+  system. Phase 3 selection uses proposal-level budgets and approved thresholds.
+- Phase 2.5 retains early export parity and resource profiling. Physical RPi
+  production acceptance belongs to a later release milestone; record measured
+  evidence and unknowns without treating desktop measurements as RPi evidence.
+- Phase 4 retains full retraining, proposal validation, visual review, export
+  parity and reproducible artifact packaging. SigLIP-dependent parts of 4.7 and
+  physical-device promotion/canary requirements in 4.8 are deferred. Stop after
+  the owner reviews the trained proposal outputs, before semantic integration.
+
+Completion of this milestone does not assert completion of the eventual full
+system release criteria below. Preserve historical benchmark data and record
+new experiment contracts/results separately. Continue plan–execute–verify with
+owner review at the agreed step boundaries.
+
 ## Problem Statement
 
 The current class-agnostic proposal detector has learned useful objectness and

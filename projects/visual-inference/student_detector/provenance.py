@@ -10,6 +10,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .augmentation import effective_augmentation_policy
 from .config import Phase3Config
 
 if TYPE_CHECKING:
@@ -101,10 +102,10 @@ def write_run_contract(
             "optimizer_steps": optimizer_steps,
             "world_size": world_size,
             "global_effective_batch": (
-                config.data.batch_size
-                * config.schedule.accumulation_steps
+                config.data.batch_size * config.schedule.accumulation_steps
             ),
         },
+        "augmentation_effective": effective_augmentation_policy(config.augmentation),
         "model_signature_sha256": model_signature(model),
         "environment": {
             "torch": torch.__version__,

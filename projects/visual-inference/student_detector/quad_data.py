@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -15,12 +14,10 @@ from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from .augmentation import apply_image_augmentation, sample_augmentation_parameters
 from .config import AugmentationConfig, DataConfig
 from .data import (
-    IMAGENET_MEAN,
     ImageRecord,
-    _mask_to_tensor,
-    _pil_to_normalized_tensor,
     build_coco_sqlite_index,
 )
 from .quad_geometry import (
@@ -133,9 +130,14 @@ class QuadProposalTransform:
         tuple[float, float, float],
         tuple[int, ...],
     ]:
-        generator = random.Random(seed)
         image = image.convert("RGB")
         width, height = image.size
+        parameters = sample_augmentation_parameters(
+            self.augmentation,
+            self.input_size,
+            training=self.training,
+            seed=seed,
+        )
         trusted_background_quads = (
             trusted_background_quads
             if trusted_background_quads is not None
@@ -149,47 +151,11 @@ class QuadProposalTransform:
                 torch.full((trusted_background_quads.shape[0],), 2, dtype=torch.long),
             )
         )
-        if (
-            self.training
-            and generator.random() < self.augmentation.horizontal_flip_probability
-        ):
-            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        if parameters.horizontal_flip:
             if all_quads.numel():
-                all_quads[..., 0] = (width - 1) - all_quads[..., 0]
-        base_scale = min(self.input_size / width, self.input_size / height)
-        if self.training:
-            scale = base_scale * generator.uniform(
-                self.augmentation.scale_min, self.augmentation.scale_max
-            )
-            translation = self.augmentation.translation_fraction * self.input_size
-            shift_x = generator.uniform(-translation, translation)
-            shift_y = generator.uniform(-translation, translation)
-        else:
-            scale, shift_x, shift_y = base_scale, 0.0, 0.0
-        offset_x = (self.input_size - width * scale) * 0.5 + shift_x
-        offset_y = (self.input_size - height * scale) * 0.5 + shift_y
-        inverse = (
-            1.0 / scale,
-            0.0,
-            -offset_x / scale,
-            0.0,
-            1.0 / scale,
-            -offset_y / scale,
-        )
-        image = image.transform(
-            (self.input_size, self.input_size),
-            Image.Transform.AFFINE,
-            inverse,
-            resample=Image.Resampling.BILINEAR,
-            fillcolor=tuple(round(channel * 255) for channel in IMAGENET_MEAN),
-        )
-        valid = Image.new("L", (width, height), color=255).transform(
-            (self.input_size, self.input_size),
-            Image.Transform.AFFINE,
-            inverse,
-            resample=Image.Resampling.NEAREST,
-            fillcolor=0,
-        )
+                all_quads[..., 0] = width - all_quads[..., 0]
+        augmented = apply_image_augmentation(image, self.input_size, parameters)
+        scale, offset_x, offset_y = augmented.transform
         transformed = all_quads * scale
         transformed[..., 0] += offset_x
         transformed[..., 1] += offset_y
@@ -230,14 +196,13 @@ class QuadProposalTransform:
                 original_area, 1e-7
             )
         if not transformed.shape[0]:
-            image_tensor = _pil_to_normalized_tensor(image)
             return (
-                image_tensor,
+                augmented.tensor,
                 quads.new_empty((0, 4, 2)),
                 ignore_quads.new_empty((0, 4, 2)),
                 trusted_background_quads.new_empty((0, 4, 2)),
-                _mask_to_tensor(valid),
-                (scale, offset_x, offset_y),
+                augmented.valid_mask,
+                augmented.transform,
                 (),
             )
         areas = polygon_signed_area(clipped_tensor).abs()
@@ -271,14 +236,13 @@ class QuadProposalTransform:
             & geometrically_valid
             & (visibility_tensor >= self.augmentation.ignore_visible_fraction)
         )
-        image_tensor = _pil_to_normalized_tensor(image)
         return (
-            image_tensor,
+            augmented.tensor,
             clipped_tensor[positive],
             clipped_tensor[ignore],
             clipped_tensor[trusted],
-            _mask_to_tensor(valid),
-            (scale, offset_x, offset_y),
+            augmented.valid_mask,
+            augmented.transform,
             tuple(torch.where(positive)[0].tolist()),
         )
 
@@ -334,7 +298,15 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
                 FROM images ORDER BY row_index
                 """
             ).fetchall()
+            state_rows = connection.execute(
+                "SELECT ignore_region, COUNT(*) FROM annotations GROUP BY ignore_region"
+            ).fetchall()
         self.records = [ImageRecord(*row) for row in rows]
+        state_names = {0: "positive", 1: "ignore", 2: "trusted_background"}
+        counts = {int(state): int(count) for state, count in state_rows}
+        self.state_counts = {
+            name: counts.get(state, 0) for state, name in state_names.items()
+        }
         self._connection: sqlite3.Connection | None = None
         self._connection_pid: int | None = None
 

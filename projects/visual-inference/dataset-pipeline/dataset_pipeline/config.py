@@ -8,11 +8,18 @@ import yaml
 
 
 @dataclass(frozen=True)
+class OfficialAnnotationConfig:
+    path: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
 class DatasetConfig:
     name: str
     archive: Path
     extracted_dir: Path
     project_subpath: str | None = None
+    official_annotations: dict[str, OfficialAnnotationConfig] | None = None
 
 
 @dataclass(frozen=True)
@@ -33,7 +40,9 @@ class Config:
         if name is None:
             return list(self.datasets.values())
         if name not in self.datasets:
-            raise ValueError(f"Unknown dataset {name!r}; choose from {', '.join(self.datasets)}")
+            raise ValueError(
+                f"Unknown dataset {name!r}; choose from {', '.join(self.datasets)}"
+            )
         return [self.datasets[name]]
 
 
@@ -52,11 +61,13 @@ DEFAULT_VALIDATION = {
     "random_seed": 42,
     "clip_boxes_to_image": True,
     "validation_fraction": 0.1,
-    "source_test_as_validation": ["woodscape_rgb_fisheye"],
+    "source_test_as_validation": [],
 }
 
 
-def _options(data: dict[str, Any], name: str, defaults: dict[str, Any]) -> dict[str, Any]:
+def _options(
+    data: dict[str, Any], name: str, defaults: dict[str, Any]
+) -> dict[str, Any]:
     supplied = data.get(name) or {}
     if not isinstance(supplied, dict):
         raise ValueError(f"{name} must be a mapping")
@@ -72,7 +83,11 @@ def load_config(path: str | Path) -> Config:
     if "workspace_root" not in data or not isinstance(data.get("datasets"), dict):
         raise ValueError("Configuration requires workspace_root and a datasets mapping")
     root_value = Path(data["workspace_root"]).expanduser()
-    root = (config_path.parent / root_value).resolve() if not root_value.is_absolute() else root_value.resolve()
+    root = (
+        (config_path.parent / root_value).resolve()
+        if not root_value.is_absolute()
+        else root_value.resolve()
+    )
     datasets: dict[str, DatasetConfig] = {}
     for name, item in data["datasets"].items():
         archive = Path(item["archive"]).expanduser()
@@ -84,9 +99,48 @@ def load_config(path: str | Path) -> Config:
         try:
             extracted.relative_to(root)
         except ValueError as exc:
-            raise ValueError(f"{name}.extracted_dir must be inside workspace_root") from exc
-        datasets[name] = DatasetConfig(name, archive.resolve(), extracted, item.get("project_subpath"))
-    taxonomy = Path(data.get("taxonomy", config_path.parent / "automotive_taxonomy_mapping.json"))
+            raise ValueError(
+                f"{name}.extracted_dir must be inside workspace_root"
+            ) from exc
+        official_annotations = None
+        if item.get("official_annotations") is not None:
+            if not isinstance(item["official_annotations"], dict):
+                raise ValueError(f"{name}.official_annotations must be a mapping")
+            official_annotations = {}
+            for split, source in item["official_annotations"].items():
+                if not isinstance(source, dict) or not source.get("path"):
+                    raise ValueError(
+                        f"{name}.official_annotations.{split} requires path and sha256"
+                    )
+                path = Path(source["path"]).expanduser()
+                if not path.is_absolute():
+                    path = (root / path).resolve()
+                try:
+                    path.relative_to(root)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{name}.official_annotations.{split}.path must be inside workspace_root"
+                    ) from exc
+                sha256 = str(source.get("sha256", "")).lower()
+                if len(sha256) != 64 or any(
+                    character not in "0123456789abcdef" for character in sha256
+                ):
+                    raise ValueError(
+                        f"{name}.official_annotations.{split}.sha256 must be 64 hex characters"
+                    )
+                official_annotations[str(split)] = OfficialAnnotationConfig(
+                    path, sha256
+                )
+        datasets[name] = DatasetConfig(
+            name,
+            archive.resolve(),
+            extracted,
+            item.get("project_subpath"),
+            official_annotations,
+        )
+    taxonomy = Path(
+        data.get("taxonomy", config_path.parent / "automotive_taxonomy_mapping.json")
+    )
     if not taxonomy.is_absolute():
         taxonomy = (config_path.parent / taxonomy).resolve()
     storage = _options(data, "storage", DEFAULT_STORAGE)
@@ -94,18 +148,23 @@ def load_config(path: str | Path) -> Config:
     validation = _options(data, "validation", DEFAULT_VALIDATION)
     if storage["image_link_mode"] not in {"symlink", "hardlink", "copy"}:
         raise ValueError("storage.image_link_mode must be symlink, hardlink, or copy")
-    if not isinstance(validation["preview_count"], int) or validation["preview_count"] < 1:
+    if (
+        not isinstance(validation["preview_count"], int)
+        or validation["preview_count"] < 1
+    ):
         raise ValueError("validation.preview_count must be a positive integer")
     fraction = validation["validation_fraction"]
     if not isinstance(fraction, (int, float)) or not 0 < fraction < 1:
         raise ValueError("validation.validation_fraction must be between 0 and 1")
-    if (
-        not isinstance(validation["source_test_as_validation"], list)
-        or any(not isinstance(name, str) for name in validation["source_test_as_validation"])
+    if not isinstance(validation["source_test_as_validation"], list) or any(
+        not isinstance(name, str) for name in validation["source_test_as_validation"]
     ):
-        raise ValueError("validation.source_test_as_validation must be a list of dataset names")
+        raise ValueError(
+            "validation.source_test_as_validation must be a list of dataset names"
+        )
     if any(
-        not isinstance(aliases, list) or not aliases
+        not isinstance(aliases, list)
+        or not aliases
         or any(not isinstance(alias, str) or not alias for alias in aliases)
         for aliases in splits.values()
     ):
@@ -115,8 +174,13 @@ def load_config(path: str | Path) -> Config:
 
 def ensure_workspace(config: Config) -> None:
     for relative in (
-        "raw", "intermediate/filtered", "intermediate/detection",
-        "intermediate/coco", "output/annotations", "output/images/train",
-        "output/images/val", "reports/previews",
+        "raw",
+        "intermediate/filtered",
+        "intermediate/detection",
+        "intermediate/coco",
+        "output/annotations",
+        "output/images/train",
+        "output/images/val",
+        "reports/previews",
     ):
         (config.workspace_root / relative).mkdir(parents=True, exist_ok=True)

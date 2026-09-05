@@ -151,6 +151,27 @@ def test_padding_and_ignore_are_masked_but_positive_overrides():
     assert not targets.valid_point_masks[0][0, :, 7].any()
 
 
+def test_positive_overrides_coincident_ignore_and_trusted_background():
+    sample = replace(
+        _sample(),
+        ignore_boxes=torch.tensor([[0.0, 0.0, 64.0, 64.0]]),
+        trusted_background_boxes=torch.tensor([[0.0, 0.0, 64.0, 64.0]]),
+    )
+
+    targets = TargetBuilder(ATSSAssigner())(
+        [sample],
+        ((8, 8), (4, 4), (2, 2)),
+        device=torch.device("cpu"),
+    )
+
+    assert targets.positive_mask.any()
+    assert torch.equal(targets.objectness_mask, targets.positive_mask)
+    torch.testing.assert_close(
+        targets.objectness_weights[targets.positive_mask],
+        torch.ones_like(targets.objectness_weights[targets.positive_mask]),
+    )
+
+
 def test_synthetic_forward_loss_backward_has_finite_gradients():
     model = StudentDetector(backbone=StubBackbone()).train()
     samples = [_sample(), _sample(dense=False)]

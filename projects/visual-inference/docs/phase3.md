@@ -1,5 +1,11 @@
 # Phase 3: Proposal Training
 
+This is the original project training phase. Correction-plan architecture, loss
+and retraining work extends it; those work packages do not rename the original
+phases. See the [proposal detector roadmap](proposal_detector_roadmap.md).
+The active stopping point is a retrained, visually reviewed proposal detector.
+SigLIP integration and downstream semantic evaluation are deferred.
+
 Phase 3 is the current class-agnostic proposal baseline. It trains a small
 MobileNetV4 detector to rank foreground regions and regress quadrilateral boxes.
 This baseline is retained as a measurable localization scaffold while the
@@ -34,7 +40,8 @@ Only datasets already present in the workspace are supported:
 
 The dataset pipeline lives in
 [`dataset-pipeline/`](../dataset-pipeline/). It converts the four local
-Supervisely exports into a unified COCO view, preserves source metadata, keeps
+Supervisely exports (with official COCO identity recovery) into generated
+`proposal-manifest.v2` supervision and a compatibility COCO view, preserves source metadata, keeps
 raw polygon annotations under the data workspace, and validates final image
 links.
 
@@ -45,6 +52,11 @@ the detector does not train closed-set class logits.
 ## Commands
 
 Run from this directory:
+
+The commands below document existing entry points. A corrected production run
+requires the clean-worker gate and an approved new training contract; these
+examples do not authorize a launch or reproduce the historical benchmark under
+changed code/data.
 
 ```bash
 uv sync --frozen --group cloud --inexact

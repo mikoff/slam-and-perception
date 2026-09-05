@@ -47,7 +47,7 @@ def test_open_world_train_moves_unseen_to_ignore_and_val_keeps_it(
     tmp_path: Path,
 ) -> None:
     base = {
-        "schema_version": "quad-proposal-manifest.v1",
+        "schema_version": "proposal-manifest.v2",
         "object_contract": "bounded_promptable_physical_instance",
     }
     manifests = {

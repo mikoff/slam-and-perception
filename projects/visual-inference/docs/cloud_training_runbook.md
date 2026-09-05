@@ -64,24 +64,71 @@ aws s3 cp /tmp/phase3-2026-08-09/dataset-manifest.json \
 ```
 
 Never overwrite a published dataset ID. The worker validates archive size and
-SHA-256, rejects unsafe tar members, verifies every extracted file, and only then
-atomically publishes the local directory. A matching staged manifest is reused.
+SHA-256 and rejects unsafe tar members. Historical v1 manifests verify every
+file; streamed v2 manifests verify extracted size and required indexes. Only
+then does staging atomically publish the local directory. A matching staged
+manifest is reused.
 Before GPU submission, GitHub downloads and validates only the small S3 manifest.
 The full archive is downloaded once, directly onto the selected GPU worker.
 
 Production images are symlinked and the dereferenced archive is larger than the
-available local scratch disk. Stream it directly to S3; the command hashes every
-file, dereferences image links into regular tar members, hashes the archive
-stream, saves a local manifest, and publishes that manifest last:
+available local scratch disk. Stream it directly with native tools. GNU tar
+dereferences image links, `pv` reports source-byte progress, `pigz -1` compresses
+in parallel, and `tee` records the exact uploaded-stream SHA-256. Build and
+publish the worker manifest only after the archive upload succeeds:
 
 ```bash
-uv run --group cloud python scripts/cloud/upload_dataset_bundle.py \
-  --root ../../data/visual-inference-datasets/output \
-  --dataset-id <new-immutable-id> \
-  --bucket "$S3_BUCKET" \
-  --endpoint "$S3_ENDPOINT_URL" \
-  --manifest-output ../../data/visual-inference-datasets/cloud-bundles/<new-immutable-id>/dataset-manifest.json
+DATASET_ROOT=/absolute/path/to/output
+DATASET_ID='REPLACE_WITH_NEW_IMMUTABLE_ID'
+BUNDLE_DIR=/absolute/path/to/cloud-bundles/$DATASET_ID
+ARCHIVE_KEY=datasets/$DATASET_ID/dataset.tar.gz
+DATASET_CONTRACT_SHA256='REPLACE_WITH_APPROVED_CONTRACT_SHA256'
+mkdir -p "$BUNDLE_DIR"
+
+SOURCE_BYTES=$(find -L "$DATASET_ROOT" -type f -printf '%s\n' | \
+  awk '{total += $1} END {printf "%.0f\n", total}')
+set -euo pipefail
+HASH_PIPE_DIR=$(mktemp -d "$BUNDLE_DIR/.archive-hash.XXXXXX")
+mkfifo "$HASH_PIPE_DIR/stream"
+sha256sum < "$HASH_PIPE_DIR/stream" > "$BUNDLE_DIR/dataset.tar.gz.sha256" &
+HASH_PID=$!
+tar --create --dereference --hard-dereference --file=- --directory="$DATASET_ROOT" . | \
+  pv --size "$SOURCE_BYTES" | \
+  pigz -1 | \
+  tee "$HASH_PIPE_DIR/stream" | \
+  aws s3 cp - "s3://$S3_BUCKET/$ARCHIVE_KEY" \
+    --endpoint-url "$S3_ENDPOINT_URL" \
+    --expected-size "$SOURCE_BYTES" \
+    --no-progress
+wait "$HASH_PID"
+unlink "$HASH_PIPE_DIR/stream"
+rmdir "$HASH_PIPE_DIR"
+
+ARCHIVE_SHA256=$(awk '{print $1}' "$BUNDLE_DIR/dataset.tar.gz.sha256")
+ARCHIVE_SIZE=$(aws s3api head-object \
+  --bucket "$S3_BUCKET" --key "$ARCHIVE_KEY" \
+  --endpoint-url "$S3_ENDPOINT_URL" \
+  --query ContentLength --output text)
+uv run python scripts/cloud/build_streamed_dataset_manifest.py \
+  --root "$DATASET_ROOT" \
+  --dataset-id "$DATASET_ID" \
+  --archive-key "$ARCHIVE_KEY" \
+  --archive-size "$ARCHIVE_SIZE" \
+  --archive-sha256 "$ARCHIVE_SHA256" \
+  --extracted-size "$SOURCE_BYTES" \
+  --dataset-contract-sha256 "$DATASET_CONTRACT_SHA256" \
+  --output "$BUNDLE_DIR/dataset-manifest.json"
+aws s3 cp "$BUNDLE_DIR/dataset-manifest.json" \
+  "s3://$S3_BUCKET/datasets/$DATASET_ID/dataset-manifest.json" \
+  --endpoint-url "$S3_ENDPOINT_URL" --no-progress
 ```
+
+Before starting, use `head-object` for both final keys and refuse to overwrite
+either one. Afterward, compare the small remote manifest byte-for-byte with the
+local file. The v2 manifest uses one archive-level SHA-256 and verifies aggregate
+extracted size plus required indexes; it does not redundantly hash every file.
+The archive stream hash is verified when the first clean worker downloads it;
+a multipart ETag is not an archive SHA-256.
 
 ## Dispatch and monitor
 

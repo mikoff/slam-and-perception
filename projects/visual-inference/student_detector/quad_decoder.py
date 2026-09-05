@@ -71,13 +71,13 @@ def decode_dense_quad_output(
         px = decoded[..., 0]
         py = decoded[..., 1]
         pts = points.unsqueeze(0)
-        l = (pts[..., 0] - px.min(dim=-1).values).clamp(min=1e-4)
-        r = (px.max(dim=-1).values - pts[..., 0]).clamp(min=1e-4)
-        t = (pts[..., 1] - py.min(dim=-1).values).clamp(min=1e-4)
-        b = (py.max(dim=-1).values - pts[..., 1]).clamp(min=1e-4)
+        left = (pts[..., 0] - px.min(dim=-1).values).clamp(min=1e-4)
+        right = (px.max(dim=-1).values - pts[..., 0]).clamp(min=1e-4)
+        top = (pts[..., 1] - py.min(dim=-1).values).clamp(min=1e-4)
+        bottom = (py.max(dim=-1).values - pts[..., 1]).clamp(min=1e-4)
         centerness = torch.sqrt(
-            (torch.minimum(l, r) / torch.maximum(l, r)) *
-            (torch.minimum(t, b) / torch.maximum(t, b))
+            (torch.minimum(left, right) / torch.maximum(left, right)) *
+            (torch.minimum(top, bottom) / torch.maximum(top, bottom))
         ).clamp(min=1e-4)
         scores = (scores ** (1.0 - centerness_alpha)) * (centerness ** centerness_alpha)
     return decoded, scores

@@ -235,7 +235,7 @@ def _account_source_instances(config: Config) -> dict[str, Any]:
         detection = config.workspace_root / "intermediate/detection" / dataset
         for split, image_path, annotation_path in iter_project_images(filtered):
             filtered_data = read_json(annotation_path)
-            eligible, duplicates = deduplicate_geometry_representations(
+            eligible, removals = deduplicate_geometry_representations(
                 filtered_data.get("objects", [])
             )
             detection_path = detection / split / "ann" / f"{image_path.name}.json"
@@ -254,7 +254,7 @@ def _account_source_instances(config: Config) -> dict[str, Any]:
             }
             counts = by_source[dataset]
             counts["source_representations"] += len(filtered_data.get("objects", []))
-            counts["deduplicated_representations"] += duplicates
+            counts["deduplicated_representations"] += len(removals)
             counts["resolved_source_ignore"] += 0
             counts["eligible_positive_instances"] += sum(
                 not bool(obj.get("ignoreRegion")) for obj in eligible
@@ -346,8 +346,8 @@ def _open_world_views(
                 is_coco = original_image["source_dataset"] == "coco_2017"
                 seen = copied["source_category"] in VOC20_SEEN
                 copied["seen_status"] = (
-                    "seen" if seen else "unseen"
-                ) if is_coco else "auxiliary"
+                    ("seen" if seen else "unseen") if is_coco else "auxiliary"
+                )
                 counts[f"{split}_{copied['seen_status']}"] += 1
                 if split == "train" and is_coco and not seen:
                     copied["original_state"] = "positive"
@@ -883,7 +883,9 @@ def generate_g1_bundle(
         "sample_coverage": sampled_coverage,
         "review": {
             "status": "complete" if owner_review_complete else "pending",
-            "policy_report": str(policy_path.resolve()) if policy_path.exists() else None,
+            "policy_report": str(policy_path.resolve())
+            if policy_path.exists()
+            else None,
             "owner_accepted_automatic_labels": owner_review_complete,
             "instructions": "REVIEW_INSTRUCTIONS.md",
         },

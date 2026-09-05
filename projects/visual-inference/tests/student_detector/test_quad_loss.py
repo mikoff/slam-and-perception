@@ -16,9 +16,7 @@ def _sample() -> SimpleNamespace:
         image=torch.zeros(3, 64, 64),
         quads=torch.stack((quad_from_bbox([8.0, 8.0, 40.0, 40.0]),)),
         ignore_quads=torch.empty((0, 4, 2)),
-        trusted_background_quads=torch.stack((
-            quad_from_bbox([0.0, 0.0, 64.0, 64.0]),
-        )),
+        trusted_background_quads=torch.stack((quad_from_bbox([0.0, 0.0, 64.0, 64.0]),)),
         valid_mask=torch.ones(64, 64, dtype=torch.bool),
         background_supervision=True,
     )
@@ -26,15 +24,32 @@ def _sample() -> SimpleNamespace:
 
 def test_quad_targets_and_loss_are_finite() -> None:
     shapes = ((8, 8), (4, 4), (2, 2))
-    targets = QuadTargetBuilder(QuadAssigner())([_sample()], shapes, device=torch.device("cpu"))
+    targets = QuadTargetBuilder(QuadAssigner())(
+        [_sample()], shapes, device=torch.device("cpu")
+    )
     output = QuadDetectorOutput(
         quality=tuple(torch.zeros(1, 1, h, w, requires_grad=True) for h, w in shapes),
-        corner_offsets=tuple(torch.zeros(1, 8, h, w, requires_grad=True) for h, w in shapes),
+        corner_offsets=tuple(
+            torch.zeros(1, 8, h, w, requires_grad=True) for h, w in shapes
+        ),
     )
     result = QuadProposalLoss()(output, targets)
     assert torch.isfinite(result.total)
     result.total.backward()
     assert all(t.grad is not None for t in output.corner_offsets)
+
+
+def test_quad_positive_overrides_coincident_ignore_and_trusted_background() -> None:
+    sample = _sample()
+    sample.ignore_quads = torch.stack((quad_from_bbox([0.0, 0.0, 64.0, 64.0]),))
+
+    targets = QuadTargetBuilder(QuadAssigner())(
+        [sample], ((8, 8), (4, 4), (2, 2)), device=torch.device("cpu")
+    )
+
+    assert targets.positive_mask.any()
+    assert not targets.trusted_background_mask.any()
+    assert not targets.weak_background_mask.any()
 
 
 def test_corner_loss_is_invariant_to_target_winding() -> None:
@@ -70,7 +85,9 @@ def test_validity_loss_penalizes_collapsed_and_bow_tie_quads() -> None:
     valid = torch.tensor([[[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]])
     collapsed = torch.zeros_like(valid)
     bow_tie = torch.tensor([[[-1.0, -1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, 1.0]]])
-    assert loss._validity_loss(collapsed, positive) > loss._validity_loss(valid, positive)
+    assert loss._validity_loss(collapsed, positive) > loss._validity_loss(
+        valid, positive
+    )
     assert loss._validity_loss(bow_tie, positive) > loss._validity_loss(valid, positive)
 
 
@@ -78,8 +95,12 @@ def test_gwd_auxiliary_is_zero_for_identical_quads_and_permutation_invariant() -
     target = torch.tensor([[[-1.0, -0.5], [1.0, -0.5], [1.0, 0.5], [-1.0, 0.5]]])
     positive = torch.tensor([True])
     identical = QuadProposalLoss._gwd_loss(target, target, positive)
-    permuted = QuadProposalLoss._gwd_loss(torch.roll(target, 2, dims=1), target, positive)
-    torch.testing.assert_close(identical, torch.zeros_like(identical), atol=1e-5, rtol=0)
+    permuted = QuadProposalLoss._gwd_loss(
+        torch.roll(target, 2, dims=1), target, positive
+    )
+    torch.testing.assert_close(
+        identical, torch.zeros_like(identical), atol=1e-5, rtol=0
+    )
     torch.testing.assert_close(permuted, identical, atol=1e-5, rtol=0)
 
 
@@ -97,7 +118,9 @@ def test_gwd_auxiliary_has_finite_geometry_gradients() -> None:
 
 def test_zero_gwd_weight_skips_auxiliary_computation(monkeypatch) -> None:
     shapes = ((8, 8), (4, 4), (2, 2))
-    targets = QuadTargetBuilder(QuadAssigner())([_sample()], shapes, device=torch.device("cpu"))
+    targets = QuadTargetBuilder(QuadAssigner())(
+        [_sample()], shapes, device=torch.device("cpu")
+    )
     output = QuadDetectorOutput(
         quality=tuple(torch.zeros(1, 1, h, w) for h, w in shapes),
         corner_offsets=tuple(torch.zeros(1, 8, h, w) for h, w in shapes),

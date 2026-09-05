@@ -10,9 +10,9 @@ import pytest
 
 from scripts.cloud.build_dataset_bundle import build_bundle
 from scripts.cloud.dataset_staging import (
-    AwsCli,
     required_staging_bytes,
     stage_dataset,
+    validate_manifest,
 )
 
 
@@ -63,6 +63,32 @@ def _objects(dataset_id: str, archive: bytes) -> _Objects:
     )
 
 
+def _streamed_objects(dataset_id: str, archive: bytes) -> _Objects:
+    manifest = {
+        "schema_version": "visual-inference-dataset.v2",
+        "dataset_id": dataset_id,
+        "dataset_contract_sha256": "b" * 64,
+        "archive": {
+            "key": f"datasets/{dataset_id}/dataset.tar.gz",
+            "size": len(archive),
+            "sha256": hashlib.sha256(archive).hexdigest(),
+        },
+        "extracted_size": 6,
+        "required_files": [
+            "indexes/quad_train.sqlite",
+            "indexes/quad_val.sqlite",
+        ],
+    }
+    return _Objects(
+        {
+            f"s3://bucket/datasets/{dataset_id}/dataset-manifest.json": json.dumps(
+                manifest
+            ).encode(),
+            f"s3://bucket/datasets/{dataset_id}/dataset.tar.gz": archive,
+        }
+    )
+
+
 def test_disk_requirement_counts_archive_and_extracted_files() -> None:
     objects = _objects("v1", b"archive")
     manifest = json.loads(
@@ -82,6 +108,29 @@ def test_dataset_is_verified_and_atomically_reused(tmp_path: Path) -> None:
     assert first == second
     assert (first / "images/example.txt").read_bytes() == b"pixels"
     assert objects.downloads == 3
+
+
+def test_streamed_manifest_uses_archive_hash_and_required_files(
+    tmp_path: Path,
+) -> None:
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w:gz") as bundle:
+        for path, payload in (
+            ("indexes/quad_train.sqlite", b"abc"),
+            ("indexes/quad_val.sqlite", b"def"),
+        ):
+            info = tarfile.TarInfo(path)
+            info.size = len(payload)
+            bundle.addfile(info, io.BytesIO(payload))
+    objects = _streamed_objects("v2", stream.getvalue())
+    staged = stage_dataset(
+        bucket="bucket", dataset_id="v2", destination_root=tmp_path, aws=objects
+    )
+    assert (staged / "indexes/quad_train.sqlite").read_bytes() == b"abc"
+    manifest = json.loads(
+        objects.values["s3://bucket/datasets/v2/dataset-manifest.json"]
+    )
+    assert required_staging_bytes(manifest) == len(stream.getvalue()) + 6
 
 
 def test_dataset_rejects_unsafe_archive_member(tmp_path: Path) -> None:
@@ -138,3 +187,46 @@ def test_bundle_builder_requires_prebuilt_indexes(tmp_path: Path) -> None:
     (source / "image.jpg").write_bytes(b"pixels")
     with pytest.raises(FileNotFoundError, match="quad_train.sqlite"):
         build_bundle(root=source, dataset_id="v1", output=tmp_path / "bundle")
+
+
+def test_v2_rejects_missing_required_index(tmp_path: Path) -> None:
+    objects = _streamed_objects("v2", _archive())
+    with pytest.raises(ValueError, match="required dataset file is missing"):
+        stage_dataset(
+            bucket="bucket", dataset_id="v2", destination_root=tmp_path, aws=objects
+        )
+    assert not (tmp_path / "v2").exists()
+
+
+def test_v2_rejects_incorrect_extracted_size(tmp_path: Path) -> None:
+    objects = _streamed_objects("v2", _archive())
+    uri = "s3://bucket/datasets/v2/dataset-manifest.json"
+    manifest = json.loads(objects.values[uri])
+    manifest["extracted_size"] = 7
+    objects.values[uri] = json.dumps(manifest).encode()
+    with pytest.raises(ValueError, match="extracted size mismatch"):
+        stage_dataset(
+            bucket="bucket", dataset_id="v2", destination_root=tmp_path, aws=objects
+        )
+    assert not (tmp_path / "v2").exists()
+
+
+def test_v2_rejects_same_size_archive_corruption(tmp_path: Path) -> None:
+    objects = _streamed_objects("v2", _archive())
+    uri = "s3://bucket/datasets/v2/dataset.tar.gz"
+    payload = objects.values[uri]
+    objects.values[uri] = bytes([payload[0] ^ 1]) + payload[1:]
+    with pytest.raises(ValueError, match="archive checksum mismatch"):
+        stage_dataset(
+            bucket="bucket", dataset_id="v2", destination_root=tmp_path, aws=objects
+        )
+
+
+def test_v2_rejects_nonhex_digest() -> None:
+    objects = _streamed_objects("v2", _archive())
+    manifest = json.loads(
+        objects.values["s3://bucket/datasets/v2/dataset-manifest.json"]
+    )
+    manifest["archive"]["sha256"] = "z" * 64
+    with pytest.raises(ValueError, match="SHA-256"):
+        validate_manifest(manifest, "v2")

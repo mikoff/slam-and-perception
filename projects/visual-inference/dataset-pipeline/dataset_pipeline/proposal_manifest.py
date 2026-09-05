@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from .reports import read_json, write_json
+from .taxonomy import Taxonomy
 
 
-SCHEMA_VERSION = "quad-proposal-manifest.v1"
+SCHEMA_VERSION = "proposal-manifest.v2"
 
 
 def _signed_area(points: list[list[float]]) -> float:
@@ -23,7 +24,11 @@ def _signed_area(points: list[list[float]]) -> float:
 def _valid_clockwise_quad(points: list[list[float]]) -> bool:
     turns = []
     for index in range(4):
-        first, second, third = points[index], points[(index + 1) % 4], points[(index + 2) % 4]
+        first, second, third = (
+            points[index],
+            points[(index + 1) % 4],
+            points[(index + 2) % 4],
+        )
         turns.append(
             (second[0] - first[0]) * (third[1] - second[1])
             - (second[1] - first[1]) * (third[0] - second[0])
@@ -57,37 +62,135 @@ def _record(annotation: dict[str, Any], state: str) -> dict[str, Any]:
         "state": state,
         "valid": True,
         "source_annotation_id": str(annotation.get("source_annotation_id", "")),
+        "source_annotation_identity_kind": str(
+            annotation.get("source_annotation_identity_kind", "source_object_id")
+        ),
+        "source_dataset": str(annotation.get("source_dataset", "unknown")),
+        "source_split": str(annotation.get("source_split", "unknown")),
+        "source_image_id": str(annotation.get("source_image_id", "")),
         "source_category": str(annotation.get("source_category", "unknown")),
+        "original_category": str(
+            annotation.get(
+                "original_category", annotation.get("source_category", "unknown")
+            )
+        ),
+        "canonical_category": str(annotation.get("canonical_category", "unknown")),
+        "original_iscrowd": bool(annotation.get("original_iscrowd", False)),
+        "original_group": bool(annotation.get("original_group", False)),
+        "geometry_conversion_method": str(
+            annotation.get("geometry_conversion_method", "source_hbb")
+        ),
+        "supervision_state": state,
+        "exclusion_reason": str(annotation.get("exclusion_reason", "")),
         "aliases": list(annotation.get("aliases", [])),
+        "attributes": dict(annotation.get("attributes") or {}),
     }
 
 
-def build_manifest(data: dict[str, Any], split: str) -> dict[str, Any]:
+def _contained_component_indices(
+    records: list[dict[str, Any]], taxonomy: Taxonomy
+) -> set[int]:
+    policy = (
+        taxonomy.data.get("proposal_object_contract", {})
+        .get("global_policies", {})
+        .get("nested_components", {})
+    )
+    components = set(policy.get("component_categories", []))
+    parents = set(policy.get("parent_categories", []))
+    threshold = float(policy.get("containment_threshold", 0.8))
+    parent_boxes = [
+        record["bbox"]
+        for record in records
+        if record.get("canonical_category") in parents
+        or record.get("source_category") in parents
+    ]
+    ignored = set()
+    for index, record in enumerate(records):
+        if (
+            record.get("canonical_category") not in components
+            and record.get("source_category") not in components
+        ):
+            continue
+        x, y, width, height = map(float, record["bbox"])
+        area = max(width * height, 1e-7)
+        for px, py, pwidth, pheight in parent_boxes:
+            intersection_width = max(0.0, min(x + width, px + pwidth) - max(x, px))
+            intersection_height = max(0.0, min(y + height, py + pheight) - max(y, py))
+            if intersection_width * intersection_height / area > threshold:
+                ignored.add(index)
+                break
+    return ignored
+
+
+def build_manifest(
+    data: dict[str, Any], split: str, taxonomy: Taxonomy | None = None
+) -> dict[str, Any]:
     """Project merged COCO data into the compact loader-facing schema."""
     annotations_by_image: dict[int, list[dict[str, Any]]] = {}
     for annotation in data.get("annotations", []):
-        annotations_by_image.setdefault(int(annotation["image_id"]), []).append(annotation)
+        annotations_by_image.setdefault(int(annotation["image_id"]), []).append(
+            annotation
+        )
     images = []
     for image in data.get("images", []):
         positive: list[dict[str, Any]] = []
         ignore: list[dict[str, Any]] = []
+        trusted_background: list[dict[str, Any]] = []
         for annotation in annotations_by_image.get(int(image["id"]), []):
-            state = "ignore" if bool(annotation.get("ignore_region") or annotation.get("iscrowd")) else "positive"
-            (ignore if state == "ignore" else positive).append(_record(annotation, state))
-        images.append({
-            "image_id": int(image["id"]),
-            "file_name": str(image["file_name"]),
-            "width": int(image["width"]),
-            "height": int(image["height"]),
-            "source_dataset": str(image.get("source_dataset", "unknown")),
-            "source_split": str(image.get("source_split", split)),
-            "source_image_id": str(image.get("source_image_id", "")),
-            "camera_type": str(image.get("camera_type", "perspective")),
-            "background_supervision": False,
-            "positive": positive,
-            "ignore": ignore,
-            "trusted_background": [],
-        })
+            state = str(
+                annotation.get(
+                    "supervision_state",
+                    "ignore"
+                    if bool(
+                        annotation.get("ignore_region") or annotation.get("iscrowd")
+                    )
+                    else "positive",
+                )
+            )
+            if state == "trusted_negative":
+                state = "trusted_background"
+            if state not in {"positive", "ignore", "trusted_background"}:
+                raise ValueError(f"unsupported generated supervision state: {state}")
+            if state == "positive" and bool(
+                annotation.get("ignore_region") or annotation.get("iscrowd")
+            ):
+                raise ValueError("positive annotation contradicts ignore/crowd flags")
+            destination = {
+                "positive": positive,
+                "ignore": ignore,
+                "trusted_background": trusted_background,
+            }[state]
+            destination.append(_record(annotation, state))
+        if taxonomy is not None:
+            component_indices = _contained_component_indices(positive, taxonomy)
+            if component_indices:
+                retained = []
+                for index, record in enumerate(positive):
+                    if index not in component_indices:
+                        retained.append(record)
+                        continue
+                    record["state"] = "ignore"
+                    record["supervision_state"] = "ignore"
+                    record["exclusion_reason"] = "contained_component_of_parent"
+                    ignore.append(record)
+                positive = retained
+        images.append(
+            {
+                "image_id": int(image["id"]),
+                "file_name": str(image["file_name"]),
+                "width": int(image["width"]),
+                "height": int(image["height"]),
+                "source_dataset": str(image.get("source_dataset", "unknown")),
+                "source_split": str(image.get("source_split", split)),
+                "source_image_id": str(image.get("source_image_id", "")),
+                "source_sequence_id": str(image.get("source_sequence_id", "")),
+                "camera_type": str(image.get("camera_type", "perspective")),
+                "background_supervision": False,
+                "positive": positive,
+                "ignore": ignore,
+                "trusted_background": trusted_background,
+            }
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "split": split,
@@ -96,11 +199,15 @@ def build_manifest(data: dict[str, Any], split: str) -> dict[str, Any]:
     }
 
 
-def write_manifests(output_dir: Path, data_by_split: dict[str, dict[str, Any]]) -> list[Path]:
+def write_manifests(
+    output_dir: Path,
+    data_by_split: dict[str, dict[str, Any]],
+    taxonomy: Taxonomy | None = None,
+) -> list[Path]:
     paths = []
     for split, data in data_by_split.items():
         path = output_dir / "annotations" / f"proposals_{split}.json"
-        write_json(path, build_manifest(data, split), compact=True)
+        write_json(path, build_manifest(data, split, taxonomy), compact=True)
         paths.append(path)
     return paths
 
@@ -137,24 +244,46 @@ def validate_manifest(path: Path, image_root: Path) -> dict[str, Any]:
                 ("trusted_background", image.get("trusted_background", [])),
             ):
                 for annotation in records:
-                    if annotation.get("state") != state or annotation.get("valid") is not True:
+                    if (
+                        annotation.get("state") != state
+                        or annotation.get("valid") is not True
+                    ):
                         errors.append(f"image {image_id}: invalid {state} record state")
                     annotation_count += 1
                     quad = _quad(annotation)
                     if not _valid_clockwise_quad(quad):
-                        errors.append(f"image {image_id}: {state} quad is not valid clockwise convex geometry")
+                        errors.append(
+                            f"image {image_id}: {state} quad is not valid clockwise convex geometry"
+                        )
                     coverage = float(annotation.get("fit_coverage", 0.0))
                     tightness = float(annotation.get("fit_tightness", math.nan))
                     if coverage < 0.98:
                         coverage_failures += 1
-                        errors.append(f"image {image_id}: {state} fit coverage is below 0.98")
+                        errors.append(
+                            f"image {image_id}: {state} fit coverage is below 0.98"
+                        )
                     if not math.isfinite(tightness) or not 0.0 <= tightness <= 1.0:
-                        errors.append(f"image {image_id}: {state} fit tightness must be in [0, 1]")
-                    if state == "trusted_background" or annotation.get("geometry_tier") in {"source_quad", "fitted_quad", "source_hbb", "rotated_rect", "hbb_fallback"}:
+                        errors.append(
+                            f"image {image_id}: {state} fit tightness must be in [0, 1]"
+                        )
+                    if state == "trusted_background" or annotation.get(
+                        "geometry_tier"
+                    ) in {
+                        "source_quad",
+                        "fitted_quad",
+                        "source_hbb",
+                        "rotated_rect",
+                        "hbb_fallback",
+                    }:
                         accepted_count += 1
                     xs = [point[0] for point in quad]
                     ys = [point[1] for point in quad]
-                    if min(xs) < 0 or min(ys) < 0 or max(xs) > int(image["width"]) or max(ys) > int(image["height"]):
+                    if (
+                        min(xs) < 0
+                        or min(ys) < 0
+                        or max(xs) > int(image["width"])
+                        or max(ys) > int(image["height"])
+                    ):
                         errors.append(f"image {image_id}: quad outside image")
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(f"invalid image record: {exc}")

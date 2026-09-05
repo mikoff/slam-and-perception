@@ -7,6 +7,7 @@ import os
 import random
 import signal
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ import torch
 from torch import Tensor, nn
 
 from .config import Phase3Config
+from .data import DomainMixtureBatchSampler, mixture_quota_delta
 from .training_optimization import (
     ExponentialMovingAverage,
     WarmupCosine,
@@ -130,11 +132,41 @@ def _runtime_contract() -> dict[str, str]:
     }
 
 
+def _reduced_source_counts(
+    accelerator: Any,
+    counts: Mapping[str, int],
+    sources: Sequence[str],
+    device: torch.device,
+) -> dict[str, int]:
+    values = torch.tensor(
+        [counts.get(source, 0) for source in sources],
+        dtype=torch.int64,
+        device=device,
+    )
+    if accelerator.num_processes > 1:
+        values = accelerator.reduce(values, reduction="sum")
+    return {
+        source: int(value)
+        for source, value in zip(sources, values.detach().cpu().tolist(), strict=True)
+    }
+
+
+def _domain_counts(
+    source_counts: Mapping[str, int], config: Phase3Config
+) -> dict[str, int]:
+    result = {domain: 0 for domain in config.data.domain_weights}
+    for source, count in source_counts.items():
+        result[config.data.source_domains[source]] += count
+    return result
+
+
 def _verify_runtime_contract(
     checkpoint: Mapping[str, Any],
     resume_contract: Mapping[str, str] | None = None,
 ) -> None:
-    expected = dict(resume_contract) if resume_contract is not None else _runtime_contract()
+    expected = (
+        dict(resume_contract) if resume_contract is not None else _runtime_contract()
+    )
     recorded = checkpoint.get("run_contract", {})
     for key, value in expected.items():
         if recorded.get(key) != value:
@@ -284,6 +316,7 @@ def train_proposals(
         warmup_steps=config.schedule.warmup_steps,
         min_ratio=config.schedule.min_lr_ratio,
     )
+    mixture_tracking = isinstance(train_loader.batch_sampler, DomainMixtureBatchSampler)
     model, optimizer, train_loader = accelerator.prepare(model, optimizer, train_loader)
     base_model = accelerator.unwrap_model(model)
     ema = ExponentialMovingAverage(
@@ -386,6 +419,10 @@ def train_proposals(
             running: dict[str, Tensor] = {}
             batches = 0
             last_batch_in_epoch = epoch_resume_batch
+            source_names = tuple(config.data.source_weights)
+            epoch_observed_local: Counter[str] = Counter()
+            window_observed_local: Counter[str] = Counter()
+            window_start_sample = epoch_resume_batch * config.data.batch_size
             previous_batch_finished = time.perf_counter()
 
             for batch_index, (images, samples) in enumerate(
@@ -398,6 +435,10 @@ def train_proposals(
                 batch_in_epoch = batch_index + 1
                 if not sampler_skips and batch_in_epoch <= epoch_resume_batch:
                     continue
+                if mixture_tracking:
+                    batch_sources = Counter(sample.source_dataset for sample in samples)
+                    epoch_observed_local.update(batch_sources)
+                    window_observed_local.update(batch_sources)
                 with accelerator.accumulate(model):
                     phase_started = time.perf_counter()
                     images = images.to(device, non_blocking=device.type == "cuda")
@@ -446,6 +487,33 @@ def train_proposals(
                         scheduler.step()
                         ema.update(base_model)
                         global_step += 1
+
+                if mixture_tracking and accelerator.sync_gradients:
+                    window_observed = _reduced_source_counts(
+                        accelerator,
+                        window_observed_local,
+                        source_names,
+                        device,
+                    )
+                    window_samples = sum(window_observed.values())
+                    window_intended = mixture_quota_delta(
+                        config.data.source_weights,
+                        window_start_sample,
+                        window_samples,
+                    )
+                    if accelerator.is_main_process:
+                        reporter.on_mixture(
+                            scope="optimizer_window",
+                            epoch=epoch,
+                            batch=batch_in_epoch,
+                            global_step=global_step,
+                            intended_sources=window_intended,
+                            observed_sources=window_observed,
+                            intended_domains=_domain_counts(window_intended, config),
+                            observed_domains=_domain_counts(window_observed, config),
+                        )
+                    window_start_sample += window_samples
+                    window_observed_local.clear()
 
                 batch_values = task.batch_metrics(losses, targets)
                 for key, value in batch_values.items():
@@ -527,6 +595,36 @@ def train_proposals(
                     break
                 if max_steps is not None and global_step >= max_steps:
                     break
+
+            if mixture_tracking:
+                epoch_processed = _reduced_source_counts(
+                    accelerator,
+                    epoch_observed_local,
+                    source_names,
+                    device,
+                )
+                skipped_samples = epoch_resume_batch * config.data.batch_size
+                skipped_counts = mixture_quota_delta(
+                    config.data.source_weights, 0, skipped_samples
+                )
+                epoch_observed = {
+                    source: skipped_counts[source] + epoch_processed[source]
+                    for source in source_names
+                }
+                epoch_intended = mixture_quota_delta(
+                    config.data.source_weights, 0, sum(epoch_observed.values())
+                )
+                if accelerator.is_main_process:
+                    reporter.on_mixture(
+                        scope="epoch",
+                        epoch=epoch,
+                        batch=last_batch_in_epoch,
+                        global_step=global_step,
+                        intended_sources=epoch_intended,
+                        observed_sources=epoch_observed,
+                        intended_domains=_domain_counts(epoch_intended, config),
+                        observed_domains=_domain_counts(epoch_observed, config),
+                    )
 
             task.on_epoch_complete(epoch, config.schedule.epochs)
             should_validate = not termination_requested and (

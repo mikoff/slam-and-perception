@@ -1,5 +1,12 @@
 # Phase 2: class-agnostic student detector
 
+This is the original project Phase 2 implementation reference. The newer
+correction plan has its own phase numbering; see the
+[proposal detector roadmap](proposal_detector_roadmap.md) for the mapping.
+The architecture described below is the existing P3–P5 baseline, not a claim
+that the corrected-data P2 ablation or retraining has completed. The current
+milestone stops at evaluated proposal outputs; SigLIP remains future work.
+
 ## Objective
 
 The architecture's overall goal is to provide a small, efficient detector for an

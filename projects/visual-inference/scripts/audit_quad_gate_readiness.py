@@ -24,7 +24,10 @@ def _sha256(path: Path) -> str:
 def _identities(path: Path) -> set[tuple[str, str]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return {
-        (str(image.get("source_dataset", "")), str(image.get("source_image_id", image.get("image_id", image.get("id")))))
+        (
+            str(image.get("source_dataset", "")),
+            str(image.get("source_image_id", image.get("image_id", image.get("id")))),
+        )
         for image in data.get("images", [])
     }
 
@@ -53,7 +56,9 @@ def main() -> None:
         (reports / "validation_summary.json").read_text(encoding="utf-8")
     )
     link_report = json.loads((reports / "link_report.json").read_text(encoding="utf-8"))
-    with (reports / "invalid_geometries.csv").open(newline="", encoding="utf-8") as stream:
+    with (reports / "invalid_geometries.csv").open(
+        newline="", encoding="utf-8"
+    ) as stream:
         invalid_geometries = list(csv.DictReader(stream))
 
     train_manifest = config.data.quad_train_annotations or config.data.train_annotations
@@ -62,7 +67,7 @@ def main() -> None:
     all_manifest_rows_valid = all(
         row["accepted_geometry"] == row["annotations"]
         and row["fit_coverage_failures"] == 0
-        and row["schema_version"] == "quad-proposal-manifest.v1"
+        and row["schema_version"] == "proposal-manifest.v2"
         for row in proposal_validation
     )
     localized_invalids = all(
@@ -125,7 +130,9 @@ def main() -> None:
         },
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
 
 

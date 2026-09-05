@@ -2,6 +2,10 @@
 
 This project develops an embedded open-vocabulary detector in phases.
 
+The current milestone stops at a retrained, evaluated proposal detector; SigLIP
+work is deferred. The [roadmap](docs/proposal_detector_roadmap.md) maps the original
+project phases to the correction/retraining work packages and defines the gates.
+
 ## Phase 2 student detector
 
 The `student_detector` package contains the MobileNetV4-Conv-Medium backbone,
@@ -20,7 +24,7 @@ uv run --group dev pytest -q tests/student_detector
 
 ## Phase 3 proposal training
 
-Phase 3 trains the Phase-2 HBB detector as a class-agnostic proposal generator.
+Phase 3 trains HBB and quad class-agnostic proposal detectors.
 Its data policy, ATSS/loss rationale, commands, measured audits, and remaining
 gates are documented in [`docs/phase3.md`](docs/phase3.md).
 

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from student_detector.config import AugmentationConfig
 from student_detector.training_reporting import StandardReporter
 
 
@@ -26,6 +27,7 @@ class _Schedule:
 class _Config:
     data: _Data
     schedule: _Schedule
+    augmentation: AugmentationConfig = AugmentationConfig()
 
 
 class _Accelerator:
@@ -113,3 +115,23 @@ def test_console_and_jsonl_records_have_utc_timestamps(
         (tmp_path / "metrics.jsonl").read_text(encoding="utf-8").strip()
     )
     assert record["timestamp"].endswith("Z")
+
+
+def test_mixture_counts_are_persisted_for_optimizer_windows(tmp_path: Path) -> None:
+    reporter = StandardReporter(tmp_path)
+    reporter.on_mixture(
+        scope="optimizer_window",
+        epoch=0,
+        batch=8,
+        global_step=1,
+        intended_sources={"coco": 32, "woodscape": 13},
+        observed_sources={"coco": 32, "woodscape": 13},
+        intended_domains={"general": 32, "fisheye": 13},
+        observed_domains={"general": 32, "fisheye": 13},
+    )
+
+    event = json.loads((tmp_path / "events.jsonl").read_text(encoding="utf-8").strip())
+    assert event["kind"] == "training_mixture"
+    assert event["scope"] == "optimizer_window"
+    assert event["intended_sources"] == event["observed_sources"]
+    assert event["intended_domains"] == event["observed_domains"]

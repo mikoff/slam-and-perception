@@ -7,7 +7,10 @@ def test_normalization_and_ids(taxonomy):
     assert taxonomy.normalize(" Traffic Light ") == "traffic_light"
     result = taxonomy.map("bdd100k_images_100k", "Traffic Sign")
     assert result.canonical == "traffic_sign"
-    assert result.category_id == taxonomy.data["canonical_id_order"].index("traffic_sign") + 1
+    assert (
+        result.category_id
+        == taxonomy.data["canonical_id_order"].index("traffic_sign") + 1
+    )
 
 
 def test_ignore_and_unmapped(taxonomy):
@@ -20,17 +23,20 @@ def test_ignore_and_unmapped(taxonomy):
         taxonomy.map("bdd100k_images_100k", "hovercraft")
 
 
-def test_woodscape_construction_is_an_ignored_static_region(taxonomy):
-    result = taxonomy.map("woodscape_rgb_fisheye", "construction")
-    assert result.ignore_region
-    assert result.canonical == taxonomy.ignore_region_token
+def test_woodscape_construction_contract_is_trusted_negative(taxonomy):
+    policy = taxonomy.contract_policy("woodscape_rgb_fisheye", "construction")
+    assert policy["supervision_state"] == "trusted_negative"
+    assert policy["normalized_category"] == "static_construction_region"
 
 
 def test_nuimages_other_guard(taxonomy):
     with pytest.raises(ValueError, match="guard"):
         taxonomy.map("nuimages", "other", "other vehicle")
     assert taxonomy.map("nuimages", "other").canonical == "pedestrian_other"
-    assert taxonomy.map("nuimages", "other", "human pedestrian other").canonical == "pedestrian_other"
+    assert (
+        taxonomy.map("nuimages", "other", "human pedestrian other").canonical
+        == "pedestrian_other"
+    )
 
 
 def test_coco_identity(taxonomy):

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import hashlib
 import json
 import math
@@ -14,23 +13,28 @@ import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
-
 import ijson
 import torch
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 from torch import Tensor
 from torch.utils.data import Dataset, Sampler
 
+from . import augmentation as _augmentation
+from .augmentation import apply_image_augmentation, sample_augmentation_parameters
 from .config import AugmentationConfig, DataConfig
 
+IMAGENET_MEAN = _augmentation.IMAGENET_MEAN
+IMAGENET_STD = _augmentation.IMAGENET_STD
+INDEX_SCHEMA_VERSION = "8"
+PROPOSAL_MANIFEST_SCHEMA = "proposal-manifest.v2"
 
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
-PADDING_RGB = tuple(round(channel * 255) for channel in IMAGENET_MEAN)
-INDEX_SCHEMA_VERSION = "6"
-PROPOSAL_MANIFEST_SCHEMA = "quad-proposal-manifest.v1"
+
+def _json_attribute_default(value: object) -> float:
+    if isinstance(value, Decimal):
+        return float(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def use_file_system_tensor_sharing(_worker_id: int | None = None) -> None:
@@ -160,12 +164,12 @@ def build_coco_sqlite_index(
                     geometry_tier TEXT NOT NULL,
                     fit_coverage REAL NOT NULL,
                     fit_tightness REAL NOT NULL,
-                    seen_status TEXT NOT NULL
+                    seen_status TEXT NOT NULL,
+                    attributes_json TEXT NOT NULL
                 );
                 CREATE INDEX annotations_by_image ON annotations(image_id);
                 """
             )
-            image_sources: dict[int, tuple[str, str]] = {}
             with source.open("rb") as stream:
                 for row_index, image in enumerate(ijson.items(stream, "images.item")):
                     image_id = int(image["id"])
@@ -184,10 +188,6 @@ def build_coco_sqlite_index(
                             int(bool(image.get("background_supervision", False))),
                         ),
                     )
-                    image_sources[image_id] = (
-                        str(image.get("source_dataset", "unknown")),
-                        str(image.get("source_image_id", "")),
-                    )
             positive_counts: dict[int, int] = defaultdict(int)
             categories: dict[int, str] = {}
             with source.open("rb") as stream:
@@ -198,22 +198,30 @@ def build_coco_sqlite_index(
                 for annotation in ijson.items(stream, "annotations.item"):
                     x, y, width, height = map(float, annotation["bbox"])
                     image_id = int(annotation["image_id"])
-                    source_dataset = image_sources.get(image_id, ("", ""))[0]
-                    # Existing merged artifacts predate the WoodScape
-                    # taxonomy correction. Exclude its old canonical name as
-                    # a static region until those artifacts are regenerated.
-                    legacy_static_construction = (
-                        source_dataset == "woodscape_rgb_fisheye"
-                        and categories.get(
-                            int(annotation.get("category_id", -1)), "unknown"
+                    state = str(annotation.get("supervision_state", ""))
+                    if state == "trusted_negative":
+                        state = "trusted_background"
+                    if state:
+                        if state not in {
+                            "positive",
+                            "ignore",
+                            "trusted_background",
+                        }:
+                            raise ValueError(
+                                f"unsupported generated supervision state: {state}"
+                            )
+                        state_code = {
+                            "positive": 0,
+                            "ignore": 1,
+                            "trusted_background": 2,
+                        }[state]
+                    else:
+                        state_code = int(
+                            bool(
+                                annotation.get("ignore_region")
+                                or annotation.get("iscrowd")
+                            )
                         )
-                        == "construction_vehicle"
-                    )
-                    ignore = bool(
-                        annotation.get("ignore_region")
-                        or annotation.get("iscrowd")
-                        or legacy_static_construction
-                    )
                     category_name = categories.get(
                         int(annotation.get("category_id", -1)), "unknown"
                     )
@@ -224,7 +232,7 @@ def build_coco_sqlite_index(
                             y,
                             x + width,
                             y + height,
-                            int(ignore),
+                            state_code,
                             category_name,
                             str(annotation.get("object_condition", "whole_object")),
                             json.dumps(
@@ -241,19 +249,25 @@ def build_coco_sqlite_index(
                             float(annotation.get("fit_coverage", 1.0)),
                             float(annotation.get("fit_tightness", 0.0)),
                             str(annotation.get("seen_status", "auxiliary")),
+                            json.dumps(
+                                annotation.get("attributes", {}),
+                                separators=(",", ":"),
+                                sort_keys=True,
+                                default=_json_attribute_default,
+                            ),
                         )
                     )
-                    if not ignore:
+                    if state_code == 0:
                         positive_counts[image_id] += 1
                     if len(rows) >= 10_000:
                         connection.executemany(
-                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rows,
                         )
                         rows.clear()
                 if rows:
                     connection.executemany(
-                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rows,
                     )
             connection.executemany(
@@ -337,7 +351,8 @@ def build_proposal_manifest_sqlite_index(
                     geometry_tier TEXT NOT NULL,
                     fit_coverage REAL NOT NULL,
                     fit_tightness REAL NOT NULL,
-                    seen_status TEXT NOT NULL
+                    seen_status TEXT NOT NULL,
+                    attributes_json TEXT NOT NULL
                 );
                 CREATE INDEX annotations_by_image ON annotations(image_id);
                 """
@@ -381,18 +396,29 @@ def build_proposal_manifest_sqlite_index(
                                     x + width,
                                     y + height,
                                     state_code,
-                                    str(record.get("source_category", "unknown")),
+                                    str(
+                                        record.get(
+                                            "canonical_category",
+                                            record.get("source_category", "unknown"),
+                                        )
+                                    ),
                                     str(record.get("object_condition", "whole_object")),
                                     json.dumps(quad, separators=(",", ":")),
                                     str(record.get("geometry_tier", "source_hbb")),
                                     float(record.get("fit_coverage", 1.0)),
                                     float(record.get("fit_tightness", 0.0)),
                                     str(record.get("seen_status", "auxiliary")),
+                                    json.dumps(
+                                        record.get("attributes", {}),
+                                        separators=(",", ":"),
+                                        sort_keys=True,
+                                        default=_json_attribute_default,
+                                    ),
                                 )
                             )
                     if rows:
                         connection.executemany(
-                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO annotations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rows,
                         )
             connection.execute(
@@ -407,26 +433,6 @@ def build_proposal_manifest_sqlite_index(
         staged.unlink(missing_ok=True)
         raise
     return destination
-
-
-def _pil_to_normalized_tensor(image: Image.Image) -> Tensor:
-    width, height = image.size
-    storage = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.uint8).reshape(
-        height, width, 3
-    )
-    tensor = storage.permute(2, 0, 1).to(dtype=torch.float32).div_(255.0)
-    mean = tensor.new_tensor(IMAGENET_MEAN).view(3, 1, 1)
-    std = tensor.new_tensor(IMAGENET_STD).view(3, 1, 1)
-    return (tensor - mean) / std
-
-
-def _mask_to_tensor(mask: Image.Image) -> Tensor:
-    width, height = mask.size
-    return (
-        torch.frombuffer(bytearray(mask.tobytes()), dtype=torch.uint8)
-        .reshape(height, width)
-        .bool()
-    )
 
 
 def _boxes_tensor(rows: Sequence[Sequence[float]]) -> Tensor:
@@ -455,30 +461,6 @@ class ProposalTransform:
         self.tiny_area = tiny_area
         self.tiny_min_side = tiny_min_side
 
-    def _photometric(self, image: Image.Image, generator: random.Random) -> Image.Image:
-        cfg = self.augmentation
-        if generator.random() < cfg.color_jitter_probability:
-            image = ImageEnhance.Brightness(image).enhance(
-                generator.uniform(1 - cfg.brightness, 1 + cfg.brightness)
-            )
-            image = ImageEnhance.Contrast(image).enhance(
-                generator.uniform(1 - cfg.contrast, 1 + cfg.contrast)
-            )
-            image = ImageEnhance.Color(image).enhance(
-                generator.uniform(1 - cfg.saturation, 1 + cfg.saturation)
-            )
-        if generator.random() < cfg.blur_probability:
-            image = image.filter(
-                ImageFilter.GaussianBlur(radius=generator.uniform(0.1, 1.0))
-            )
-        if generator.random() < cfg.jpeg_probability:
-            encoded = io.BytesIO()
-            image.save(encoded, format="JPEG", quality=generator.randint(45, 95))
-            encoded.seek(0)
-            with Image.open(encoded) as decoded:
-                image = decoded.convert("RGB")
-        return image
-
     def __call__(
         self,
         image: Image.Image,
@@ -488,9 +470,14 @@ class ProposalTransform:
         *,
         seed: int,
     ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, tuple[float, float, float]]:
-        generator = random.Random(seed)
         image = image.convert("RGB")
         width, height = image.size
+        parameters = sample_augmentation_parameters(
+            self.augmentation,
+            self.input_size,
+            training=self.training,
+            seed=seed,
+        )
         trusted_background_boxes = (
             trusted_background_boxes
             if trusted_background_boxes is not None
@@ -505,60 +492,15 @@ class ProposalTransform:
             )
         )
 
-        if (
-            self.training
-            and generator.random() < self.augmentation.horizontal_flip_probability
-        ):
-            image = image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        if parameters.horizontal_flip:
             if all_boxes.numel():
                 old_left = all_boxes[:, 0].clone()
                 old_right = all_boxes[:, 2].clone()
                 all_boxes[:, 0] = width - old_right
                 all_boxes[:, 2] = width - old_left
-
-        base_scale = min(self.input_size / width, self.input_size / height)
-        if self.training:
-            scale = base_scale * generator.uniform(
-                self.augmentation.scale_min, self.augmentation.scale_max
-            )
-            translation = self.augmentation.translation_fraction * self.input_size
-            shift_x = generator.uniform(-translation, translation)
-            shift_y = generator.uniform(-translation, translation)
-        else:
-            scale, shift_x, shift_y = base_scale, 0.0, 0.0
-        offset_x = (self.input_size - width * scale) * 0.5 + shift_x
-        offset_y = (self.input_size - height * scale) * 0.5 + shift_y
-        inverse = (
-            1.0 / scale,
-            0.0,
-            -offset_x / scale,
-            0.0,
-            1.0 / scale,
-            -offset_y / scale,
-        )
-        image = image.transform(
-            (self.input_size, self.input_size),
-            Image.Transform.AFFINE,
-            inverse,
-            resample=Image.Resampling.BILINEAR,
-            fillcolor=PADDING_RGB,
-        )
-        valid = Image.new("L", (width, height), color=255).transform(
-            (self.input_size, self.input_size),
-            Image.Transform.AFFINE,
-            inverse,
-            resample=Image.Resampling.NEAREST,
-            fillcolor=0,
-        )
-        if self.training:
-            image = self._photometric(image, generator)
-        image_tensor = _pil_to_normalized_tensor(image)
-        if self.training and generator.random() < self.augmentation.noise_probability:
-            noise_generator = torch.Generator().manual_seed(seed)
-            image_tensor = (
-                image_tensor
-                + torch.randn(image_tensor.shape, generator=noise_generator) * 0.02
-            )
+        augmented = apply_image_augmentation(image, self.input_size, parameters)
+        image_tensor = augmented.tensor
+        scale, offset_x, offset_y = augmented.transform
 
         if all_boxes.numel() == 0:
             return (
@@ -566,8 +508,8 @@ class ProposalTransform:
                 boxes,
                 ignore_boxes,
                 trusted_background_boxes,
-                _mask_to_tensor(valid),
-                (scale, offset_x, offset_y),
+                augmented.valid_mask,
+                augmented.transform,
             )
         transformed = all_boxes * scale
         transformed[:, 0::2] += offset_x
@@ -606,8 +548,8 @@ class ProposalTransform:
             clipped[positive],
             clipped[ignore],
             clipped[trusted],
-            _mask_to_tensor(valid),
-            (scale, offset_x, offset_y),
+            augmented.valid_mask,
+            augmented.transform,
         )
 
 
@@ -628,15 +570,22 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
     ) -> None:
         self.annotations = Path(annotations).resolve()
         self.image_root = Path(image_root).resolve()
+        resolved_index = Path(index_path).resolve()
+        require_prebuilt = os.getenv("REQUIRE_PREBUILT_INDEX") == "1"
+        if require_prebuilt and not resolved_index.is_file():
+            raise FileNotFoundError(
+                f"cloud dataset is missing prebuilt index: {resolved_index}"
+            )
         self.index_path = build_coco_sqlite_index(
             self.annotations,
-            index_path,
+            resolved_index,
             force=force_index,
+            build_if_missing=not require_prebuilt,
         )
         self.data_config = data_config
         self.training = training
         self.seed = seed
-        self.epoch = 0
+        self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
         self.transform = ProposalTransform(
             data_config.input_size,
             augmentation,
@@ -653,8 +602,8 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
                 FROM images ORDER BY row_index
                 """
             ).fetchall()
-            ann_rows = connection.execute(
-                "SELECT image_id, x1, y1, x2, y2, ignore_region, category_name FROM annotations"
+            state_rows = connection.execute(
+                "SELECT ignore_region, COUNT(*) FROM annotations GROUP BY ignore_region"
             ).fetchall()
         self.records = [
             ImageRecord(
@@ -670,42 +619,50 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             )
             for row in rows
         ]
-        annotations_by_image: defaultdict[
-            int, list[tuple[float, float, float, float, int, str]]
-        ] = defaultdict(list)
-        for row in ann_rows:
-            annotations_by_image[row[0]].append(
-                (row[1], row[2], row[3], row[4], row[5], row[6])
-            )
-        self._annotations_by_image = dict(annotations_by_image)
+        state_names = {0: "positive", 1: "ignore", 2: "trusted_background"}
+        counts = {int(state): int(count) for state, count in state_rows}
+        self.state_counts = {
+            name: counts.get(state, 0) for state, name in state_names.items()
+        }
+        self._connection: sqlite3.Connection | None = None
+        self._connection_pid: int | None = None
+
+    def _annotation_rows(
+        self, image_id: int
+    ) -> list[tuple[float, float, float, float, int]]:
+        """Read one image's annotations using a process-local read-only connection."""
+        pid = os.getpid()
+        if self._connection is None or self._connection_pid != pid:
+            if self._connection is not None:
+                self._connection.close()
+            uri = f"{self.index_path.as_uri()}?mode=ro&immutable=1"
+            self._connection = sqlite3.connect(uri, uri=True)
+            self._connection_pid = pid
+        return self._connection.execute(
+            "SELECT x1, y1, x2, y2, ignore_region FROM annotations WHERE image_id=?",
+            (image_id,),
+        ).fetchall()
+
+    def __getstate__(self) -> dict[str, object]:
+        state = dict(self.__dict__)
+        state["_connection"] = None
+        state["_connection_pid"] = None
+        return state
 
     def set_epoch(self, epoch: int) -> None:
-        self.epoch = epoch
+        self._epoch.fill_(epoch)
 
     def __len__(self) -> int:
         return len(self.records)
 
     def __getitem__(self, index: int) -> ProposalSample:
         record = self.records[index]
-        rows = self._annotations_by_image.get(record.image_id, ())
+        rows = self._annotation_rows(record.image_id)
         positive_rows = [row for row in rows if row[4] == 0]
         ignore_rows = [row for row in rows if row[4] == 1]
         trusted_rows = [row for row in rows if row[4] == 2]
-        component_indices = self._contained_component_indices(positive_rows)
-        retained_positive_rows = [
-            row
-            for row_index, row in enumerate(positive_rows)
-            if row_index not in component_indices
-        ]
-        boxes = _boxes_tensor([row[:4] for row in retained_positive_rows])
-        ignore_boxes = _boxes_tensor(
-            [row[:4] for row in ignore_rows]
-            + [
-                row[:4]
-                for row_index, row in enumerate(positive_rows)
-                if row_index in component_indices
-            ]
-        )
+        boxes = _boxes_tensor([row[:4] for row in positive_rows])
+        ignore_boxes = _boxes_tensor([row[:4] for row in ignore_rows])
         trusted_background_boxes = _boxes_tensor([row[:4] for row in trusted_rows])
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
@@ -714,7 +671,7 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             boxes,
             ignore_boxes,
             trusted_background_boxes,
-            seed=self.seed + self.epoch * max(len(self), 1) + index,
+            seed=self.seed + int(self._epoch.item()) * max(len(self), 1) + index,
         )
         domain = self.data_config.source_domains.get(record.source_dataset, "unknown")
         background_supervision = bool(transformed[3].numel())
@@ -733,34 +690,6 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             transformed[3],
         )
 
-    def _contained_component_indices(self, rows: Sequence[Sequence[Any]]) -> set[int]:
-        components = set(self.data_config.component_categories)
-        parents = set(self.data_config.parent_categories)
-        parent_boxes = [row[:4] for row in rows if str(row[5]) in parents]
-        if not parent_boxes:
-            return set()
-        parent_tensor = _boxes_tensor(parent_boxes)
-        ignored: set[int] = set()
-        for index, row in enumerate(rows):
-            if str(row[5]) not in components:
-                continue
-            component = _boxes_tensor([row[:4]])
-            top_left = torch.maximum(component[:, None, :2], parent_tensor[None, :, :2])
-            bottom_right = torch.minimum(
-                component[:, None, 2:], parent_tensor[None, :, 2:]
-            )
-            intersection = (bottom_right - top_left).clamp(min=0).prod(dim=2)
-            area = (
-                (component[:, 2] - component[:, 0])
-                * (component[:, 3] - component[:, 1])
-            ).clamp(min=1e-7)
-            if (
-                intersection.max() / area
-                > self.data_config.component_containment_threshold
-            ):
-                ignored.add(index)
-        return ignored
-
 
 def collate_proposal_samples(
     samples: Sequence[ProposalSample],
@@ -778,6 +707,17 @@ def _integer_quotas(weights: dict[str, float], batch_size: int) -> dict[str, int
     for key in order[:remainder]:
         quotas[key] += 1
     return quotas
+
+
+def mixture_quota_delta(
+    weights: dict[str, float], start_sample: int, sample_count: int
+) -> dict[str, int]:
+    """Return cumulative largest-remainder quotas for a sample interval."""
+    if start_sample < 0 or sample_count < 0:
+        raise ValueError("sample offsets and counts must be non-negative")
+    before = _integer_quotas(weights, start_sample)
+    after = _integer_quotas(weights, start_sample + sample_count)
+    return {key: after[key] - before[key] for key in weights}
 
 
 def select_source_mixture_indices(
@@ -814,7 +754,7 @@ def select_source_mixture_indices(
 
 
 class DomainMixtureBatchSampler(Sampler[list[int]]):
-    """Fixed domain composition with long-run source and empty-image ratios."""
+    """Deterministic residual source quotas with long-run empty-image ratios."""
 
     def __init__(
         self,
@@ -843,17 +783,32 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
             self.pools[(record.source_dataset, record.positive_count == 0)].append(
                 index
             )
-        self.domain_sources: dict[str, list[str]] = defaultdict(list)
-        for source, domain in dataset.data_config.source_domains.items():
-            if any(self.pools[(source, empty)] for empty in (False, True)):
-                self.domain_sources[domain].append(source)
         missing = [
-            domain
-            for domain, weight in domain_weights.items()
-            if weight > 0 and not self.domain_sources[domain]
+            source
+            for source, weight in source_weights.items()
+            if weight > 0
+            and not any(self.pools[(source, empty)] for empty in (False, True))
         ]
         if missing:
-            raise ValueError(f"No indexed images for domains: {missing}")
+            raise ValueError(f"No indexed images for sources: {missing}")
+        source_domain_weights = {domain: 0.0 for domain in domain_weights}
+        for source, weight in source_weights.items():
+            domain = dataset.data_config.source_domains.get(source)
+            if domain not in source_domain_weights:
+                raise ValueError(f"Source {source!r} has no configured domain weight")
+            source_domain_weights[domain] += weight
+        mismatched = {
+            domain: (domain_weights[domain], source_domain_weights[domain])
+            for domain in domain_weights
+            if not math.isclose(
+                domain_weights[domain], source_domain_weights[domain], abs_tol=1e-9
+            )
+        }
+        if mismatched:
+            raise ValueError(
+                "source weights must sum to each configured domain weight: "
+                f"{mismatched}"
+            )
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -865,6 +820,23 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
 
     def __len__(self) -> int:
         return self.batches_per_epoch
+
+    def batch_source_quotas(self, batch_index: int) -> dict[str, int]:
+        """Return the exact source quota scheduled for one epoch batch."""
+        if not 0 <= batch_index < self.batches_per_epoch:
+            raise ValueError(f"batch_index must be in [0, {self.batches_per_epoch})")
+        quotas = mixture_quota_delta(
+            self.source_weights,
+            batch_index * self.batch_size,
+            self.batch_size,
+        )
+        if sum(quotas.values()) != self.batch_size or any(
+            count < 0 for count in quotas.values()
+        ):
+            raise RuntimeError(
+                f"invalid residual quota at batch {batch_index}: {quotas}"
+            )
+        return quotas
 
     def __iter__(self) -> Iterator[list[int]]:
         generator = random.Random(self.seed + self.epoch)
@@ -887,14 +859,10 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
             offsets[key] += 1
             return value
 
-        quotas = _integer_quotas(self.domain_weights, self.batch_size)
         for batch_index in range(self.batches_per_epoch):
             batch: list[int] = []
-            for domain, count in quotas.items():
-                sources = self.domain_sources[domain]
-                weights = [self.source_weights[source] for source in sources]
+            for source, count in self.batch_source_quotas(batch_index).items():
                 for _ in range(count):
-                    source = generator.choices(sources, weights=weights, k=1)[0]
                     batch.append(draw(source, generator.random() < self.empty_fraction))
             generator.shuffle(batch)
             if batch_index >= self.start_batch:
