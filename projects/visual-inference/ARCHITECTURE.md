@@ -69,7 +69,7 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   replacing an existing S3 prefix or local staged directory.
 - Production images are local symlinks and exceed archive scratch space; use the
   runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
-- The v2 candidate is published; Phase 1.9 clean-worker staging/smoke is pending.
+- The Phase 1 local loader gate passed; remote staging is deferred to the first cloud run.
 - RunPod needs a configured dstack backend; Packet needs its registered SSH key.
 - `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
   keys/versions, sets Docker's 32G shm default, then verifies before dstack.

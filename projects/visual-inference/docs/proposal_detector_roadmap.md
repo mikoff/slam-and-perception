@@ -24,10 +24,11 @@ Do not interpret it as replacing the implemented original project Phase 2.
 
 ## Current execution sequence
 
-1. Close correction Phase 1: commit/publish the reviewed source; stage the
-   published dataset on a clean worker, verify the archive, and exercise both
-   readers with short batches and memory measurements.
-2. Prepare and compare proposal architectures using matched short runs. Keep
+1. Local correction Phase 1 loader gate completed on 2026-09-05: both readers
+   passed train/validation production-index checks in parent and spawned-worker
+   processes, with peak RSS below 1 GiB. Remote archive download/hash checks and
+   clean-worker portability remain deferred to the first normal cloud staging.
+2. Next, prepare and compare proposal architectures using matched short runs. Keep
    HBB and quad controls, and test P2/min-4 because the approved source short-side
    requirement is 16px. P2 is a candidate, not a measured winner. Quad P2 is
    optional and needs a proposal-level justification before extra runs.

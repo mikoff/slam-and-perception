@@ -12,6 +12,10 @@ acceptance of HBB/quad proposal outputs. The following scope rules take
 precedence over downstream/full-release requirements retained below:
 
 - Phase 2.1 compares proposals using corrected data and matched short runs.
+  The owner-approved local HBB/quad loader gate passed on 2026-09-05 for both
+  train and validation indexes in parent and spawned-worker processes. Remote
+  archive verification and clean-worker staging are deferred until the first
+  cloud run; local source symlinks do not establish archive portability.
   Include the P2/min-4 ablation justified by the 16px source-object requirement.
   Quad P2 needs proposal-level justification; no SigLIP experiment is required.
 - Phase 2.2 currently fixes K and the common decoded proposal record, source

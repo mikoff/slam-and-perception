@@ -1,6 +1,117 @@
 {
   "schema_version": 2,
   "description": "Compact source-to-canonical mapping for class-agnostic detection and later SigLIP/open-vocabulary distillation.",
+  "proposal_object_contract": {
+    "schema_version": "proposal-object-contract.v1",
+    "status": "approved",
+    "review": {
+      "reviewer": "mikoff",
+      "evidence": "dataset-pipeline/configs/proposal_object_contract_review.csv",
+      "source_scarcity_exceptions": {
+        "woodscape_rgb_fisheye.grouped_animals": 2,
+        "woodscape_rgb_fisheye.grouped_botts_dots": 33,
+        "woodscape_rgb_fisheye.structure": 0
+      }
+    },
+    "definition": "A positive is a bounded, visually identifiable physical instance whose crop could be usefully classified or described by the downstream SigLIP stage. Stuff, surfaces, textures, reflections, shadows, ego-platform bodywork, and scene-layout regions are background. Regions that might contain several unresolved instances or whose semantics are uncertain are ignored rather than forced positive or negative.",
+    "global_policies": {
+      "nested_components": {
+        "proposed_state": "ignore",
+        "rule": "Ignore a component contained inside a retained parent instance unless the component is an explicit downstream proposal requirement; license plates are not currently such a requirement.",
+        "containment_threshold": 0.8,
+        "component_categories": ["face", "head", "hand", "arm", "leg", "foot", "shoe", "wheel", "tire", "license_plate", "mirror", "door", "handle", "screen", "logo"],
+        "parent_categories": ["person", "pedestrian_adult", "pedestrian_child", "pedestrian_other", "pedestrian_construction_worker", "pedestrian_police_officer", "car", "truck", "bus", "van", "motorcycle", "bicycle", "construction_vehicle"]
+      },
+      "group_annotations": {
+        "proposed_state": "ignore",
+        "rule": "Ignore a group region unless individual physical instances can be recovered from source annotations."
+      },
+      "crowd_annotations": {
+        "proposed_state": "ignore",
+        "rule": "Preserve original crowd identity and ignore the crowd region unless individual physical instances can be recovered."
+      },
+      "uncertain_masks": {
+        "proposed_state": "ignore",
+        "rule": "Void, soiling, transparency, and otherwise uncertain masks must not create positive or trusted-negative supervision."
+      }
+    },
+    "category_overrides": {
+      "nuimages": {
+        "driveable_surface": {"normalized_category": "drivable_surface", "proposed_state": "trusted_negative", "rationale": "Scene surface, not an independent proposal target.", "audit_required": true},
+        "ego": {"normalized_category": "ego_platform_bodywork", "proposed_state": "trusted_negative", "rationale": "Product-owned platform pixels must not become proposals.", "audit_required": true},
+        "construction": {"normalized_category": "construction_vehicle", "proposed_state": "positive", "rationale": "Independently promptable physical machinery or vehicle.", "audit_required": true}
+      },
+      "woodscape_rgb_fisheye": {
+        "road_surface": {"normalized_category": "drivable_surface", "proposed_state": "trusted_negative", "rationale": "Scene surface, not an independent proposal target.", "audit_required": true},
+        "ego_vehicle": {"normalized_category": "ego_platform_bodywork", "proposed_state": "trusted_negative", "rationale": "Directly suppress persistent hood and bodywork proposals.", "audit_required": true},
+        "construction": {"normalized_category": "static_construction_region", "proposed_state": "trusted_negative", "rationale": "Recommended only if visual review confirms static scene construction rather than machinery.", "audit_required": true},
+        "curb": {"normalized_category": "curb", "proposed_state": "trusted_negative", "rationale": "Scene layout rather than an independent object.", "audit_required": true},
+        "nature": {"normalized_category": "vegetation", "proposed_state": "trusted_negative", "rationale": "Scene stuff unless individual plants or trees are product targets.", "audit_required": true},
+        "green_strip": {"normalized_category": "vegetation", "proposed_state": "trusted_negative", "rationale": "Scene stuff unless individual plants or trees are product targets.", "audit_required": true},
+        "free_space": {"normalized_category": "free_space", "proposed_state": "trusted_negative", "rationale": "Scene layout rather than an independent object.", "audit_required": true},
+        "sky": {"normalized_category": "sky", "proposed_state": "trusted_negative", "rationale": "Scene stuff, not an independent proposal target.", "audit_required": true},
+        "lane_marking": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Painted surface rather than an independent object.", "audit_required": true},
+        "other_ground_marking": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Painted surface rather than an independent object.", "audit_required": true},
+        "parking_line": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Painted surface rather than an independent object.", "audit_required": true},
+        "parking_marking": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Painted surface rather than an independent object.", "audit_required": true},
+        "zebra_crossing": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Painted surface rather than an independent object.", "audit_required": true},
+        "cats_eyes_and_botts_dots": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Road-surface marker rather than a useful proposal crop.", "audit_required": true},
+        "grouped_botts_dots": {"normalized_category": "grouped_road_markers", "proposed_state": "trusted_negative", "rationale": "Grouped road-surface markers are scene texture rather than proposal targets.", "audit_required": true},
+        "fence": {"normalized_category": "fence_or_wall", "proposed_state": "trusted_negative", "rationale": "Recommended as scene structure; review if whole fences must be discoverable.", "audit_required": true},
+        "structure": {"normalized_category": "building_or_wall", "proposed_state": "trusted_negative", "rationale": "Recommended as scene structure; review if whole buildings must be discoverable.", "audit_required": true},
+        "grouped_vehicles": {"normalized_category": "grouped_vehicles", "proposed_state": "ignore", "rationale": "A group polygon is not a clean physical-instance target.", "audit_required": true},
+        "grouped_pedestrian_and_animals": {"normalized_category": "grouped_people_or_animals", "proposed_state": "ignore", "rationale": "A group polygon is not a clean physical-instance target.", "audit_required": true},
+        "grouped_animals": {"normalized_category": "grouped_animals", "proposed_state": "ignore", "rationale": "A group polygon is not a clean physical-instance target.", "audit_required": true},
+        "void": {"normalized_category": "uncertain_region", "proposed_state": "ignore", "rationale": "Uncertain pixels must not become confident negative supervision.", "audit_required": true},
+        "clean": {"normalized_category": "soiling_state_mask", "proposed_state": "ignore", "rationale": "A sensor-soiling state mask is not object or background evidence.", "audit_required": true},
+        "opaque": {"normalized_category": "soiling_state_mask", "proposed_state": "ignore", "rationale": "A sensor-soiling state mask is uncertain image validity, not background evidence.", "audit_required": true},
+        "semi_transparent": {"normalized_category": "soiling_state_mask", "proposed_state": "ignore", "rationale": "A sensor-soiling state mask is uncertain image validity, not background evidence.", "audit_required": true},
+        "transparent": {"normalized_category": "soiling_state_mask", "proposed_state": "ignore", "rationale": "A sensor-soiling state mask is uncertain image validity, not background evidence.", "audit_required": true}
+      },
+      "bdd100k_images_100k": {
+        "drivable_area": {"normalized_category": "drivable_surface", "proposed_state": "trusted_negative", "rationale": "Scene surface, not an independent proposal target.", "audit_required": true},
+        "lane": {"normalized_category": "road_marking", "proposed_state": "trusted_negative", "rationale": "Painted surface rather than an independent object.", "audit_required": true}
+      }
+    },
+    "approved_category_states": {
+      "bdd100k_images_100k": {
+        "drivable_area": {"state": "trusted_negative", "decision": "EXCEPTION", "notes": "Coverage is often partial or limited to one lane; only annotated pixels are trusted negative."},
+        "lane": {"state": "drop", "decision": "REJECT", "notes": "The line annotations are too narrow to provide useful supervision."}
+      },
+      "nuimages": {
+        "construction": {"state": "positive", "decision": "ACCEPT", "notes": ""},
+        "driveable_surface": {"state": "drop", "decision": "REJECT", "notes": "The annotation often covers only a small part of the complete driving area."},
+        "ego": {"state": "trusted_negative", "decision": "ACCEPT", "notes": ""}
+      },
+      "woodscape_rgb_fisheye": {
+        "cats_eyes_and_botts_dots": {"state": "drop", "decision": "REJECT", "notes": "The regions are too small and behave as noise."},
+        "clean": {"state": "ignore", "decision": "ACCEPT", "notes": ""},
+        "construction": {"state": "trusted_negative", "decision": "EXCEPTION", "notes": "Many regions are tiny and roughly 20 percent look like building parts; retain only annotated pixels as negative."},
+        "curb": {"state": "drop", "decision": "REJECT", "notes": "The regions are too small to provide useful supervision."},
+        "ego_vehicle": {"state": "trusted_negative", "decision": "ACCEPT", "notes": "Some source annotations are incorrect and require later integrity handling."},
+        "fence": {"state": "positive", "decision": "REJECT", "notes": "The annotations depict recognizable fences that are useful proposal targets."},
+        "free_space": {"state": "drop", "decision": "REJECT", "notes": "Scene-layout annotation is not useful or reliable enough for supervision."},
+        "green_strip": {"state": "drop", "decision": "REJECT", "notes": "The annotations often appear as an incorrect line at the camera boundary."},
+        "grouped_animals": {"state": "ignore", "decision": "ACCEPT", "notes": "Approved with a two-instance source-scarcity exception."},
+        "grouped_botts_dots": {"state": "ignore", "decision": "REJECT", "notes": "Only 33 grouped, ambiguous examples exist; do not treat them as confident negatives."},
+        "grouped_pedestrian_and_animals": {"state": "positive", "decision": "REJECT", "notes": "The region often depicts a recognizable person and should remain a proposal target."},
+        "grouped_vehicles": {"state": "ignore", "decision": "ACCEPT", "notes": ""},
+        "lane_marking": {"state": "drop", "decision": "REJECT", "notes": "The regions are too small to provide useful supervision."},
+        "nature": {"state": "positive", "decision": "REJECT", "notes": "Trees and grass are useful detection targets for this product."},
+        "opaque": {"state": "ignore", "decision": "ACCEPT", "notes": ""},
+        "other_ground_marking": {"state": "positive", "decision": "REJECT", "notes": "Open-vocabulary classification may make these road markings useful proposal targets."},
+        "parking_line": {"state": "trusted_negative", "decision": "ACCEPT", "notes": ""},
+        "parking_marking": {"state": "positive", "decision": "REJECT", "notes": "The markings are useful proposal targets."},
+        "road_surface": {"state": "trusted_negative", "decision": "ACCEPT", "notes": ""},
+        "semi_transparent": {"state": "ignore", "decision": "ACCEPT", "notes": ""},
+        "sky": {"state": "trusted_negative", "decision": "ACCEPT", "notes": ""},
+        "structure": {"state": "trusted_negative", "decision": "OWNER_DEFAULT", "notes": "No source instances exist; future building or wall annotations default to trusted negative."},
+        "transparent": {"state": "ignore", "decision": "ACCEPT", "notes": ""},
+        "void": {"state": "ignore", "decision": "ACCEPT", "notes": ""},
+        "zebra_crossing": {"state": "drop", "decision": "REJECT", "notes": "The source highlights individual zebra-stripe rectangles rather than a useful crossing instance."}
+      }
+    }
+  },
   "tokens": {
     "ignore": "__ignore__",
     "ignore_region": "__ignore_region__"
@@ -127,7 +238,11 @@
     "traffic_light_yellow",
     "traffic_light_unknown",
     "rail_vehicle",
-    "animal_unspecified"
+    "animal_unspecified",
+    "fence_or_wall",
+    "grouped_people_or_animals",
+    "vegetation",
+    "road_marking"
   ],
   "identity_datasets": [
     "coco_2017"

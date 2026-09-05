@@ -2,14 +2,16 @@
 
 Proposed commit: `feat(visual-inference): correct proposal supervision and publish Phase 1 dataset`
 
-Status: prepared for owner review; no commit or push performed. Publication is
-complete, but clean-worker staging and both loader smoke tests remain open.
+Status: the reviewed source was committed and published, and the owner-approved
+local HBB/quad loader gate passed. The staged taxonomy mapping and final status
+evidence still need a follow-up commit. Clean-worker archive portability is
+deferred to the first normal cloud staging.
 
 ## Scope
 
-Include the modified and new visual-inference source, configs, dependency locks,
-tests, and Phase 1 evidence documents listed in `phase_1_commit_files.txt`.
-The list is a review inventory, not a staged Git index.
+The reviewed commit included the modified and new visual-inference source,
+configs, dependency locks, tests, and Phase 1 evidence documents. This follow-up
+only needs the approved taxonomy mapping and final Phase 1 status evidence.
 
 The change covers approved category/supervision policy, official COCO identity,
 sequence-safe WoodScape validation, bounded-memory generation and auditing,
@@ -53,12 +55,13 @@ file `]`. Odd filenames alone do not establish that their contents are disposabl
 ## Remaining gates and limitations
 
 - HBB now fetches annotation rows per image, following the quad reader. Both
-  retain image metadata in memory and aggregate state counts in SQLite. Full
-  corpus memory/throughput still needs measurement in the clean-worker smoke.
+  production train/validation readers passed parent and spawned-worker checks.
+  Peak process RSS across the smoke was 981.7 MiB; initialization took up to
+  188.85 seconds because the manifest signature is streamed during reader setup.
 - The published archive's SHA-256 has been captured locally; remote size and
   manifest bytes have been checked. Actual remote archive hashing, native-tar
-  compatibility, extracted-size reconciliation, and both loader smoke tests
-  still require the first clean worker. Do not claim Phase 1 is closed.
+  compatibility, and extracted-size reconciliation remain deferred to the first
+  normal cloud staging. Local source symlinks do not prove archive portability.
 - The v2 `dataset_contract_sha256` is a provenance reference. Staging validates
   its format, but does not retrieve or independently verify the referenced
   Phase 1 contract document. The archive SHA-256 is the transfer integrity check.
@@ -80,10 +83,11 @@ wrong dependency environment for pipeline tests.
 
 The HBB regression includes a real persistent spawned worker. The sandbox blocks
 PyTorch's shared-memory manager; the focused and full reader suites passed with
-that OS restriction lifted. This verifies worker behavior on fixtures, not full
-production-corpus memory or throughput.
+that OS restriction lifted. The subsequent production-corpus smoke also passed
+all four train/validation HBB/quad cases with spawned workers; exact results are
+recorded in `phase_1_9_local_loader_smoke.json`.
 
 Ruff checks cover `student_detector`, `scripts`, `tests`, and pipeline code/tests.
 Third-party Supervisely/Pydantic deprecation warnings remain in pipeline tests.
-No cloud worker, training run, full archive download, or publication was launched
-as part of this review.
+No cloud worker, training run, or full archive download was launched as part of
+the local loader verification.

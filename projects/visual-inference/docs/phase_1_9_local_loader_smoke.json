@@ -1,0 +1,80 @@
+{
+  "schema_version": "visual-inference.local-loader-smoke.v1",
+  "dataset_id": "phase3-production-bg-policy-v2-2026-08-29",
+  "date": "2026-09-05",
+  "code_commit": "89389b7428cd6b1fc4cecbfd31fc4ad46243a0c6",
+  "execution_scope": "local_external_ssd",
+  "checks": {
+    "prebuilt_index_required": true,
+    "one_sample_per_source": true,
+    "spawned_worker": true,
+    "parent_worker_tensor_parity": true,
+    "finite_images_and_geometry": true,
+    "valid_masks_and_paths": true,
+    "index_unchanged": true
+  },
+  "results": [
+    {
+      "split": "train",
+      "reader": "hbb",
+      "images": 266977,
+      "state_counts": {
+        "positive": 3765518,
+        "ignore": 45846,
+        "trusted_background": 21473325
+      },
+      "init_seconds": 188.850732356,
+      "total_seconds": 210.345731732,
+      "peak_rss_mib": 954.0859375,
+      "status": "passed"
+    },
+    {
+      "split": "train",
+      "reader": "quad",
+      "images": 266977,
+      "state_counts": {
+        "positive": 3765518,
+        "ignore": 45846,
+        "trusted_background": 21473325
+      },
+      "init_seconds": 169.938323834,
+      "total_seconds": 189.187086175,
+      "peak_rss_mib": 981.65625,
+      "status": "passed"
+    },
+    {
+      "split": "val",
+      "reader": "hbb",
+      "images": 32268,
+      "state_counts": {
+        "positive": 569716,
+        "ignore": 1906,
+        "trusted_background": 3041953
+      },
+      "init_seconds": 24.237939735,
+      "total_seconds": 38.368615478,
+      "peak_rss_mib": 981.65625,
+      "status": "passed"
+    },
+    {
+      "split": "val",
+      "reader": "quad",
+      "images": 32268,
+      "state_counts": {
+        "positive": 569716,
+        "ignore": 1906,
+        "trusted_background": 3041953
+      },
+      "init_seconds": 17.114324481,
+      "total_seconds": 31.349805998,
+      "peak_rss_mib": 981.65625,
+      "status": "passed"
+    }
+  ],
+  "deferred_to_first_cloud_staging": [
+    "remote_archive_download_and_sha256",
+    "native_tar_compatibility",
+    "extracted_size_reconciliation",
+    "loader_batches_without_local_source_access"
+  ]
+}
