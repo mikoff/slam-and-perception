@@ -54,8 +54,8 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
   headroom, stops on the first OOM/error/timeout, and uploads its report to S3.
 - Assignment and positive offset construction are vectorized; only the rare
   no-candidate fallback remains per-object.
-- Frozen bounded-v1 results are accepted only when every seed/state primary
-  metric matches the reference to four decimal places.
+- Shared proposal-evaluation helpers prepare models, masks, ego regions, and
+  slice labels; scripts retain fixed-policy versus grid-specific aggregation.
 - HBB loss is per-image/state; frozen utility gates drive selection. The
   tested candidates failed; v2 permits baseline retention after evidence commit.
 - HBB P3–P5 is primary and quad P3–P5 is control; matched Phase 3.7 calibration

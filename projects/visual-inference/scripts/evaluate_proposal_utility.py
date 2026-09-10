@@ -3,22 +3,29 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter
 import hashlib
 import json
 from pathlib import Path
-import sqlite3
 import time
 from typing import Any
 
 import torch
 from torch.utils.data import DataLoader, Subset
-from student_detector.checkpoints import checkpoint_neck_type, load_model_state_strict
 from student_detector.config import load_phase3_config
 from student_detector.data import select_source_mixture_indices
 from student_detector.decoder import Detection, InferenceDecoder, class_agnostic_nms
 from student_detector.head import QuadDetectorOutput
-from student_detector.model import QuadProposalDetector, StudentDetector
+from student_detector.proposal_evaluation import (
+    boxes_to_quads,
+    load_ego_source_quads,
+    load_proposal_model,
+    merge_utility_and_suppression_metrics,
+    source_size_bands,
+    synchronize_device,
+    transform_ego_quads,
+    valid_output_levels,
+)
 from student_detector.proposal_utility import (
     ProposalUtilityAccumulator,
     REGION_FRACTION_THRESHOLD,
@@ -31,13 +38,10 @@ from student_detector.quad_data import (
 )
 from student_detector.quad_decoder import QuadDetection, QuadInferenceDecoder
 from student_detector.quad_geometry import (
-    canonicalize_quads,
     pairwise_quad_iou,
     polygon_nms,
-    quad_validity,
     warmup_compiled_quad_iou,
 )
-from student_detector.quad_targets import point_validity_from_pixel_mask
 from student_detector.suppression import SuppressionSweepAccumulator
 
 
@@ -66,26 +70,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _box_quads(boxes: torch.Tensor) -> torch.Tensor:
-    if not boxes.numel():
-        return boxes.new_empty((0, 4, 2))
-    x1, y1, x2, y2 = boxes.unbind(dim=1)
-    return torch.stack(
-        (
-            torch.stack((x1, y1), dim=1),
-            torch.stack((x2, y1), dim=1),
-            torch.stack((x2, y2), dim=1),
-            torch.stack((x1, y2), dim=1),
-        ),
-        dim=1,
-    )
-
-
-def _sync(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-
-
 def _load_policy(path: Path) -> dict[str, Any]:
     import yaml
 
@@ -93,33 +77,6 @@ def _load_policy(path: Path) -> dict[str, Any]:
     if policy.get("schema_version") != "visual-inference-proposal-utility.v1":
         raise ValueError("unsupported proposal utility policy")
     return policy
-
-
-def _load_model(
-    kind: str, checkpoint_path: Path, state: str, device: torch.device
-) -> torch.nn.Module:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    neck_type = checkpoint_neck_type(checkpoint)
-    model: torch.nn.Module = (
-        StudentDetector(pretrained_backbone=False, neck_type=neck_type)
-        if kind == "hbb"
-        else QuadProposalDetector(pretrained_backbone=False, neck_type=neck_type)
-    )
-    load_model_state_strict(
-        model, checkpoint, kind=kind, neck_type=neck_type, state_key=state
-    )
-    return model.to(device).eval()
-
-
-def _valid_levels(
-    valid_mask: torch.Tensor,
-    output_levels: tuple[torch.Tensor, ...],
-    strides: tuple[int, ...],
-    device: torch.device,
-) -> tuple[torch.Tensor, ...]:
-    shapes = tuple((item.shape[-2], item.shape[-1]) for item in output_levels)
-    levels = point_validity_from_pixel_mask(valid_mask.to(device), shapes, strides)[1]
-    return tuple(level.unsqueeze(0) for level in levels)
 
 
 def _candidate_tensors(
@@ -131,79 +88,12 @@ def _candidate_tensors(
         boxes = detection.pre_nms_boxes.float()
         if detection.pre_nms_scores is None:
             raise RuntimeError("HBB decoder did not retain pre-NMS scores")
-        return _box_quads(boxes), detection.pre_nms_scores.float()
+        return boxes_to_quads(boxes), detection.pre_nms_scores.float()
     if not isinstance(detection, QuadDetection) or detection.pre_nms_quads is None:
         raise RuntimeError("quad decoder did not retain pre-NMS candidates")
     if detection.pre_nms_scores is None:
         raise RuntimeError("quad decoder did not retain pre-NMS scores")
     return detection.pre_nms_quads.float(), detection.pre_nms_scores.float()
-
-
-def _source_size_bands(quads: torch.Tensor, scale: float) -> tuple[str, ...]:
-    extent = (quads.amax(dim=1) - quads.amin(dim=1)) / scale
-    short = extent.amin(dim=1)
-    edges = (0, 4, 8, 16, 32, 64, 128, 256, float("inf"))
-    labels = []
-    for value in short.tolist():
-        labels.append(
-            next(
-                f"[{lower:g},{upper:g})"
-                for lower, upper in zip(edges, edges[1:], strict=True)
-                if lower <= value < upper
-            )
-        )
-    return tuple(labels)
-
-
-def _ego_source_quads(
-    index_path: Path, image_ids: list[int]
-) -> dict[int, torch.Tensor]:
-    result: dict[int, list[Any]] = defaultdict(list)
-    placeholders = ",".join("?" for _ in image_ids)
-    with sqlite3.connect(
-        f"file:{index_path}?mode=ro&immutable=1", uri=True
-    ) as connection:
-        rows = connection.execute(
-            f"""
-            SELECT image_id, quad_json FROM annotations
-            WHERE category_name='ego_platform_bodywork'
-              AND image_id IN ({placeholders})
-            """,
-            image_ids,
-        )
-    for image_id, encoded in rows:
-        result[int(image_id)].append(json.loads(encoded))
-    return {
-        image_id: torch.tensor(quads, dtype=torch.float32).reshape(-1, 4, 2)
-        for image_id, quads in result.items()
-    }
-
-
-def _transform_ego(
-    source_quads: torch.Tensor | None,
-    transform: tuple[float, float, float],
-    input_size: int,
-    device: torch.device,
-) -> torch.Tensor:
-    if source_quads is None or not source_quads.numel():
-        return torch.empty((0, 4, 2), dtype=torch.float32, device=device)
-    scale, offset_x, offset_y = transform
-    quads = source_quads.to(device) * scale
-    quads[..., 0] += offset_x
-    quads[..., 1] += offset_y
-    quads.clamp_(0, input_size)
-    quads = canonicalize_quads(quads)
-    return quads[quad_validity(quads)]
-
-
-def _merge_metrics(
-    utility: ProposalUtilityAccumulator, suppression: SuppressionSweepAccumulator
-) -> dict[str, float | int]:
-    result = utility.compute()
-    for key, value in suppression.compute().items():
-        if key not in result:
-            result[key] = value
-    return result
 
 
 @torch.inference_mode()
@@ -220,7 +110,7 @@ def _evaluate_kind(
     ego_by_image: dict[int, torch.Tensor],
     log_interval: int,
 ) -> dict[str, Any]:
-    model = _load_model(kind, checkpoint, state, device)
+    model = load_proposal_model(kind, checkpoint, state, device)
     decoder: Any = (
         InferenceDecoder(
             strides=config.assignment.strides,
@@ -253,10 +143,10 @@ def _evaluate_kind(
     started_all = time.monotonic()
     for images, samples in loader:
         images = images.to(device, non_blocking=device.type == "cuda")
-        _sync(device)
+        synchronize_device(device)
         started = time.perf_counter()
         output = model(images)
-        _sync(device)
+        synchronize_device(device)
         forward_seconds += time.perf_counter() - started
         if kind == "quad":
             output = QuadDetectorOutput(
@@ -269,7 +159,7 @@ def _evaluate_kind(
         masks = tuple(
             zip(
                 *(
-                    _valid_levels(
+                    valid_output_levels(
                         sample.valid_mask,
                         output_levels,
                         config.assignment.strides,
@@ -280,10 +170,10 @@ def _evaluate_kind(
             )
         )
         valid_masks = tuple(torch.cat(level, dim=0) for level in masks)
-        _sync(device)
+        synchronize_device(device)
         started = time.perf_counter()
         detections = decoder(output, (images.shape[-2], images.shape[-1]), valid_masks)
-        _sync(device)
+        synchronize_device(device)
         decode_seconds += time.perf_counter() - started
         for sample, detection in zip(samples, detections, strict=True):
             candidate_quads, scores = _candidate_tensors(kind, detection)
@@ -301,20 +191,20 @@ def _evaluate_kind(
                 keep_local = polygon_nms(
                     candidate_quads[eligible], scores[eligible], nms_threshold
                 )[:100]
-            _sync(device)
+            synchronize_device(device)
             nms_seconds += time.perf_counter() - started
             keep = eligible[keep_local]
             proposals = candidate_quads[keep]
             gt = sample.quads.to(device)
             trusted = sample.trusted_background_quads.to(device)
             ignored = sample.ignore_quads.to(device)
-            ego = _transform_ego(
+            ego = transform_ego_quads(
                 ego_by_image.get(sample.image_id),
                 sample.transform,
                 config.data.input_size,
                 device,
             )
-            _sync(device)
+            synchronize_device(device)
             started = time.perf_counter()
             gt_overlaps = pairwise_quad_iou(gt, proposals)
             trusted_overlaps = pairwise_quad_iou(trusted, proposals)
@@ -329,7 +219,7 @@ def _evaluate_kind(
             ego_fraction = proposal_region_fraction(
                 ego_overlaps, ego, proposals, disjoint_regions=False
             )
-            _sync(device)
+            synchronize_device(device)
             region_seconds += time.perf_counter() - started
             slices = {
                 "size": sample.size_bins,
@@ -337,7 +227,7 @@ def _evaluate_kind(
                     "regular" if label == "regular" else "thin"
                     for label in sample.aspect_bins
                 ),
-                "source_short_side": _source_size_bands(gt, sample.transform[0]),
+                "source_short_side": source_size_bands(gt, sample.transform[0]),
             }
             utility_args = {
                 "gt_overlaps": gt_overlaps,
@@ -386,7 +276,7 @@ def _evaluate_kind(
             "timing_scope": "CPU measurement; utility overlap is evaluation-only",
         },
         "groups": {
-            name: _merge_metrics(*accumulators)
+            name: merge_utility_and_suppression_metrics(*accumulators)
             for name, accumulators in sorted(groups.items())
         },
     }
@@ -443,7 +333,7 @@ def main() -> None:
         persistent_workers=args.workers > 0,
         collate_fn=collate_quad_proposal_samples,
     )
-    ego_by_image = _ego_source_quads(
+    ego_by_image = load_ego_source_quads(
         dataset.index_path, [dataset.records[index].image_id for index in selected]
     )
     if device.type == "cuda":

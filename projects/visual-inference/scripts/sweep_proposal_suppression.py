@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter
 import hashlib
 import json
 from pathlib import Path
-import sqlite3
 import time
 from typing import Any
 
@@ -15,12 +14,20 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision.ops import box_iou
 
-from student_detector.checkpoints import checkpoint_neck_type, load_model_state_strict
 from student_detector.config import load_phase3_config
 from student_detector.data import select_source_mixture_indices
 from student_detector.decoder import Detection, InferenceDecoder
 from student_detector.head import QuadDetectorOutput
-from student_detector.model import QuadProposalDetector, StudentDetector
+from student_detector.proposal_evaluation import (
+    boxes_to_quads,
+    load_ego_source_quads,
+    load_proposal_model,
+    merge_utility_and_suppression_metrics,
+    source_size_bands,
+    synchronize_device,
+    transform_ego_quads,
+    valid_output_levels,
+)
 from student_detector.proposal_utility import (
     ProposalUtilityAccumulator,
     ScoreReliabilityAccumulator,
@@ -31,13 +38,7 @@ from student_detector.quad_data import (
     collate_quad_proposal_samples,
 )
 from student_detector.quad_decoder import QuadDetection, QuadInferenceDecoder
-from student_detector.quad_geometry import (
-    canonicalize_quads,
-    pairwise_quad_iou,
-    quad_validity,
-    warmup_compiled_quad_iou,
-)
-from student_detector.quad_targets import point_validity_from_pixel_mask
+from student_detector.quad_geometry import pairwise_quad_iou, warmup_compiled_quad_iou
 from student_detector.suppression import (
     SuppressionSweepAccumulator,
     greedy_nms_from_overlaps,
@@ -66,7 +67,9 @@ def _thresholds(value: str, name: str) -> tuple[float, ...]:
     try:
         result = tuple(sorted({float(item.strip()) for item in value.split(",")}))
     except ValueError as error:
-        raise ValueError(f"{name} thresholds must be comma-separated numbers") from error
+        raise ValueError(
+            f"{name} thresholds must be comma-separated numbers"
+        ) from error
     if not result or any(not 0 <= item <= 1 for item in result):
         raise ValueError(f"{name} thresholds must be in [0, 1]")
     return result
@@ -80,122 +83,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _box_quads(boxes: torch.Tensor) -> torch.Tensor:
-    if not boxes.numel():
-        return boxes.new_empty((0, 4, 2))
-    x1, y1, x2, y2 = boxes.unbind(dim=1)
-    return torch.stack(
-        (
-            torch.stack((x1, y1), dim=1),
-            torch.stack((x2, y1), dim=1),
-            torch.stack((x2, y2), dim=1),
-            torch.stack((x1, y2), dim=1),
-        ),
-        dim=1,
-    )
-
-
-def _sync(device: torch.device) -> None:
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-
-
-def _ego_source_quads(
-    index_path: Path, image_ids: list[int]
-) -> dict[int, torch.Tensor]:
-    result: dict[int, list[Any]] = defaultdict(list)
-    placeholders = ",".join("?" for _ in image_ids)
-    with sqlite3.connect(
-        f"file:{index_path}?mode=ro&immutable=1", uri=True
-    ) as connection:
-        rows = connection.execute(
-            f"""
-            SELECT image_id, quad_json FROM annotations
-            WHERE category_name='ego_platform_bodywork'
-              AND image_id IN ({placeholders})
-            """,
-            image_ids,
-        )
-    for image_id, encoded in rows:
-        result[int(image_id)].append(json.loads(encoded))
-    return {
-        image_id: torch.tensor(quads, dtype=torch.float32).reshape(-1, 4, 2)
-        for image_id, quads in result.items()
-    }
-
-
-def _transform_ego(
-    source_quads: torch.Tensor | None,
-    transform: tuple[float, float, float],
-    input_size: int,
-    device: torch.device,
-) -> torch.Tensor:
-    if source_quads is None or not source_quads.numel():
-        return torch.empty((0, 4, 2), dtype=torch.float32, device=device)
-    scale, offset_x, offset_y = transform
-    quads = source_quads.to(device) * scale
-    quads[..., 0] += offset_x
-    quads[..., 1] += offset_y
-    quads.clamp_(0, input_size)
-    quads = canonicalize_quads(quads)
-    return quads[quad_validity(quads)]
-
-
-def _source_size_bands(quads: torch.Tensor, scale: float) -> tuple[str, ...]:
-    extent = (quads.amax(dim=1) - quads.amin(dim=1)) / scale
-    short = extent.amin(dim=1)
-    edges = (0, 4, 8, 16, 32, 64, 128, 256, float("inf"))
-    return tuple(
-        next(
-            f"[{lower:g},{upper:g})"
-            for lower, upper in zip(edges, edges[1:], strict=True)
-            if lower <= value < upper
-        )
-        for value in short.tolist()
-    )
-
-
-def _merge_metrics(
-    utility: ProposalUtilityAccumulator, suppression: SuppressionSweepAccumulator
-) -> dict[str, float | int]:
-    result = utility.compute()
-    for key, value in suppression.compute().items():
-        if key not in result:
-            result[key] = value
-    return result
-
-
-def _valid_levels(
-    valid_mask: torch.Tensor,
-    output_levels: tuple[torch.Tensor, ...],
-    strides: tuple[int, ...],
-    device: torch.device,
-) -> tuple[torch.Tensor, ...]:
-    shapes = tuple((item.shape[-2], item.shape[-1]) for item in output_levels)
-    levels = point_validity_from_pixel_mask(valid_mask.to(device), shapes, strides)[1]
-    return tuple(level.unsqueeze(0) for level in levels)
-
-
-def _load_model(
-    kind: str, checkpoint_path: Path, state: str, device: torch.device
-) -> torch.nn.Module:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    neck_type = checkpoint_neck_type(checkpoint)
-    model: torch.nn.Module
-    if kind == "hbb":
-        model = StudentDetector(pretrained_backbone=False, neck_type=neck_type)
-    else:
-        model = QuadProposalDetector(pretrained_backbone=False, neck_type=neck_type)
-    load_model_state_strict(
-        model,
-        checkpoint,
-        kind=kind,
-        neck_type=neck_type,
-        state_key=state,
-    )
-    return model.to(device).eval()
-
-
 def _candidate_tensors(
     kind: str, detection: Detection | QuadDetection
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -205,7 +92,7 @@ def _candidate_tensors(
         if detection.pre_nms_boxes is None or detection.pre_nms_scores is None:
             raise RuntimeError("HBB decoder did not retain pre-NMS candidates")
         boxes = detection.pre_nms_boxes.float()
-        return boxes, _box_quads(boxes), detection.pre_nms_scores.float()
+        return boxes, boxes_to_quads(boxes), detection.pre_nms_scores.float()
     if not isinstance(detection, QuadDetection):
         raise TypeError("quad sweep received a non-quad detection")
     if detection.pre_nms_quads is None or detection.pre_nms_scores is None:
@@ -258,7 +145,7 @@ def _evaluate_kind(
     ego_by_image: dict[int, torch.Tensor],
     log_interval: int,
 ) -> dict[str, Any]:
-    model = _load_model(kind, checkpoint, state, device)
+    model = load_proposal_model(kind, checkpoint, state, device)
     if kind == "hbb":
         decoder: Any = InferenceDecoder(
             strides=config.assignment.strides,
@@ -292,15 +179,16 @@ def _evaluate_kind(
         if name not in groups:
             groups[name] = ScoreReliabilityAccumulator()
         return groups[name]
+
     forward_seconds = decode_seconds = overlap_seconds = 0.0
     candidates = invalid = seen = 0
     started_all = time.monotonic()
     for images, samples in loader:
         images = images.to(device, non_blocking=device.type == "cuda")
-        _sync(device)
+        synchronize_device(device)
         started = time.perf_counter()
         output = model(images)
-        _sync(device)
+        synchronize_device(device)
         forward_seconds += time.perf_counter() - started
         if kind == "quad":
             output = QuadDetectorOutput(
@@ -313,7 +201,7 @@ def _evaluate_kind(
         masks = tuple(
             zip(
                 *(
-                    _valid_levels(
+                    valid_output_levels(
                         sample.valid_mask,
                         output_levels,
                         config.assignment.strides,
@@ -324,10 +212,10 @@ def _evaluate_kind(
             )
         )
         valid_masks = tuple(torch.cat(level, dim=0) for level in masks)
-        _sync(device)
+        synchronize_device(device)
         started = time.perf_counter()
         detections = decoder(output, (images.shape[-2], images.shape[-1]), valid_masks)
-        _sync(device)
+        synchronize_device(device)
         decode_seconds += time.perf_counter() - started
         for sample, detection in zip(samples, detections, strict=True):
             geometry, quads, scores = _candidate_tensors(kind, detection)
@@ -340,13 +228,13 @@ def _evaluate_kind(
                 else gt.new_empty((0, 4, 2))
             )
             ignored = sample.ignore_quads.to(device)
-            ego = _transform_ego(
+            ego = transform_ego_quads(
                 ego_by_image.get(sample.image_id),
                 sample.transform,
                 config.data.input_size,
                 device,
             )
-            _sync(device)
+            synchronize_device(device)
             started = time.perf_counter()
             proposal_overlaps = (
                 box_iou(geometry, geometry)
@@ -372,7 +260,7 @@ def _evaluate_kind(
                 quads,
                 disjoint_regions=False,
             )
-            _sync(device)
+            synchronize_device(device)
             overlap_seconds += time.perf_counter() - started
             proposal_overlaps = proposal_overlaps.cpu()
             gt_overlaps = gt_overlaps.cpu()
@@ -388,7 +276,7 @@ def _evaluate_kind(
                     "regular" if label == "regular" else "thin"
                     for label in sample.aspect_bins
                 ),
-                "source_short_side": _source_size_bands(gt, sample.transform[0]),
+                "source_short_side": source_size_bands(gt, sample.transform[0]),
             }
             group_names = (
                 "aggregate",
@@ -452,14 +340,12 @@ def _evaluate_kind(
                 )
     metrics_by_setting = {
         key: {
-            name: _merge_metrics(*accumulators)
+            name: merge_utility_and_suppression_metrics(*accumulators)
             for name, accumulators in sorted(groups.items())
         }
         for key, groups in settings.items()
     }
-    metrics = {
-        key: groups["aggregate"] for key, groups in metrics_by_setting.items()
-    }
+    metrics = {key: groups["aggregate"] for key, groups in metrics_by_setting.items()}
     del model
     if device.type == "cuda":
         torch.cuda.empty_cache()
@@ -498,7 +384,9 @@ def _evaluate_kind(
 def main() -> None:
     args = _args()
     if args.validation_images < 1 or args.workers < 0 or args.log_interval < 0:
-        raise ValueError("validation images must be positive; workers/log interval nonnegative")
+        raise ValueError(
+            "validation images must be positive; workers/log interval nonnegative"
+        )
     nms_thresholds = _thresholds(args.nms_thresholds, "NMS")
     score_thresholds = _thresholds(args.score_thresholds, "score")
     device = torch.device(args.device)
@@ -518,7 +406,7 @@ def main() -> None:
     selected = select_source_mixture_indices(
         dataset.records, config.data.source_weights, args.validation_images
     )
-    ego_by_image = _ego_source_quads(
+    ego_by_image = load_ego_source_quads(
         config.data.index_dir / "quad_val.sqlite",
         [dataset.records[index].image_id for index in selected],
     )
@@ -575,7 +463,11 @@ def main() -> None:
         "validation_manifest_sha256": _sha256(annotations),
         "validation_subset_sha256": hashlib.sha256(selected_identity).hexdigest(),
         "source_counts": dict(
-            sorted(Counter(dataset.records[index].source_dataset for index in selected).items())
+            sorted(
+                Counter(
+                    dataset.records[index].source_dataset for index in selected
+                ).items()
+            )
         ),
         "proposal_budget": 100,
         "pre_nms_top_k": config.inference.pre_nms_top_k,
@@ -586,7 +478,9 @@ def main() -> None:
     }
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(f"Wrote matched suppression sweep to {output}")
 
 
