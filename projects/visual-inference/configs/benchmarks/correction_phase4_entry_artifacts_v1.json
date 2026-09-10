@@ -1,0 +1,94 @@
+{
+  "schema_version": "visual-inference-phase4-entry-artifacts.v1",
+  "artifact_set_id": "correction-phase3-entry-v1",
+  "evidence_commits": {
+    "phase2_phase3": "6c405b7e5f6e5bb87765ce31e123032b37b07d75",
+    "evaluation_refactor": "6c83b970953e594678b4aa6364f2154c17e83fab"
+  },
+  "dependency_lock": {
+    "path": "uv.lock",
+    "sha256": "327a20f27cc0bfe1ef3add793791cef735d6c2133627fab5f8a5ce20545bb316"
+  },
+  "dataset": {
+    "id": "phase3-production-bg-policy-v2-2026-08-29",
+    "archive": {
+      "s3_key": "datasets/phase3-production-bg-policy-v2-2026-08-29/dataset.tar.gz",
+      "size": 62435399007,
+      "sha256": "9a0671a72cebe7d102d6c147408b159347c9fd8f5e315a11017daca511de1ec8"
+    },
+    "manifest": {
+      "local_path": "/media/sashamikoff/fb.com-mikoff/datasets/generated/phase3-production-bg-policy-v2-2026-08-29/reports/cloud_bundle/dataset-manifest.json",
+      "s3_key": "datasets/phase3-production-bg-policy-v2-2026-08-29/dataset-manifest.json",
+      "size": 541,
+      "sha256": "c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c"
+    },
+    "contract_sha256": "0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a"
+  },
+  "remote_prefix": "artifacts/proposal-correction/phase3-entry-v1",
+  "artifacts": [
+    {
+      "role": "hbb_weights_initialization",
+      "local_path": "artifacts/phase3/gradient_calibration_v1/hbb_p3_seed42/step_0200.pt",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/hbb/step_0200.pt",
+      "size": 114245399,
+      "sha256": "3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063"
+    },
+    {
+      "role": "hbb_training_contract",
+      "local_path": "artifacts/phase3/gradient_calibration_v1/hbb_p3_seed42/run_contract.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/hbb/run_contract.json",
+      "size": 10886,
+      "sha256": "ab4d36c037eeab7f1a77ebde24e1a2d1bb8ae9c3359531fe747d71e453fefbef"
+    },
+    {
+      "role": "quad_control_checkpoint",
+      "local_path": "artifacts/phase2/short_v1/quad_p3/last.pt",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/quad/control_last.pt",
+      "size": 114205920,
+      "sha256": "cf4d1a7228fab007317b1a9d6f2c037ccc139fa16e1c223a7d2d3a44fc8c095d"
+    },
+    {
+      "role": "hbb_baseline_utility",
+      "local_path": "artifacts/phase3/correction_quality_1p5_v1/utility_baseline_step200_ema.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/evaluation/utility_baseline_step200_ema.json",
+      "size": 145878,
+      "sha256": "eafb5a74ed2984d2b54d966b993715c7104d9c778c9576e6fcf968a622c56c9e"
+    },
+    {
+      "role": "objectness_candidate_decision",
+      "local_path": "artifacts/phase3/correction_quality_1p5_v1/selection_quality1p5_vs_baseline.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/decisions/objectness_1p5.json",
+      "size": 7888,
+      "sha256": "4aae9f9a9fd230aab3f4470a8ed9a0b40f44c6cbf478f96beb65a538ccc5b8b5"
+    },
+    {
+      "role": "mined_focus_candidate_decision",
+      "local_path": "artifacts/phase3/correction_mining_v1/selection_candidate_vs_baseline.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/decisions/mined_focus_2x.json",
+      "size": 7851,
+      "sha256": "497ba875fe9ba6cd34a49a8deae8372f5a10fa2215c687855ef9f01e5e9a5cd7"
+    },
+    {
+      "role": "suppression_calibration",
+      "local_path": "artifacts/phase3/suppression_calibration_v1/suppression_sweep_ema.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/evaluation/suppression_sweep_ema.json",
+      "size": 1649567,
+      "sha256": "babb5bbb57da4f4d75c578b3f72029ec5339881e79fe42d6862d73e771530c11"
+    },
+    {
+      "role": "gradient_diagnostics_step100",
+      "local_path": "artifacts/phase3/gradient_calibration_v1/gradient_step100_8x2.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/diagnostics/gradient_step100_8x2.json",
+      "size": 51715,
+      "sha256": "22c5dde3d3b7146dc06de6329744928c5a950ea43358c65644644db18b406a39"
+    },
+    {
+      "role": "gradient_diagnostics_step200",
+      "local_path": "artifacts/phase3/gradient_calibration_v1/gradient_step200_8x2.json",
+      "s3_key": "artifacts/proposal-correction/phase3-entry-v1/diagnostics/gradient_step200_8x2.json",
+      "size": 51664,
+      "sha256": "11dd0cc8854aa4758cb533eea4f1b5c980708ec11e14c02998c31410c70dd7f6"
+    }
+  ],
+  "manifest_s3_key": "artifacts/proposal-correction/phase3-entry-v1/artifact-manifest.json"
+}

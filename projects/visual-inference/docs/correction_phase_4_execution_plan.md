@@ -1,7 +1,8 @@
 # Correction Phase 4 execution plan
 
-Status: planned. Phase 4.1 is blocked until the Phase 2/3 change set is committed
-and durable references for required gitignored artifacts are recorded.
+Status: Phase 4.0 complete and awaiting owner confirmation before Phase 4.1.
+The source boundary and durable artifacts are recorded in the
+[Phase 4.0 evidence report](correction_phase_4_0_evidence_boundary.md).
 
 ## Goal and stopping point
 
@@ -32,6 +33,9 @@ not be retrained without a new proposal-level justification.
 ## Supervised execution steps
 
 ### 4.0 Commit and evidence boundary
+
+Complete. The evidence set is immutable and remotely verified; the manifest was
+uploaded last. Owner confirmation remains required before Phase 4.1.
 
 - Use the verified [Phases 2–3 commit review](correction_phase_2_3_commit_review.md).
 - Review and commit the complete Phase 2/3 source, tests, configs, and reports.

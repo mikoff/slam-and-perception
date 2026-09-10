@@ -63,14 +63,14 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
 
 # Local Constraints & Gotchas
 
-- The cloud gate is seeds 42/43/44 for LiteFPN and AttnResLiteFPN; CPU cannot certify it.
 - Validation score quantiles use 65,536-bin `[0,1]` histograms; memory is
   independent of dataset size and absolute quantile error is below one bin.
 - A dataset ID is immutable. Publish changed bytes under a new ID instead of
   replacing an existing S3 prefix or local staged directory.
 - Production images are local symlinks and exceed archive scratch space; use the
   runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
-- The Phase 1 local loader gate passed; remote staging is deferred to the first cloud run.
+- Phase 4 entry artifacts use an immutable S3 prefix; launch rechecks the
+  manifest-bound remote sizes and SHA-256 metadata.
 - RunPod needs a configured dstack backend; Packet needs its registered SSH key.
 - `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
   keys/versions, sets Docker's 32G shm default, then verifies before dstack.

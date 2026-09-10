@@ -39,8 +39,16 @@ mandatory_conditions:
   critical_domain_regression_protected: pass
   model_data_config_and_reports_content_addressed: pass
   exact_dirty_training_source_reconstructable: accepted_limitation
-  phase2_phase3_change_set_committed: pending
-  durable_gitignored_artifact_references_recorded: pending
+  phase2_phase3_change_set_committed: pass
+  durable_gitignored_artifact_references_recorded: pass
+
+phase4_entry_evidence:
+  phase2_phase3_commit: 6c405b7e5f6e5bb87765ce31e123032b37b07d75
+  evaluation_refactor_commit: 6c83b970953e594678b4aa6364f2154c17e83fab
+  uv_lock_sha256: 327a20f27cc0bfe1ef3add793791cef735d6c2133627fab5f8a5ce20545bb316
+  artifact_manifest: correction_phase4_entry_artifacts_v1.json
+  artifact_manifest_sha256: 2436a75331adc7e952125584ec3abb044eb0576da54b640fc73230ea57b814a4
+  artifact_manifest_s3_key: artifacts/proposal-correction/phase3-entry-v1/artifact-manifest.json
 
 authorization:
   phase4_planning: allowed
