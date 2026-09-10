@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from .augmentation import effective_augmentation_policy
 from .config import Phase3Config
@@ -57,6 +58,40 @@ def model_signature(model: torch.nn.Module) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def model_state_sha256(model: torch.nn.Module) -> str:
+    """Hash every initial parameter and buffer value in stable name order."""
+    import torch
+
+    digest = hashlib.sha256()
+    for name, value in sorted(model.state_dict().items()):
+        tensor = value.detach().cpu().contiguous()
+        digest.update(name.encode())
+        digest.update(b"\0")
+        digest.update(str(tensor.dtype).encode())
+        digest.update(b"\0")
+        digest.update(json.dumps(tuple(tensor.shape)).encode())
+        digest.update(b"\0")
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
+def _manifest_sha256(manifest: Path, index: Path) -> str | None:
+    """Use the prebuilt index's verified source signature when available."""
+    if index.is_file():
+        try:
+            with sqlite3.connect(
+                f"file:{index}?mode=ro&immutable=1", uri=True
+            ) as connection:
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key='source_signature'"
+                ).fetchone()
+            if row and str(row[0]).startswith("sha256:"):
+                return str(row[0]).removeprefix("sha256:")
+        except sqlite3.Error:
+            pass
+    return sha256_file(manifest) if manifest.is_file() else None
+
+
 def write_run_contract(
     output_dir: Path,
     *,
@@ -68,32 +103,38 @@ def write_run_contract(
     batches_per_epoch: int,
     optimizer_steps: int,
     world_size: int,
+    geometry: Literal["hbb", "quad"],
 ) -> Path:
     """Write the resolved, content-addressed training contract once per run."""
     import torch
 
-    train_manifest = Path(
-        config.data.quad_train_annotations or config.data.train_annotations
-    )
-    validation_manifest = Path(
-        config.data.quad_val_annotations or config.data.val_annotations
-    )
+    if geometry == "quad":
+        train_manifest = Path(
+            config.data.quad_train_annotations or config.data.train_annotations
+        )
+        validation_manifest = Path(
+            config.data.quad_val_annotations or config.data.val_annotations
+        )
+    else:
+        train_manifest = config.data.train_annotations
+        validation_manifest = config.data.val_annotations
+    train_index = config.data.index_dir / "quad_train.sqlite"
+    validation_index = config.data.index_dir / "quad_val.sqlite"
     lockfile = repository / "projects" / "visual-inference" / "uv.lock"
     status = _git_value(repository, "status", "--short")
     contract = {
         "schema_version": "phase3-run-contract.v1",
+        "geometry": geometry,
         "config": _jsonable(asdict(config)),
         "data": {
             "train_manifest": str(train_manifest),
-            "train_manifest_sha256": (
-                sha256_file(train_manifest) if train_manifest.is_file() else None
-            ),
+            "train_manifest_sha256": _manifest_sha256(train_manifest, train_index),
+            "train_manifest_hash_source": str(train_index),
             "validation_manifest": str(validation_manifest),
-            "validation_manifest_sha256": (
-                sha256_file(validation_manifest)
-                if validation_manifest.is_file()
-                else None
+            "validation_manifest_sha256": _manifest_sha256(
+                validation_manifest, validation_index
             ),
+            "validation_manifest_hash_source": str(validation_index),
             "train_images": train_images,
             "validation_images": validation_images,
         },
@@ -107,6 +148,7 @@ def write_run_contract(
         },
         "augmentation_effective": effective_augmentation_policy(config.augmentation),
         "model_signature_sha256": model_signature(model),
+        "initial_model_state_sha256": model_state_sha256(model),
         "environment": {
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
@@ -129,4 +171,9 @@ def write_run_contract(
     return target
 
 
-__all__ = ["model_signature", "sha256_file", "write_run_contract"]
+__all__ = [
+    "model_signature",
+    "model_state_sha256",
+    "sha256_file",
+    "write_run_contract",
+]

@@ -15,6 +15,7 @@ from student_detector.assigner import ATSSAssigner
 from student_detector.config import load_phase3_config
 from student_detector.data import (
     DomainMixtureBatchSampler,
+    HardNegativeFocusBatchSampler,
     IndexedCocoProposalDataset,
     collate_proposal_samples,
     select_source_mixture_indices,
@@ -26,14 +27,14 @@ from student_detector.targets import TargetBuilder
 from student_detector.training import train_phase3
 from student_detector.training_optimization import set_reproducibility_seed
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", type=Path, default=Path("configs/phase3.yaml")
-    )
+    parser.add_argument("--config", type=Path, default=Path("configs/phase3.yaml"))
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--max-val-batches", type=int)
+    parser.add_argument("--validation-images", type=int)
     parser.add_argument("--batches-per-epoch", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--workers", type=int)
@@ -47,7 +48,8 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--box-loss", choices=("ciou", "giou"),
+        "--box-loss",
+        choices=("ciou", "giou"),
         help="One-variable regression-loss override for controlled ablations",
     )
     parser.add_argument(
@@ -95,8 +97,7 @@ def parse_args() -> argparse.Namespace:
         "--woodscape-background-weight",
         type=float,
         help=(
-            "Weak negative-objectness weight for valid non-ignore "
-            "WoodScape locations"
+            "Weak negative-objectness weight for valid non-ignore WoodScape locations"
         ),
     )
     parser.add_argument(
@@ -109,8 +110,7 @@ def parse_args() -> argparse.Namespace:
         "--validation-interval",
         type=int,
         help=(
-            "Validate every N epochs; defaults to 5 for Stage 0 and 1 for "
-            "production"
+            "Validate every N epochs; defaults to 5 for Stage 0 and 1 for production"
         ),
     )
     parser.add_argument(
@@ -119,6 +119,11 @@ def parse_args() -> argparse.Namespace:
         help="Stage-0 mode: train and validate on one fixed balanced subset",
     )
     parser.add_argument("--no-pretrained", action="store_true")
+    parser.add_argument(
+        "--p2",
+        action="store_true",
+        help="Use the P2-P5 small-object candidate instead of P3-P5",
+    )
     parser.add_argument("--force-index", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--resume", type=Path)
@@ -136,16 +141,26 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = load_phase3_config(args.config)
-    if args.batch_size is not None or args.workers is not None:
-        config = replace(config, data=replace(
-            config.data,
-            batch_size=args.batch_size or config.data.batch_size,
-            workers=(
-                args.workers
-                if args.workers is not None
-                else config.data.workers
+    if args.p2:
+        config = replace(
+            config,
+            assignment=replace(
+                config.assignment,
+                strides=(4, 8, 16, 32),
+                prior_sizes=(16, 64, 128, 256),
             ),
-        ))
+        )
+    if args.batch_size is not None or args.workers is not None:
+        config = replace(
+            config,
+            data=replace(
+                config.data,
+                batch_size=args.batch_size or config.data.batch_size,
+                workers=(
+                    args.workers if args.workers is not None else config.data.workers
+                ),
+            ),
+        )
     if (
         args.epochs is not None
         or args.freeze_backbone_epochs is not None
@@ -156,9 +171,7 @@ def main() -> None:
             schedule=replace(
                 config.schedule,
                 epochs=(
-                    args.epochs
-                    if args.epochs is not None
-                    else config.schedule.epochs
+                    args.epochs if args.epochs is not None else config.schedule.epochs
                 ),
                 freeze_backbone_epochs=(
                     args.freeze_backbone_epochs
@@ -183,9 +196,7 @@ def main() -> None:
             loss=replace(
                 config.loss,
                 box_loss=args.box_loss or config.loss.box_loss,
-                objectness_loss=(
-                    args.objectness_loss or config.loss.objectness_loss
-                ),
+                objectness_loss=(args.objectness_loss or config.loss.objectness_loss),
                 ltrb_weight=(
                     args.ltrb_weight
                     if args.ltrb_weight is not None
@@ -201,9 +212,7 @@ def main() -> None:
     if args.score_mode is not None:
         config = replace(
             config,
-            inference=replace(
-                config.inference, score_mode=args.score_mode
-            ),
+            inference=replace(config.inference, score_mode=args.score_mode),
         )
     if args.pure_atss or args.prior_multiplier is not None:
         config = replace(
@@ -211,8 +220,7 @@ def main() -> None:
             assignment=replace(
                 config.assignment,
                 center_radius=(
-                    None if args.pure_atss
-                    else config.assignment.center_radius
+                    None if args.pure_atss else config.assignment.center_radius
                 ),
                 prior_sizes=(
                     tuple(
@@ -243,9 +251,7 @@ def main() -> None:
         )
     if args.woodscape_background_weight is not None:
         background_weights = dict(config.data.background_loss_weights)
-        background_weights["woodscape_rgb_fisheye"] = (
-            args.woodscape_background_weight
-        )
+        background_weights["woodscape_rgb_fisheye"] = args.woodscape_background_weight
         config = replace(
             config,
             data=replace(
@@ -256,8 +262,10 @@ def main() -> None:
     if args.output_dir is not None:
         config = replace(config, output_dir=args.output_dir.resolve())
     device = torch.device(
-        "cuda" if args.device == "auto" and torch.cuda.is_available()
-        else "cpu" if args.device == "auto"
+        "cuda"
+        if args.device == "auto" and torch.cuda.is_available()
+        else "cpu"
+        if args.device == "auto"
         else args.device
     )
     set_reproducibility_seed(config.schedule.seed)
@@ -265,7 +273,7 @@ def main() -> None:
     train_dataset = IndexedCocoProposalDataset(
         config.data.train_annotations,
         config.data.image_root,
-        config.data.index_dir / "train.sqlite",
+        config.data.index_dir / "quad_train.sqlite",
         config.data,
         config.augmentation,
         # A diagnostic overfit run must see the same pixels every epoch.
@@ -279,7 +287,7 @@ def main() -> None:
         if args.overfit_images
         else config.data.val_annotations
     )
-    val_index = "train.sqlite" if args.overfit_images else "val.sqlite"
+    val_index = "quad_train.sqlite" if args.overfit_images else "quad_val.sqlite"
     val_dataset = IndexedCocoProposalDataset(
         val_annotations,
         config.data.image_root,
@@ -290,6 +298,13 @@ def main() -> None:
         seed=config.schedule.seed,
         force_index=args.force_index,
     )
+    if args.validation_images is not None:
+        selected_indices = select_source_mixture_indices(
+            val_dataset.records,
+            config.data.source_weights,
+            args.validation_images,
+        )
+        val_dataset.records = [val_dataset.records[index] for index in selected_indices]
     if args.overfit_images:
         if args.overfit_images < 1:
             raise ValueError("--overfit-images must be positive")
@@ -299,19 +314,31 @@ def main() -> None:
             args.overfit_images,
             positive_only=True,
         )
-        selected = [
-            train_dataset.records[index] for index in selected_indices
-        ]
+        selected = [train_dataset.records[index] for index in selected_indices]
         train_dataset.records = list(selected)
         val_dataset.records = list(selected)
-    batch_sampler = DomainMixtureBatchSampler(
+    sampler_type = (
+        HardNegativeFocusBatchSampler
+        if config.data.hard_negative_focus_per_optimizer_window
+        else DomainMixtureBatchSampler
+    )
+    sampler_extra = (
+        {
+            "accumulation_steps": config.schedule.accumulation_steps,
+            "focus_source_weights": config.data.hard_negative_focus_source_weights,
+        }
+        if sampler_type is HardNegativeFocusBatchSampler
+        else {}
+    )
+    batch_sampler = sampler_type(
         train_dataset,
         config.data.batch_size,
         domain_weights=config.data.domain_weights,
         source_weights=config.data.source_weights,
         empty_fraction=config.data.empty_fraction,
         seed=config.schedule.seed,
-        batches_per_epoch=args.batches_per_epoch,
+        batches_per_epoch=(args.batches_per_epoch or config.data.batches_per_epoch),
+        **sampler_extra,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -371,8 +398,10 @@ def main() -> None:
         focal_gamma=config.loss.focal_gamma,
     )
     model = StudentDetector(
-        pretrained_backbone=config.pretrained_backbone
-        and not args.no_pretrained
+        pretrained_backbone=config.pretrained_backbone and not args.no_pretrained,
+        neck_type=config.neck_type,
+        strides=config.assignment.strides,
+        head_seed=config.schedule.seed,
     )
     result = train_phase3(
         model,
@@ -381,6 +410,7 @@ def main() -> None:
         TargetBuilder(
             assigner,
             background_loss_weights=config.data.background_loss_weights,
+            hard_negative_focus_weight=config.loss.hard_negative_focus_weight,
         ),
         criterion,
         config,
@@ -393,8 +423,7 @@ def main() -> None:
         validation_interval=(
             args.validation_interval
             if args.validation_interval is not None
-            else 5 if args.overfit_images
-            else 1
+            else config.schedule.validation_interval
         ),
     )
     print(json.dumps(result, indent=2, sort_keys=True))

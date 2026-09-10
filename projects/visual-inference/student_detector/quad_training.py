@@ -124,9 +124,7 @@ def validate_quad_states(
     """Evaluate multiple weight states in one loader pass on the target device."""
     for model in models.values():
         model.eval()
-    accumulators = {
-        state: QuadEvaluationAccumulator(state=state) for state in models
-    }
+    accumulators = {state: QuadEvaluationAccumulator(state=state) for state in models}
     if device.type == "cuda":
         timestamped_print("[Validation] Warming exact quadrilateral IoU kernel")
         warmup = torch.tensor(
@@ -371,6 +369,13 @@ class _QuadTask:
 
 
 def _write_quad_run_contract(**context: Any) -> None:
+    target = context["config"].output_dir / "run_contract.json"
+    if context.get("resume") is not None:
+        if not target.is_file():
+            raise FileNotFoundError(
+                "cannot certify a quad resume without its original run_contract.json"
+            )
+        return
     write_run_contract(
         context["config"].output_dir,
         config=context["config"],
@@ -381,6 +386,7 @@ def _write_quad_run_contract(**context: Any) -> None:
         batches_per_epoch=len(context["train_loader"]),
         optimizer_steps=context["optimizer_steps"],
         world_size=context["world_size"],
+        geometry="quad",
     )
 
 

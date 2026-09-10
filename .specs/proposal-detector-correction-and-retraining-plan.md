@@ -18,22 +18,37 @@ precedence over downstream/full-release requirements retained below:
   cloud run; local source symlinks do not establish archive portability.
   Include the P2/min-4 ablation justified by the 16px source-object requirement.
   Quad P2 needs proposal-level justification; no SigLIP experiment is required.
+  The seed-42 screen completed on 2026-09-06: HBB P3–P5 is the provisional
+  primary, quad P3–P5 is the retained control, and HBB P2–P5 did not justify a
+  quad-P2 run. The owner confirmed that selection and Phase 2 is complete.
 - Phase 2.2 currently fixes K and the common decoded proposal record, source
   coordinates and transform inversion. SigLIP crop rate, crop generation and
   semantic crop audits are deferred.
+  Implementation fixes K=100 and passed automated source-coordinate and stable-
+  identity checks; the owner approved proceeding on 2026-09-06.
 - Phase 2.3–2.4 use proposal recall, duplicates, background false proposals,
   size/domain slices and inference/postprocessing cost. Downstream crop metrics
   and SigLIP evaluation, including the proposed 1–2 point tolerance, are deferred.
+  The owner approved HBB NMS/score `0.70/0.30` and quad `0.80/0.20` on
+  2026-09-06. Phase 2.4 measured their utility on the same 800-image cohort;
+  the owner selected HBB as primary and quad as the retained control.
 - Phase 2 selects a working architecture for loss validation and retraining,
   retaining a control. This is not final HBB/quad selection for the semantic
   system. Phase 3 selection uses proposal-level budgets and approved thresholds.
 - Phase 2.5 retains early export parity and resource profiling. Physical RPi
-  production acceptance belongs to a later release milestone; record measured
-  evidence and unknowns without treating desktop measurements as RPi evidence.
+  production acceptance belongs to a later release milestone. Both FP32 PT2
+  candidates exported, reloaded, and matched eager output exactly on 2026-09-06;
+  host CPU and historical RTX 3060 evidence is recorded without treating it as
+  RPi or INT8 evidence.
 - Phase 4 retains full retraining, proposal validation, visual review, export
   parity and reproducible artifact packaging. SigLIP-dependent parts of 4.7 and
   physical-device promotion/canary requirements in 4.8 are deferred. Stop after
   the owner reviews the trained proposal outputs, before semantic integration.
+- The Phase 3.1 reuse audit found that the Phase 2.1 HBB result is valid
+  historical performance evidence but lacks a populated run contract and
+  domain/state loss logs. The contract-bound HBB-only replacement completed at
+  400 steps on 2026-09-07 with all diagnostic reconstruction gates passing.
+  The owner approved the Phase 3.2 normalization work, which is complete.
 
 Completion of this milestone does not assert completion of the eventual full
 system release criteria below. Preserve historical benchmark data and record
@@ -619,6 +634,11 @@ well separated in the completed model.
 **AI AGENT** Log raw and weighted components separately, by domain and state.
 Never infer balance only from the final summed scalar.
 
+Implementation status: the HBB instrumentation, immutable run contract,
+initial-state hash, and `correction_phase3_baseline_v1.yaml` launch config pass
+the production-batch audit and detector suite. The replacement run completed
+at exactly 400 successful optimizer steps and is the Phase 3 comparison baseline.
+
 #### 3.2 Correct reduction and normalization before tuning coefficients
 
 **AI AGENT** Make every component invariant, as far as practical, to batch size,
@@ -635,6 +655,12 @@ positive count, polygon sample count, and image annotation density:
 **AI AGENT** Add scale checks showing that duplicating an identical sample or
 changing microbatch partitioning does not materially change the normalized loss
 or one-step parameter update.
+
+Implementation status: the selected HBB objective now reduces each state and
+localization component per image before averaging images. It logs exact counts,
+weights, and empty/active states. Duplicate-sample, microbatch-update, empty-state,
+production-batch, and full-suite gates pass. No post-change training run has been
+launched at this step; the subsequent normalized calibration run completed.
 
 #### 3.3 Measure gradient influence on shared features
 
@@ -653,6 +679,14 @@ Report:
 
 The current scalar breakdown—corner contributing roughly 96%—does not prove that
 corner gradients dominate, but the new measurements will.
+
+Implementation status: complete. The offline HBB probe measures FP32
+quality/localization norms, ratios, cosine, and batch variance at combined
+P3–P5 and backbone C5 for fixed overall/domain/isolated-size cohorts. The
+normalized-loss raw model was measured on the same ordered 16-image cohorts at
+steps 100 and 200. Localization dominates every slice; quality influence
+generally declines by step 200, while median cosine remains near zero to mildly
+positive. No coefficients changed; the subsequent Phase 3.4 search is complete.
 
 #### 3.4 Calibrate initial weights automatically, then search narrowly
 
@@ -694,6 +728,15 @@ would initially add only about 0.00032, 0.00097, and 0.00162 to the scalar loss.
 Those are sensible cautious candidates, but gradient measurements and validation
 outcomes—not scalar arithmetic alone—must decide.
 
+Implementation status: complete. The owner-approved objectness-1.5 candidate
+achieved the offline Q:L target, then completed a matched seed-42 200-step run
+from the identical initial state. Its trained aggregate Q:L rose from baseline
+0.252 to 0.319 at step 100 and 0.104 to 0.177 at step 200, with localization
+still dominant. Under approved production suppression it lost 0.34 points
+R100/0.50, 0.23 AR100, 0.23 R100/0.75, and weakened small/thin recall while
+raising false/unmatched rates. Retain objectness weight 1.0 and skip 2.0; the
+single short run is insufficient evidence of harm but gives no reason to change.
+
 #### 3.5 Use goal-aligned selection metrics
 
 **MANUAL** Define the primary selection objective before running the search. The
@@ -707,6 +750,16 @@ recommended form is constrained optimization:
 confidence intervals or seed variation where feasible. Do not select by training
 loss alone. Include explicit slices for ego vehicle, sky, road, vegetation,
 facades/walls, tiny objects, thin objects, and crowded scenes.
+
+Implementation status: a versioned selection-policy proposal and checker now
+enforce identical EMA/cohort/data/threshold/quad-control contracts and return
+pass, fail, inconclusive, or invalid-contract. AR100 is primary; recall,
+domain/size, false, duplicate, ego-overlap, and K=100 limits are guardrails.
+Aggregate-only reports cannot support honest paired bootstrap intervals, so
+near-boundary results require another seed or future per-image statistics. The
+objectness-1.5 candidate fails general, small, and source-16-32 recall gates.
+The owner approved the numerical margins on 2026-09-09; selection policy v1 is
+frozen. Any later margin change requires a new policy version.
 
 #### 3.6 Add targeted hard-negative mining only after the clean baseline
 
@@ -725,6 +778,17 @@ not by modifying the original source annotations in place. Compare one targeted
 mining round against the non-mined baseline. Avoid repeated self-training loops
 until the first round demonstrates value.
 
+Implementation status: the frozen train-only 800-image mining pass completed on
+2026-09-09. It retained 1,200 capped candidates and emitted a stratified 160-card
+audit bundle. Under the owner-delegated conservative default, 40 candidates were
+approved only as selectors over existing trusted-background supervision. The
+owner approved one same-source focus replacement per 32-image optimizer window
+at a 1:3 BDD-to-WoodScape ratio and 2x focus weight. The exposure audit verified
+200/200 windows without changing source/domain counts. The matched 200-step run
+failed the frozen selection policy: small and thin recall regressed, while
+trusted-background and unmatched false-proposal fractions increased. Reject the
+candidate and retain the normalized non-mined baseline.
+
 #### 3.7 Calibrate scores and NMS after training
 
 **AI AGENT** Sweep score thresholds and NMS thresholds on validation outputs,
@@ -732,6 +796,12 @@ including per-domain reliability curves. Proposal quality is a ranking score, no
 necessarily a calibrated probability. Choose thresholds against the fixed top-K
 and false-proposal budget; do not treat a visually convenient threshold such as
 0.4 as universal.
+
+Implementation status: the matched 800-image bounded sweep completed on
+2026-09-10 using the retained normalized HBB baseline and unchanged quad
+control. It adds per-domain score-reliability and false-proposal curves to the
+cached suppression replay. On 2026-09-10 the owner approved retaining HBB
+NMS/score `0.70/0.30` and quad `0.80/0.20`. Phase 3.7 is complete.
 
 #### Phase 3 deliverables
 
@@ -754,9 +824,36 @@ Proceed to full retraining only when:
 - critical-domain false proposals do not regress;
 - the exact configuration and calibration evidence are versioned.
 
+Closeout audit result (2026-09-10): **no-go under the frozen rule**. All Phase 3
+deliverables are complete; four entry conditions pass, objective improvement is
+not met, and evidence versioning is partial because the Phase 2/3 change set is
+not committed. Objectness 1.5 and mined-focus training both failed the frozen
+selection policy, so retaining the normalized control cannot satisfy an
+improvement-over-control requirement. Phase 4 requires an explicit owner
+decision to test another justified candidate or version a rule that accepts
+conservative baseline retention after a null experiment, followed by a commit
+and durable artifact-reference check.
+
+Owner decision (2026-09-10): accept the Phase 3 null experiment through the
+versioned `proposal-phase3-entry-gate.v2` contract. This does not claim that the
+retained control improved over itself. Phase 4 planning is allowed; contract
+execution/preflight require the Phase 2/3 change set to be committed and
+gitignored evidence to have durable references. Cloud pilot and full retraining
+each remain explicit owner launch gates.
+
 ### Phase 4 — Retraining, Evaluation, and Release
 
+The active proposal-only execution contract is
+`docs/correction_phase_4_execution_plan.md`. It supersedes downstream SigLIP,
+physical-RPi, architecture-search, and production-rollout tasks in the generic
+outline below. Phase 4 starts with its step 4.0 commit/evidence boundary and uses
+plan-execute-verify cycles with owner approval before cloud pilot and full run.
+
 #### 4.1 Freeze the training contract
+
+Entry requires a committed Phase 2/3 change set and durable references for the
+gitignored checkpoints and reports named by the v2 entry gate. The full run is
+HBB P3–P5 only; the existing quad P3–P5 checkpoint remains an evaluation control.
 
 **AI AGENT** Produce one immutable run contract containing:
 
@@ -785,15 +882,10 @@ run.
 
 **AI AGENT** Apply this policy:
 
-- corrected quad model: initialize compatible backbone/FPN and optionally quad
-  head weights from the previous checkpoint, but reset optimizer, scheduler,
-  scaler, EMA, epoch, and run identity;
-- HBB model: initialize the same compatible backbone/FPN weights and initialize
-  the new HBB prediction layers from scratch;
-- P2 model: initialize shared levels and initialize new P2 lateral/output layers
-  from scratch;
-- fair architecture comparison: use the same shared-trunk checkpoint and the
-  same seed policy for every candidate;
+- initialize the selected HBB model from the owner-approved weights source;
+- when weights-only warm start is selected, reset optimizer, scheduler, scaler,
+  EMA, epoch, sampler position, and run identity;
+- do not retrain quad, add P2, or reopen architecture/loss search in Phase 4;
 - checkpoint resume after infrastructure interruption: restore full state only
   when dataset, model, optimizer, scheduler, and loss contract hashes match.
 
@@ -824,26 +916,19 @@ bias if budget permits.
    resume is rejected with an actionable message while an explicit weights-only
    initialization remains available.
 
-**JOINT** Review smoke-test overlays, component curves, proposal counts, GPU
-memory, data throughput, and validation output before authorizing the full run.
+**JOINT** The AI applies the conservative default overlay review and reports
+exceptions plus component curves, proposal counts, GPU memory, throughput, and
+validation output before the owner authorizes cloud work.
 
-#### 4.4 Run the controlled architecture/loss experiments
+#### 4.4 Run the bounded cloud pilot
 
-**AI AGENT** Use short budgets and the same image/optimizer-step exposure for
-candidate selection. Do not compare runs only by epoch if samplers or dataset
-sizes differ. Log both images seen and optimizer steps.
+**AI AGENT** Run the frozen HBB contract through warm-up and at least one
+validation/checkpoint event. Interrupt and resume once, verify sampler/optimizer/
+scheduler/scaler/EMA continuity, validate S3/W&B telemetry and hashes, and report
+projected full-run cost and runtime.
 
-Recommended experiment sequence:
-
-1. previous-compatible architecture on corrected data with baseline loss;
-2. selected HBB versus retained quad control under matched initialization;
-3. P2 ablation only if required;
-4. normalized/calibrated loss candidates on the chosen architecture;
-5. one approved hard-negative comparison, if Phase 3 justified it;
-6. promote only the winning configuration to a full run.
-
-**MANUAL** Select the winner using the predeclared gate, not the lowest training
-loss or a single attractive aggregate metric.
+**MANUAL** Approve the pilot launch separately. A successful pilot does not
+authorize the full run.
 
 #### 4.5 Launch and monitor the full retraining run
 
@@ -897,13 +982,11 @@ validation dataset, sampled across scene, size, and failure strata, with
 interactive score threshold, NMS setting, positive/ignore/trusted overlays, and
 proposal toggles.
 
-**MANUAL** Review false negatives, duplicate proposals, ego-body proposals,
-facades/walls, road/sky/vegetation, tiny distant people/vehicles, grouped scenes,
-and crop usefulness for SigLIP. Record a release decision and known limitations.
-
-**JOINT** Run the downstream SigLIP evaluation on the frozen proposal outputs.
-This is the decisive check that an HBB simplification or quad improvement helps
-the full system rather than only proposal IoU.
+**AI AGENT** Apply the conservative default visual review to false negatives,
+duplicates, ego-body proposals, facades/walls, road/sky/vegetation, tiny distant
+objects, and grouped scenes. Present categorized counts, representative
+exceptions, and known limitations for owner proposal-level acceptance. SigLIP
+and semantic crop utility are deferred.
 
 #### 4.8 Benchmark and package the production artifact
 
@@ -918,9 +1001,9 @@ complete proposal pipeline at the chosen operating point, and package:
 - validation report, visual audit, and RPi benchmark;
 - known failure modes and rollback artifact.
 
-**MANUAL** Run the final physical-device acceptance test and approve promotion.
-Keep the previous production model available until the new model passes an
-end-to-end canary on representative camera input.
+**MANUAL** Approve the proposal artifact package and keep the Phase 3 baseline
+recoverable. INT8, physical-device acceptance, SigLIP, and deployment canary are
+deferred to a later plan.
 
 #### Phase 4 deliverables
 
@@ -928,8 +1011,8 @@ end-to-end canary on representative camera input.
 - Verified local and remote checkpoint/resume path.
 - W&B run with complete raw/EMA, data, loss, and systems telemetry.
 - Selected checkpoint plus export artifact.
-- Full validation, visual audit, downstream SigLIP comparison, and RPi benchmark.
-- Release decision, model card, known limitations, and rollback path.
+- Full proposal validation and AI-led visual audit.
+- Proposal-level decision, model card, known limitations, and rollback path.
 
 #### Phase 4 completion gate
 
@@ -938,10 +1021,8 @@ The retraining program is complete only when:
 - exact data/code/config/artifact hashes are recorded;
 - final validation passes the predeclared recall, false-proposal, duplicate, and
   per-domain constraints;
-- downstream SigLIP utility is no worse than the approved tolerance;
-- target-device latency, memory, and thermal behavior are acceptable;
 - checkpoint restoration and export parity are verified;
-- a human has approved the balanced visual audit;
+- the owner has reviewed the AI-led balanced visual-audit summary;
 - the previous artifact remains recoverable for rollback.
 
 ### Recommended Execution Order and Human Effort

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,10 @@ class DataConfig:
     index_dir: Path
     quad_train_annotations: Path | None = None
     quad_val_annotations: Path | None = None
+    hard_negative_supplement: Path | None = None
+    hard_negative_supplement_sha256: str | None = None
+    hard_negative_focus_per_optimizer_window: int = 0
+    hard_negative_focus_source_weights: dict[str, float] = field(default_factory=dict)
     input_size: int = 384
     batch_size: int = 10
     batches_per_epoch: int | None = None
@@ -78,8 +83,8 @@ class AugmentationConfig:
 
 @dataclass(frozen=True)
 class AssignmentConfig:
-    strides: tuple[int, int, int] = (8, 16, 32)
-    prior_sizes: tuple[int, int, int] = (64, 128, 256)
+    strides: tuple[int, ...] = (8, 16, 32)
+    prior_sizes: tuple[int, ...] = (64, 128, 256)
     top_k: int = 9
     center_radius: float | None = 1.5
 
@@ -96,6 +101,7 @@ class LossConfig:
     box_weighting: str = "uniform"
     focal_alpha: float = 0.25
     focal_gamma: float = 2.0
+    hard_negative_focus_weight: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -205,7 +211,7 @@ def _validate_augmentation(config: AugmentationConfig) -> None:
 
 
 def _resolve(base: Path, value: str | Path) -> Path:
-    path = Path(value).expanduser()
+    path = Path(os.path.expandvars(str(value))).expanduser()
     return path.resolve() if path.is_absolute() else (base / path).resolve()
 
 
@@ -220,7 +226,11 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError(f"Phase 3 data config is missing: {sorted(missing)}")
     for key in required:
         data_raw[key] = _resolve(config_path.parent, data_raw[key])
-    for key in ("quad_train_annotations", "quad_val_annotations"):
+    for key in (
+        "quad_train_annotations",
+        "quad_val_annotations",
+        "hard_negative_supplement",
+    ):
         if data_raw.get(key) is not None:
             data_raw[key] = _resolve(config_path.parent, data_raw[key])
     for key in ("dense_background_sources",):
@@ -245,6 +255,10 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
     _validate_augmentation(config.augmentation)
     if config.data.input_size % max(config.assignment.strides) != 0:
         raise ValueError("input_size must be divisible by the largest stride")
+    if config.assignment.strides not in {(8, 16, 32), (4, 8, 16, 32)}:
+        raise ValueError("strides must select P3-P5 or P2-P5")
+    if len(config.assignment.strides) != len(config.assignment.prior_sizes):
+        raise ValueError("strides and prior_sizes must have equal length")
     if config.neck_type not in {"lite", "attn_res"}:
         raise ValueError("neck_type must be 'lite' or 'attn_res'")
     if abs(sum(config.data.domain_weights.values()) - 1.0) > 1e-6:
@@ -264,6 +278,28 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("box_weighting must be 'uniform' or 'centerness'")
     if config.loss.ltrb_weight < 0:
         raise ValueError("ltrb_weight must be non-negative")
+    if config.loss.hard_negative_focus_weight < 1:
+        raise ValueError("hard_negative_focus_weight must be at least 1")
+    if (
+        config.loss.hard_negative_focus_weight > 1
+        and config.data.hard_negative_supplement is None
+    ):
+        raise ValueError("hard-negative focus weight requires a supplemental manifest")
+    if (
+        config.data.hard_negative_supplement is not None
+        and not config.data.hard_negative_supplement_sha256
+    ):
+        raise ValueError("hard-negative supplement requires its SHA-256")
+    if config.data.hard_negative_focus_per_optimizer_window not in {0, 1}:
+        raise ValueError("hard-negative focus supports zero or one draw per window")
+    focus_source_weight = sum(config.data.hard_negative_focus_source_weights.values())
+    if config.data.hard_negative_focus_per_optimizer_window:
+        if config.data.hard_negative_supplement is None:
+            raise ValueError("hard-negative focus sampling requires a supplement")
+        if abs(focus_source_weight - 1.0) > 1e-6:
+            raise ValueError("hard-negative focus source weights must sum to 1")
+    elif config.data.hard_negative_focus_source_weights:
+        raise ValueError("focus source weights require focus sampling")
     if config.schedule.checkpoint_every_steps < 0:
         raise ValueError("checkpoint_every_steps must be non-negative")
     if config.schedule.checkpoint_every_epochs < 1:

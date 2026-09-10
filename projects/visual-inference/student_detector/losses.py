@@ -6,7 +6,6 @@ import math
 from dataclasses import dataclass
 
 import torch
-import torch.distributed as distributed
 import torch.nn.functional as functional
 from torch import Tensor, nn
 
@@ -23,6 +22,8 @@ class LossOutput:
     box_ltrb: Tensor
     centerness: Tensor
     number_positive: Tensor
+    diagnostics: dict[str, Tensor]
+    family_terms: dict[str, Tensor]
 
 
 def flatten_detector_output(
@@ -79,14 +80,12 @@ def aligned_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     intersection_top_left = torch.maximum(boxes1[:, :2], boxes2[:, :2])
     intersection_bottom_right = torch.minimum(boxes1[:, 2:], boxes2[:, 2:])
     intersection = (
-        intersection_bottom_right - intersection_top_left
-    ).clamp(min=0).prod(dim=1)
+        (intersection_bottom_right - intersection_top_left).clamp(min=0).prod(dim=1)
+    )
     size1 = (boxes1[:, 2:] - boxes1[:, :2]).clamp(min=0)
     size2 = (boxes2[:, 2:] - boxes2[:, :2]).clamp(min=0)
     union = size1.prod(dim=1) + size2.prod(dim=1) - intersection
-    return intersection / union.clamp(
-        min=torch.finfo(boxes1.dtype).eps
-    )
+    return intersection / union.clamp(min=torch.finfo(boxes1.dtype).eps)
 
 
 def aligned_giou_loss(boxes1: Tensor, boxes2: Tensor) -> Tensor:
@@ -101,8 +100,8 @@ def aligned_giou_loss(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     intersection_top_left = torch.maximum(boxes1[:, :2], boxes2[:, :2])
     intersection_bottom_right = torch.minimum(boxes1[:, 2:], boxes2[:, 2:])
     intersection = (
-        intersection_bottom_right - intersection_top_left
-    ).clamp(min=0).prod(dim=1)
+        (intersection_bottom_right - intersection_top_left).clamp(min=0).prod(dim=1)
+    )
     union = size1.prod(dim=1) + size2.prod(dim=1) - intersection
     giou = iou - (enclosing_area - union) / enclosing_area.clamp(
         min=torch.finfo(boxes1.dtype).eps
@@ -115,8 +114,8 @@ def aligned_ciou_loss(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     intersection_top_left = torch.maximum(boxes1[:, :2], boxes2[:, :2])
     intersection_bottom_right = torch.minimum(boxes1[:, 2:], boxes2[:, 2:])
     intersection = (
-        intersection_bottom_right - intersection_top_left
-    ).clamp(min=0).prod(dim=1)
+        (intersection_bottom_right - intersection_top_left).clamp(min=0).prod(dim=1)
+    )
     size1 = (boxes1[:, 2:] - boxes1[:, :2]).clamp(min=0)
     size2 = (boxes2[:, 2:] - boxes2[:, :2]).clamp(min=0)
     union = size1.prod(dim=1) + size2.prod(dim=1) - intersection
@@ -128,12 +127,13 @@ def aligned_ciou_loss(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     enclosing_top_left = torch.minimum(boxes1[:, :2], boxes2[:, :2])
     enclosing_bottom_right = torch.maximum(boxes1[:, 2:], boxes2[:, 2:])
     diagonal = (
-        (enclosing_bottom_right - enclosing_top_left) ** 2
-    ).sum(dim=1).clamp(min=torch.finfo(boxes1.dtype).eps)
+        ((enclosing_bottom_right - enclosing_top_left) ** 2)
+        .sum(dim=1)
+        .clamp(min=torch.finfo(boxes1.dtype).eps)
+    )
 
-    angle = (
-        torch.atan(size2[:, 0] / size2[:, 1].clamp(min=1e-7))
-        - torch.atan(size1[:, 0] / size1[:, 1].clamp(min=1e-7))
+    angle = torch.atan(size2[:, 0] / size2[:, 1].clamp(min=1e-7)) - torch.atan(
+        size1[:, 0] / size1[:, 1].clamp(min=1e-7)
     )
     aspect = 4.0 / math.pi**2 * angle.pow(2)
     with torch.no_grad():
@@ -142,12 +142,14 @@ def aligned_ciou_loss(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     return 1 - ciou
 
 
-def _distributed_average_normalizer(value: Tensor) -> Tensor:
-    value = value.detach().clone()
-    if distributed.is_available() and distributed.is_initialized():
-        distributed.all_reduce(value)
-        value /= distributed.get_world_size()
-    return value.clamp(min=1.0)
+def _per_image_weighted_mean(
+    values: Tensor, weights: Tensor
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Reduce locations within each image using an explicit safe denominator."""
+    weight_sums = weights.sum(dim=1)
+    active = weight_sums > 0
+    reduced = (values * weights).sum(dim=1) / weight_sums.clamp(min=1)
+    return reduced, weight_sums.detach(), active.detach()
 
 
 class ProposalLoss(nn.Module):
@@ -156,7 +158,7 @@ class ProposalLoss(nn.Module):
     def __init__(
         self,
         *,
-        strides: tuple[int, int, int] = (8, 16, 32),
+        strides: tuple[int, ...] = (8, 16, 32),
         objectness_weight: float = 1.0,
         box_weight: float = 2.0,
         ltrb_weight: float = 0.0,
@@ -170,15 +172,11 @@ class ProposalLoss(nn.Module):
     ) -> None:
         super().__init__()
         if objectness_loss not in {"focal", "quality_focal"}:
-            raise ValueError(
-                "objectness_loss must be 'focal' or 'quality_focal'"
-            )
+            raise ValueError("objectness_loss must be 'focal' or 'quality_focal'")
         if box_loss not in {"ciou", "giou"}:
             raise ValueError("box_loss must be 'ciou' or 'giou'")
         if box_weighting not in {"uniform", "centerness"}:
-            raise ValueError(
-                "box_weighting must be 'uniform' or 'centerness'"
-            )
+            raise ValueError("box_weighting must be 'uniform' or 'centerness'")
         if ltrb_weight < 0:
             raise ValueError("ltrb_weight must be non-negative")
         self.strides = strides
@@ -193,20 +191,13 @@ class ProposalLoss(nn.Module):
         self.focal_alpha = focal_alpha
         self.focal_gamma = focal_gamma
 
-    def forward(
-        self, output: DetectorOutput, targets: TrainingTargets
-    ) -> LossOutput:
+    def forward(self, output: DetectorOutput, targets: TrainingTargets) -> LossOutput:
         (
             objectness_logits,
             predicted_distances,
             centerness_logits,
-        ) = (
-            flatten_detector_output(output)
-        )
-        positive_count = targets.positive_mask.sum().to(
-            dtype=objectness_logits.dtype
-        )
-        positive_normalizer = _distributed_average_normalizer(positive_count)
+        ) = flatten_detector_output(output)
+        positive_count = targets.positive_mask.sum().to(dtype=objectness_logits.dtype)
         # Keep the loss graph shape independent of the number of positives.
         # Dynamic boolean indexing is harmless on CUDA but causes recompilation
         # and synchronization on PyTorch/XLA. Computing aligned losses for every
@@ -214,8 +205,7 @@ class ProposalLoss(nn.Module):
         positive = targets.positive_mask
         positive_float = positive.to(dtype=torch.float32)
         feature_shapes = tuple(
-            (tensor.shape[-2], tensor.shape[-1])
-            for tensor in output.objectness
+            (tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness
         )
         points, level_slices = make_grid_points(
             feature_shapes,
@@ -223,9 +213,7 @@ class ProposalLoss(nn.Module):
             device=predicted_distances.device,
             dtype=predicted_distances.dtype,
         )
-        batch_points = points.unsqueeze(0).expand(
-            predicted_distances.shape[0], -1, -1
-        )
+        batch_points = points.unsqueeze(0).expand(predicted_distances.shape[0], -1, -1)
         flat_predicted_boxes = decode_ltrb(
             batch_points.reshape(-1, 2),
             predicted_distances.reshape(-1, 4),
@@ -241,20 +229,17 @@ class ProposalLoss(nn.Module):
         ).reshape_as(positive_float)
         if self.box_weighting == "centerness":
             center_weights = targets.centerness.float() * positive_float
-            box_normalizer = _distributed_average_normalizer(
-                center_weights.sum()
-            )
-            box_loss = (box_losses * center_weights).sum() / box_normalizer
+            box_reduction_weights = center_weights
         else:
-            box_loss = (
-                box_losses * positive_float
-            ).sum() / positive_normalizer
+            box_reduction_weights = positive_float
+        box_loss_per_image, box_weight_sums, box_active = _per_image_weighted_mean(
+            box_losses, box_reduction_weights
+        )
+        box_loss = box_loss_per_image.mean()
 
         if self.ltrb_weight:
             location_strides = predicted_distances.new_empty(points.shape[0])
-            for level_slice, stride in zip(
-                level_slices, self.strides, strict=True
-            ):
+            for level_slice, stride in zip(level_slices, self.strides, strict=True):
                 location_strides[level_slice] = stride
             batch_strides = location_strides.view(1, -1, 1)
             component_losses = functional.smooth_l1_loss(
@@ -262,13 +247,20 @@ class ProposalLoss(nn.Module):
                 targets.box_distances.float() / batch_strides,
                 reduction="none",
             )
-            ltrb_loss = (
-                component_losses * positive_float.unsqueeze(-1)
-            ).sum() / (positive_normalizer * 4)
+            ltrb_location_losses = component_losses.mean(dim=2)
+            (
+                ltrb_loss_per_image,
+                ltrb_weight_sums,
+                ltrb_active,
+            ) = _per_image_weighted_mean(ltrb_location_losses, positive_float)
+            ltrb_loss = ltrb_loss_per_image.mean()
         else:
             # Reduce in FP32: an FP16 sum over all dense locations can overflow
             # to inf, and ``inf * 0`` is NaN even for a disabled branch.
             ltrb_loss = predicted_distances.float().mean() * 0
+            ltrb_loss_per_image = positive_float.sum(dim=1) * 0
+            ltrb_weight_sums = positive_float.sum(dim=1).detach()
+            ltrb_active = (ltrb_weight_sums > 0).detach()
 
         if self.centerness_weight:
             centerness_losses = functional.binary_cross_entropy_with_logits(
@@ -276,11 +268,17 @@ class ProposalLoss(nn.Module):
                 targets.centerness.float(),
                 reduction="none",
             )
-            centerness_loss = (
-                centerness_losses * positive_float
-            ).sum() / positive_normalizer
+            (
+                centerness_loss_per_image,
+                centerness_weight_sums,
+                centerness_active,
+            ) = _per_image_weighted_mean(centerness_losses, positive_float)
+            centerness_loss = centerness_loss_per_image.mean()
         else:
             centerness_loss = objectness_logits.float().mean() * 0
+            centerness_loss_per_image = positive_float.sum(dim=1) * 0
+            centerness_weight_sums = positive_float.sum(dim=1).detach()
+            centerness_active = (centerness_weight_sums > 0).detach()
 
         quality_targets = (
             aligned_iou(flat_predicted_boxes, flat_target_boxes)
@@ -303,9 +301,94 @@ class ProposalLoss(nn.Module):
                 alpha=self.focal_alpha,
                 gamma=self.focal_gamma,
             )
-        objectness_loss = (
-            classification_losses * targets.objectness_weights
-        ).sum() / positive_normalizer
+        detached_quality = classification_losses.detach()
+        detached_weights = targets.objectness_weights.detach()
+        state_masks = {
+            "positive": targets.positive_mask,
+            "trusted_background": targets.trusted_background_mask,
+            "weak_background": targets.weak_background_mask,
+            "ignore": targets.ignore_mask,
+        }
+        state_raw: dict[str, Tensor] = {}
+        state_effective: dict[str, Tensor] = {}
+        state_counts: dict[str, Tensor] = {}
+        state_weight_sums: dict[str, Tensor] = {}
+        state_present: dict[str, Tensor] = {}
+        for state, mask in state_masks.items():
+            mask_float = mask.to(dtype=detached_quality.dtype)
+            raw, counts, active = _per_image_weighted_mean(
+                classification_losses, mask_float
+            )
+            weighted_mask = targets.objectness_weights * mask_float
+            weight_sums = weighted_mask.sum(dim=1).detach()
+            # Preserve weak-region coefficients: normalize by point count, not
+            # by their weighted count. Ignore has zero effective weight.
+            effective = (classification_losses * weighted_mask).sum(
+                dim=1
+            ) / counts.clamp(min=1)
+            state_raw[state] = raw.detach()
+            state_effective[state] = effective
+            state_counts[state] = counts
+            state_weight_sums[state] = weight_sums
+            state_present[state] = active
+
+        objectness_per_image = sum(
+            state_effective[state]
+            for state in ("positive", "trusted_background", "weak_background")
+        )
+        objectness_loss = objectness_per_image.mean()
+        batch_size = max(objectness_logits.shape[0], 1)
+        diagnostics = {
+            "component/objectness/raw": objectness_per_image.detach() / batch_size,
+            "component/box_ciou/raw": box_loss_per_image.detach() / batch_size,
+            "component/box_ltrb/raw": ltrb_loss_per_image.detach() / batch_size,
+            "component/centerness/raw": centerness_loss_per_image.detach() / batch_size,
+            "component/objectness/points": targets.objectness_mask.sum(dim=1).detach(),
+            "component/objectness/total_weight": detached_weights.sum(dim=1),
+            "component/objectness/hard_negative_focus_points": (
+                targets.hard_negative_focus_mask.sum(dim=1).detach()
+            ),
+            "component/objectness/hard_negative_focus_extra_weight": (
+                (detached_weights - torch.ones_like(detached_weights)).clamp_min(0)
+                * targets.hard_negative_focus_mask
+            ).sum(dim=1),
+            "component/box_ciou/points": targets.positive_mask.sum(dim=1).detach(),
+            "component/box_ciou/total_weight": box_weight_sums,
+            "component/box_ltrb/points": targets.positive_mask.sum(dim=1).detach(),
+            "component/box_ltrb/total_weight": ltrb_weight_sums,
+            "component/centerness/points": targets.positive_mask.sum(dim=1).detach(),
+            "component/centerness/total_weight": centerness_weight_sums,
+        }
+        for name, active in (
+            ("objectness", targets.objectness_mask.any(dim=1)),
+            ("box_ciou", box_active),
+            ("box_ltrb", ltrb_active),
+            ("centerness", centerness_active),
+        ):
+            diagnostics[f"component/{name}/active_images"] = active.detach()
+            diagnostics[f"component/{name}/empty_images"] = (~active).detach()
+        component_weights = {
+            "objectness": self.objectness_weight,
+            "box_ciou": self.box_weight,
+            "box_ltrb": self.ltrb_weight,
+            "centerness": self.centerness_weight,
+        }
+        for name, weight in component_weights.items():
+            diagnostics[f"component/{name}/weighted"] = (
+                diagnostics[f"component/{name}/raw"] * weight
+            )
+        for state in state_masks:
+            effective = state_effective[state] / batch_size
+            diagnostics[f"state/{state}/objectness_raw"] = state_raw[state] / batch_size
+            diagnostics[f"state/{state}/objectness_effective"] = effective
+            diagnostics[f"state/{state}/objectness_weighted"] = (
+                effective * self.objectness_weight
+            )
+            diagnostics[f"state/{state}/points"] = state_counts[state]
+            diagnostics[f"state/{state}/total_weight"] = state_weight_sums[state]
+            diagnostics[f"state/{state}/present_images"] = state_present[state]
+            diagnostics[f"state/{state}/empty_images"] = ~state_present[state]
+            diagnostics[f"state/{state}/active_images"] = state_weight_sums[state] > 0
 
         total = (
             self.objectness_weight * objectness_loss
@@ -313,6 +396,17 @@ class ProposalLoss(nn.Module):
             + self.ltrb_weight * ltrb_loss
             + self.centerness_weight * centerness_loss
         )
+        family_terms = {
+            "quality/unweighted": objectness_loss + centerness_loss,
+            "quality/weighted": (
+                self.objectness_weight * objectness_loss
+                + self.centerness_weight * centerness_loss
+            ),
+            "localization/unweighted": box_loss + ltrb_loss,
+            "localization/weighted": (
+                self.box_weight * box_loss + self.ltrb_weight * ltrb_loss
+            ),
+        }
         return LossOutput(
             total=total,
             objectness=objectness_loss,
@@ -320,4 +414,6 @@ class ProposalLoss(nn.Module):
             box_ltrb=ltrb_loss,
             centerness=centerness_loss,
             number_positive=positive_count.detach(),
+            diagnostics=diagnostics,
+            family_terms=family_terms,
         )

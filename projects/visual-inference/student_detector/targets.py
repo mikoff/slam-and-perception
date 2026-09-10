@@ -21,13 +21,21 @@ class TrainingTargets:
     box_distances: Tensor
     centerness: Tensor
     positive_mask: Tensor
-    valid_point_masks: tuple[Tensor, Tensor, Tensor]
+    trusted_background_mask: Tensor
+    hard_negative_focus_mask: Tensor
+    weak_background_mask: Tensor
+    ignore_mask: Tensor
+    valid_point_masks: tuple[Tensor, ...]
     valid_gt_count: Tensor
     fallback_count: Tensor
     unrepresentable_count: Tensor
     positive_counts_per_level: Tensor
+    source_datasets: tuple[str, ...]
+    domains: tuple[str, ...]
 
-    def to(self, device: torch.device, *, non_blocking: bool = False) -> TrainingTargets:
+    def to(
+        self, device: torch.device, *, non_blocking: bool = False
+    ) -> TrainingTargets:
         """Move the fixed-shape target batch to an accelerator.
 
         ATSS intentionally runs on the CPU for XLA training because assignment
@@ -36,35 +44,37 @@ class TrainingTargets:
         """
         return TrainingTargets(
             objectness=self.objectness.to(device, non_blocking=non_blocking),
-            objectness_mask=self.objectness_mask.to(
-                device, non_blocking=non_blocking
-            ),
+            objectness_mask=self.objectness_mask.to(device, non_blocking=non_blocking),
             objectness_weights=self.objectness_weights.to(
                 device, non_blocking=non_blocking
             ),
-            box_distances=self.box_distances.to(
-                device, non_blocking=non_blocking
-            ),
+            box_distances=self.box_distances.to(device, non_blocking=non_blocking),
             centerness=self.centerness.to(device, non_blocking=non_blocking),
-            positive_mask=self.positive_mask.to(
+            positive_mask=self.positive_mask.to(device, non_blocking=non_blocking),
+            trusted_background_mask=self.trusted_background_mask.to(
                 device, non_blocking=non_blocking
             ),
+            hard_negative_focus_mask=self.hard_negative_focus_mask.to(
+                device, non_blocking=non_blocking
+            ),
+            weak_background_mask=self.weak_background_mask.to(
+                device, non_blocking=non_blocking
+            ),
+            ignore_mask=self.ignore_mask.to(device, non_blocking=non_blocking),
             valid_point_masks=tuple(
                 mask.to(device, non_blocking=non_blocking)
                 for mask in self.valid_point_masks
             ),  # type: ignore[arg-type]
-            valid_gt_count=self.valid_gt_count.to(
-                device, non_blocking=non_blocking
-            ),
-            fallback_count=self.fallback_count.to(
-                device, non_blocking=non_blocking
-            ),
+            valid_gt_count=self.valid_gt_count.to(device, non_blocking=non_blocking),
+            fallback_count=self.fallback_count.to(device, non_blocking=non_blocking),
             unrepresentable_count=self.unrepresentable_count.to(
                 device, non_blocking=non_blocking
             ),
             positive_counts_per_level=self.positive_counts_per_level.to(
                 device, non_blocking=non_blocking
             ),
+            source_datasets=self.source_datasets,
+            domains=self.domains,
         )
 
 
@@ -99,9 +109,7 @@ def point_validity_from_pixel_mask(
     flattened = pixel_mask[y, x].bool()
     levels = tuple(
         flattened[level_slice].reshape(feature_shape)
-        for level_slice, feature_shape in zip(
-            level_slices, feature_shapes, strict=True
-        )
+        for level_slice, feature_shape in zip(level_slices, feature_shapes, strict=True)
     )
     return flattened, levels
 
@@ -114,14 +122,17 @@ class TargetBuilder:
         assigner: ATSSAssigner,
         *,
         background_loss_weights: Mapping[str, float] | None = None,
+        hard_negative_focus_weight: float = 1.0,
     ) -> None:
         self.assigner = assigner
         self.background_loss_weights = dict(background_loss_weights or {})
         if any(
-            weight < 0 or weight > 1
-            for weight in self.background_loss_weights.values()
+            weight < 0 or weight > 1 for weight in self.background_loss_weights.values()
         ):
             raise ValueError("background loss weights must be in [0, 1]")
+        if hard_negative_focus_weight < 1:
+            raise ValueError("hard-negative focus weight must be at least 1")
+        self.hard_negative_focus_weight = hard_negative_focus_weight
 
     def __call__(
         self,
@@ -142,6 +153,10 @@ class TargetBuilder:
         distances = []
         centerness = []
         positive_masks = []
+        trusted_background_masks = []
+        hard_negative_focus_masks = []
+        weak_background_masks = []
+        ignore_masks = []
         valid_levels_by_batch: list[tuple[Tensor, ...]] = []
         fallback_count = torch.zeros((), device=device)
         valid_gt_count = torch.zeros((), device=device)
@@ -167,10 +182,12 @@ class TargetBuilder:
             # A geometrically valid but grid-unrepresentable GT is ignored rather
             # than forced into negative ReLU-constrained LTRB targets.
             if assignment.unrepresentable_gt_indices.numel():
-                ignore_boxes = torch.cat((
-                    ignore_boxes,
-                    boxes[assignment.unrepresentable_gt_indices],
-                ))
+                ignore_boxes = torch.cat(
+                    (
+                        ignore_boxes,
+                        boxes[assignment.unrepresentable_gt_indices],
+                    )
+                )
             ignored_points = points_inside_boxes(points, ignore_boxes)
             positive = assignment.positive_mask
             trusted_boxes = sample.trusted_background_boxes
@@ -181,12 +198,22 @@ class TargetBuilder:
                 else boxes.new_empty((0, 4)),
             )
             available = valid_flat & ~ignored_points & ~positive
-            weak_weight = self.background_loss_weights.get(
-                sample.source_dataset, 0.0
+            trusted_background = available & trusted_points
+            focus_boxes = sample.hard_negative_focus_boxes
+            focus_points = points_inside_boxes(
+                points,
+                focus_boxes.to(device=device)
+                if focus_boxes is not None
+                else boxes.new_empty((0, 4)),
             )
+            hard_negative_focus = trusted_background & focus_points
+            weak_background = available & ~trusted_points
+            ignored = valid_flat & ignored_points & ~positive
+            weak_weight = self.background_loss_weights.get(sample.source_dataset, 0.0)
             weights = torch.zeros_like(valid_flat, dtype=torch.float32)
-            weights[available & trusted_points] = 1.0
-            weights[available & ~trusted_points] = weak_weight
+            weights[trusted_background] = 1.0
+            weights[hard_negative_focus] = self.hard_negative_focus_weight
+            weights[weak_background] = weak_weight
             # Assigned positives are never weakened, even for a sparse source.
             weights[positive] = 1.0
             supervised = weights > 0
@@ -197,19 +224,23 @@ class TargetBuilder:
             distances.append(assignment.box_targets)
             centerness.append(assignment.centerness_targets)
             positive_masks.append(positive)
+            trusted_background_masks.append(trusted_background)
+            hard_negative_focus_masks.append(hard_negative_focus)
+            weak_background_masks.append(weak_background)
+            ignore_masks.append(ignored)
             valid_levels_by_batch.append(valid_levels)
             fallback_count += assignment.fallback_gt_indices.numel()
             valid_gt_count += assignment.valid_gt_mask.sum()
-            unrepresentable_count += (
-                assignment.unrepresentable_gt_indices.numel()
-            )
+            unrepresentable_count += assignment.unrepresentable_gt_indices.numel()
             positive_counts_per_level += assignment.positive_counts_per_level
 
         level_masks = tuple(
-            torch.stack([
-                valid_levels_by_batch[batch_index][level]
-                for batch_index in range(len(samples))
-            ])
+            torch.stack(
+                [
+                    valid_levels_by_batch[batch_index][level]
+                    for batch_index in range(len(samples))
+                ]
+            )
             for level in range(len(feature_shapes))
         )
         return TrainingTargets(
@@ -219,9 +250,15 @@ class TargetBuilder:
             torch.stack(distances),
             torch.stack(centerness),
             torch.stack(positive_masks),
+            torch.stack(trusted_background_masks),
+            torch.stack(hard_negative_focus_masks),
+            torch.stack(weak_background_masks),
+            torch.stack(ignore_masks),
             level_masks,  # type: ignore[arg-type]
             valid_gt_count,
             fallback_count,
             unrepresentable_count,
             positive_counts_per_level,
+            tuple(sample.source_dataset for sample in samples),
+            tuple(sample.domain for sample in samples),
         )

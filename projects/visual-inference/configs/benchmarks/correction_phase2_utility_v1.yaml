@@ -1,0 +1,22 @@
+schema_version: visual-inference-proposal-utility.v1
+base_config: correction_phase2_short_v1.yaml
+checkpoint_state: ema_model
+validation_images: 800
+pre_nms_top_k: 300
+proposal_budget: 100
+geometry:
+  hbb:
+    role: primary
+    nms_iou_threshold: 0.70
+    score_threshold: 0.30
+  quad:
+    role: control
+    nms_iou_threshold: 0.80
+    score_threshold: 0.20
+false_proposal:
+  maximum_object_iou: 0.10
+  minimum_region_fraction: 0.50
+notes:
+  - Thresholds were owner-approved after the Phase 2.3 corrected-data sweep.
+  - SigLIP and actual downstream crop generation are outside the active milestone.
+  - Class-specific background rates require retained per-region provenance.

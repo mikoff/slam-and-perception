@@ -59,6 +59,48 @@ class LiteFPN(nn.Module):
         )
 
 
+class P2LiteFPN(nn.Module):
+    """Top-down C2-C5 pyramid retaining the existing P3-P5 path."""
+
+    def __init__(
+        self,
+        in_channels: tuple[int, int, int, int] = (48, 80, 160, 256),
+        out_channels: int = 96,
+    ) -> None:
+        super().__init__()
+        self.lateral3 = nn.Conv2d(in_channels[1], out_channels, kernel_size=1)
+        self.lateral4 = nn.Conv2d(in_channels[2], out_channels, kernel_size=1)
+        self.lateral5 = nn.Conv2d(in_channels[3], out_channels, kernel_size=1)
+        self.output3 = DepthwiseSeparableConv(out_channels, out_channels)
+        self.output4 = DepthwiseSeparableConv(out_channels, out_channels)
+        self.output5 = DepthwiseSeparableConv(out_channels, out_channels)
+        # Construct P2-only modules last so identically seeded P3-P5 parameters
+        # match the three-level control exactly.
+        self.lateral2 = nn.Conv2d(in_channels[0], out_channels, kernel_size=1)
+        self.output2 = DepthwiseSeparableConv(out_channels, out_channels)
+
+    def forward(
+        self, features: tuple[Tensor, Tensor, Tensor, Tensor]
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        c2, c3, c4, c5 = features
+        lateral5 = self.lateral5(c5)
+        lateral4 = self.lateral4(c4) + functional.interpolate(
+            lateral5, size=c4.shape[-2:], mode="nearest"
+        )
+        lateral3 = self.lateral3(c3) + functional.interpolate(
+            lateral4, size=c3.shape[-2:], mode="nearest"
+        )
+        lateral2 = self.lateral2(c2) + functional.interpolate(
+            lateral3, size=c2.shape[-2:], mode="nearest"
+        )
+        return (
+            self.output2(lateral2),
+            self.output3(lateral3),
+            self.output4(lateral4),
+            self.output5(lateral5),
+        )
+
+
 class AttnResLiteFPN(nn.Module):
     """Three-level feature pyramid with dynamic Softmax depth-selection weights across levels."""
 
@@ -71,7 +113,7 @@ class AttnResLiteFPN(nn.Module):
         self.lateral3 = nn.Conv2d(in_channels[0], out_channels, kernel_size=1)
         self.lateral4 = nn.Conv2d(in_channels[1], out_channels, kernel_size=1)
         self.lateral5 = nn.Conv2d(in_channels[2], out_channels, kernel_size=1)
-        
+
         # 1x1 Conv depth projections for spatial dynamic weighting
         self.attn3 = nn.Conv2d(out_channels, 3, kernel_size=1)
         self.attn4 = nn.Conv2d(out_channels, 3, kernel_size=1)
@@ -90,9 +132,21 @@ class AttnResLiteFPN(nn.Module):
         target_size: tuple[int, int],
     ) -> Tensor:
         # Resize all lateral maps to target spatial size
-        m3 = l3 if l3.shape[-2:] == target_size else functional.interpolate(l3, size=target_size, mode="nearest")
-        m4 = l4 if l4.shape[-2:] == target_size else functional.interpolate(l4, size=target_size, mode="nearest")
-        m5 = l5 if l5.shape[-2:] == target_size else functional.interpolate(l5, size=target_size, mode="nearest")
+        m3 = (
+            l3
+            if l3.shape[-2:] == target_size
+            else functional.interpolate(l3, size=target_size, mode="nearest")
+        )
+        m4 = (
+            l4
+            if l4.shape[-2:] == target_size
+            else functional.interpolate(l4, size=target_size, mode="nearest")
+        )
+        m5 = (
+            l5
+            if l5.shape[-2:] == target_size
+            else functional.interpolate(l5, size=target_size, mode="nearest")
+        )
 
         # Dynamic Softmax depth weights per spatial cell
         weights = functional.softmax(attn_conv(m3 + m4 + m5), dim=1)  # [B, 3, H, W]
@@ -117,4 +171,3 @@ class AttnResLiteFPN(nn.Module):
             self.output4(f4),
             self.output5(f5),
         )
-

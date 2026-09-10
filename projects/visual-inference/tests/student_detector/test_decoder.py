@@ -15,6 +15,12 @@ def test_nms_is_class_agnostic() -> None:
     assert keep.tolist() == [0, 2]
 
 
+def test_nms_breaks_equal_score_ties_by_input_order() -> None:
+    boxes = torch.tensor([[0.0, 0.0, 10.0, 10.0], [1.0, 1.0, 11.0, 11.0]])
+    keep = class_agnostic_nms(boxes, torch.tensor([0.5, 0.5]), iou_threshold=0.5)
+    assert keep.tolist() == [0]
+
+
 def test_decoder_clips_and_limits_proposals() -> None:
     shapes = ((4, 4), (2, 2), (1, 1))
     objectness = tuple(torch.full((1, 1, h, w), 10.0) for h, w in shapes)
@@ -24,8 +30,27 @@ def test_decoder_clips_and_limits_proposals() -> None:
 
     result = InferenceDecoder(top_k=10, max_detections=3)(output, (32, 32))[0]
     assert result.boxes.shape[0] <= 3
+    assert result.levels is not None
+    assert result.location_indices is not None
+    assert result.levels.shape == result.scores.shape
+    assert result.location_indices.shape == result.scores.shape
+    assert result.pre_nms_boxes is not None
+    assert result.pre_nms_scores is not None
     assert torch.all(result.boxes >= 0)
     assert torch.all(result.boxes <= 32)
+
+
+def test_decoder_rejects_zero_area_boxes_after_clipping() -> None:
+    shapes = ((1, 1), (1, 1), (1, 1))
+    objectness = tuple(torch.full((1, 1, h, w), 10.0) for h, w in shapes)
+    centerness = tuple(torch.full((1, 1, h, w), 10.0) for h, w in shapes)
+    distances = tuple(torch.zeros((1, 4, h, w)) for h, w in shapes)
+    result = InferenceDecoder(top_k=3)(
+        DetectorOutput(objectness, distances, centerness), (32, 32)
+    )[0]
+    assert result.candidate_count == 3
+    assert result.invalid_candidate_count == 3
+    assert result.boxes.shape == (0, 4)
 
 
 def test_decoder_masks_padding_before_topk() -> None:
@@ -45,6 +70,8 @@ def test_decoder_masks_padding_before_topk() -> None:
         valid,
     )[0]
     assert result.boxes.shape == (1, 4)
+    assert result.levels is not None and result.levels.tolist() == [3]
+    assert result.location_indices is not None
     # The invalid high-score point at (4, 4) must not win top-K.
     assert result.boxes[0, 0] > 4
 
@@ -61,14 +88,12 @@ def test_objectness_score_mode_ignores_dormant_centerness() -> None:
         torch.zeros((1, 1, 1, 1)),
         torch.zeros((1, 1, 1, 1)),
     )
-    distances = tuple(
-        torch.ones((1, 4, h, w)) for h, w in shapes
-    )
+    distances = tuple(torch.ones((1, 4, h, w)) for h, w in shapes)
     output = DetectorOutput(objectness, distances, centerness)
-    objectness_result = InferenceDecoder(
-        top_k=1, score_mode="objectness"
-    )(output, (16, 16))[0]
-    product_result = InferenceDecoder(
-        top_k=1, score_mode="objectness_x_centerness"
-    )(output, (16, 16))[0]
+    objectness_result = InferenceDecoder(top_k=1, score_mode="objectness")(
+        output, (16, 16)
+    )[0]
+    product_result = InferenceDecoder(top_k=1, score_mode="objectness_x_centerness")(
+        output, (16, 16)
+    )[0]
     assert objectness_result.boxes[0, 0] < product_result.boxes[0, 0]

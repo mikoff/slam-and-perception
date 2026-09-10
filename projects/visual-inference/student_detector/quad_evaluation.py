@@ -139,12 +139,8 @@ class _ScoreHistogram:
             rank = probability * (self.total - 1)
             lower_rank = math.floor(rank)
             upper_rank = math.ceil(rank)
-            lower_index = int(
-                torch.searchsorted(cumulative, lower_rank + 1).item()
-            )
-            upper_index = int(
-                torch.searchsorted(cumulative, upper_rank + 1).item()
-            )
+            lower_index = int(torch.searchsorted(cumulative, lower_rank + 1).item())
+            upper_index = int(torch.searchsorted(cumulative, upper_rank + 1).item())
             lower = (lower_index + 0.5) / self._bins
             upper = (upper_index + 0.5) / self._bins
             metrics[f"score/{prefix}/{name}"] = lower + (rank - lower_rank) * (
@@ -184,6 +180,12 @@ class QuadEvaluationAccumulator:
         self.candidates = 0
         self.invalid_candidates = 0
         self.post_nms_invalid = 0
+        self.proposal_counts: dict[int, int] = defaultdict(int)
+        self.matched_proposal_counts: dict[int, int] = defaultdict(int)
+        self.duplicate_counts: dict[int, int] = defaultdict(int)
+        self.pair_counts: dict[int, int] = defaultdict(int)
+        self.pair_iou_sums: dict[int, float] = defaultdict(float)
+        self.pair_overlap_counts: dict[tuple[int, float], int] = defaultdict(int)
 
     @staticmethod
     def _keep_cpu(values: Tensor) -> Tensor:
@@ -220,8 +222,47 @@ class QuadEvaluationAccumulator:
         gt_count = image.ground_truth.shape[0]
         self.total_gt += gt_count
 
-        best_by_k = {top_k: _cached_best(post, top_k) for top_k in (50, 100, 300)}
-        for top_k in (50, 100, 300):
+        proposal_budgets = (10, 50, 100, 300)
+        best_by_k = {top_k: _cached_best(post, top_k) for top_k in proposal_budgets}
+        proposal_count = min(100, image.detection.quads.shape[0])
+        pairwise = _overlap_matrix(
+            image.detection.quads[:proposal_count],
+            image.detection.quads[:proposal_count],
+        )
+        for top_k in (10, 50, 100):
+            selected_count = min(top_k, proposal_count)
+            self.proposal_counts[top_k] += selected_count
+            if gt_count and selected_count:
+                best_iou, best_gt = post[:, :selected_count].max(dim=0)
+                matched = best_iou >= 0.50
+                self.matched_proposal_counts[top_k] += int(matched.sum())
+                covered: set[int] = set()
+                for is_match, gt_index in zip(
+                    matched.tolist(), best_gt.tolist(), strict=True
+                ):
+                    if not is_match:
+                        continue
+                    if gt_index in covered:
+                        self.duplicate_counts[top_k] += 1
+                    else:
+                        covered.add(gt_index)
+            if selected_count >= 2:
+                upper = torch.triu(
+                    torch.ones(
+                        (selected_count, selected_count),
+                        dtype=torch.bool,
+                        device=pairwise.device,
+                    ),
+                    diagonal=1,
+                )
+                pair_values = pairwise[:selected_count, :selected_count][upper]
+                self.pair_counts[top_k] += pair_values.numel()
+                self.pair_iou_sums[top_k] += float(pair_values.sum())
+                for threshold in (0.50, 0.75):
+                    self.pair_overlap_counts[top_k, threshold] += int(
+                        (pair_values >= threshold).sum()
+                    )
+        for top_k in proposal_budgets:
             for threshold in (0.50, 0.75):
                 self.hits[top_k, threshold] += int(
                     (best_by_k[top_k] >= threshold).sum()
@@ -296,7 +337,7 @@ class QuadEvaluationAccumulator:
     def compute(self) -> dict[str, float]:
         """Finalize metrics without revisiting model outputs or proposal tensors."""
         metrics: dict[str, float] = {}
-        for top_k in (50, 100, 300):
+        for top_k in (10, 50, 100, 300):
             for threshold in (0.50, 0.75):
                 metrics[f"recall/{top_k}@{threshold:.2f}"] = (
                     self.hits[top_k, threshold] / self.total_gt
@@ -354,6 +395,28 @@ class QuadEvaluationAccumulator:
             self.invalid_candidates / self.candidates if self.candidates else 0.0
         )
         metrics["decoder/post_nms_invalid_count"] = float(self.post_nms_invalid)
+        for top_k in (10, 50, 100):
+            proposals = self.proposal_counts[top_k]
+            matched_proposals = self.matched_proposal_counts[top_k]
+            pairs = self.pair_counts[top_k]
+            metrics[f"proposals/{top_k}_per_image"] = (
+                proposals / self.image_count if self.image_count else 0.0
+            )
+            metrics[f"duplicates/{top_k}@0.50_fraction"] = (
+                self.duplicate_counts[top_k] / proposals if proposals else 0.0
+            )
+            metrics[f"duplicates/{top_k}@0.50_of_matched"] = (
+                self.duplicate_counts[top_k] / matched_proposals
+                if matched_proposals
+                else 0.0
+            )
+            metrics[f"pairwise/{top_k}_iou_mean"] = (
+                self.pair_iou_sums[top_k] / pairs if pairs else 0.0
+            )
+            for threshold in (0.50, 0.75):
+                metrics[f"pairwise/{top_k}@{threshold:.2f}_fraction"] = (
+                    self.pair_overlap_counts[top_k, threshold] / pairs if pairs else 0.0
+                )
         for name in ("positive", "trusted_background", "weak_background"):
             self.score_histograms[name].write_metrics(name, metrics)
         return metrics

@@ -1,0 +1,35 @@
+schema_version: visual-inference-hard-negative-mining.v1
+base_config: correction_phase3_baseline_v1.yaml
+checkpoint_state: ema_model
+checkpoint_sha256: 3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063
+train_manifest_sha256: dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457
+
+pool:
+  split: train
+  role: inference-only mining pool; validation is excluded
+  images: 800
+  seed: 3601
+
+proposal:
+  score_threshold: 0.30
+  nms_iou_threshold: 0.70
+  pre_nms_top_k: 300
+  proposal_budget: 100
+  scan_per_image: 10
+  unmatched_iou: 0.10
+  region_fraction: 0.50
+
+selection:
+  per_image: 3
+  per_domain:
+    general: 600
+    automotive: 360
+    fisheye: 240
+  perceptual_hamming: 2
+
+audit:
+  images: 160
+  proposal_color: red
+  positive_color: lime
+  ignore_color: yellow
+  trusted_background_color: blue

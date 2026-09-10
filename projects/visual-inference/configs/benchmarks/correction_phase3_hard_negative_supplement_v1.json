@@ -1,0 +1,1549 @@
+{
+  "counts": {
+    "candidate_decisions": 1200,
+    "images_with_promotions": 24,
+    "promoted_by_domain": {
+      "automotive": 10,
+      "fisheye": 30
+    },
+    "promoted_regions": 40,
+    "rejected_regions": 1160
+  },
+  "effective_supervision": "intersection with existing trusted-background regions only",
+  "images": [
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_09bd0e81-cd7c9dc8.jpg__09bd0e81-cd7c9dc8.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "f097a57e991462c62f52",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.8079829216003418,
+          "selector_bbox": [
+            1129.6036783854167,
+            373.525136311849,
+            1259.019266764323,
+            485.66538492838544
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1129.6036783854167,
+              373.525136311849
+            ],
+            [
+              1259.019266764323,
+              373.525136311849
+            ],
+            [
+              1259.019266764323,
+              485.66538492838544
+            ],
+            [
+              1129.6036783854167,
+              485.66538492838544
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.6212310194969177
+        }
+      ],
+      "image_id": 3798,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_1d220859-99f33176.jpg__1d220859-99f33176.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "aaa113aad58af95336d3",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6638171672821045,
+          "selector_bbox": [
+            1107.8622436523438,
+            227.880859375,
+            1179.808349609375,
+            299.7086079915365
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1107.8622436523438,
+              227.880859375
+            ],
+            [
+              1179.808349609375,
+              227.880859375
+            ],
+            [
+              1179.808349609375,
+              299.7086079915365
+            ],
+            [
+              1107.8622436523438,
+              299.7086079915365
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.6085173487663269
+        }
+      ],
+      "image_id": 11293,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_360f85e1-fd21c6db.jpg__360f85e1-fd21c6db.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "22c738a401bea1d09621",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6654869914054871,
+          "selector_bbox": [
+            0.0,
+            410.85474650065106,
+            96.84396743774414,
+            485.6669108072917
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              0.0,
+              410.85474650065106
+            ],
+            [
+              96.84396743774414,
+              410.85474650065106
+            ],
+            [
+              96.84396743774414,
+              485.6669108072917
+            ],
+            [
+              0.0,
+              485.6669108072917
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.503486156463623
+        }
+      ],
+      "image_id": 21219,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_65ebd4ae-a589682d.jpg__65ebd4ae-a589682d.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "191239d4c4469000f0a9",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6498181819915771,
+          "selector_bbox": [
+            1091.4246622721355,
+            572.2648620605469,
+            1259.6774291992188,
+            689.0367635091146
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1091.4246622721355,
+              572.2648620605469
+            ],
+            [
+              1259.6774291992188,
+              572.2648620605469
+            ],
+            [
+              1259.6774291992188,
+              689.0367635091146
+            ],
+            [
+              1091.4246622721355,
+              689.0367635091146
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7404047250747681
+        }
+      ],
+      "image_id": 39886,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_837c8cb0-a0a84461.jpg__837c8cb0-a0a84461.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "1e6ca5fdd0a7d5b001cc",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.671809196472168,
+          "selector_bbox": [
+            1097.551472981771,
+            192.86712646484375,
+            1257.9576619466147,
+            361.46062215169275
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1097.551472981771,
+              192.86712646484375
+            ],
+            [
+              1257.9576619466147,
+              192.86712646484375
+            ],
+            [
+              1257.9576619466147,
+              361.46062215169275
+            ],
+            [
+              1097.551472981771,
+              361.46062215169275
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.625536322593689
+        },
+        {
+          "candidate_id": "24e0a300abe3dd40a2a3",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7580547332763672,
+          "selector_bbox": [
+            1135.3120930989585,
+            252.94052124023438,
+            1280.0,
+            395.22649129231775
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1135.3120930989585,
+              252.94052124023438
+            ],
+            [
+              1280.0,
+              252.94052124023438
+            ],
+            [
+              1280.0,
+              395.22649129231775
+            ],
+            [
+              1135.3120930989585,
+              395.22649129231775
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9784941673278809
+        },
+        {
+          "candidate_id": "b82c5b4e2ffd995bbcb1",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7201134562492371,
+          "selector_bbox": [
+            1104.4105021158855,
+            218.4172566731771,
+            1271.1695353190105,
+            381.68853759765625
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1104.4105021158855,
+              218.4172566731771
+            ],
+            [
+              1271.1695353190105,
+              218.4172566731771
+            ],
+            [
+              1271.1695353190105,
+              381.68853759765625
+            ],
+            [
+              1104.4105021158855,
+              381.68853759765625
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7698173522949219
+        }
+      ],
+      "image_id": 51474,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_896b99f9-21aad865.jpg__896b99f9-21aad865.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "d22292d94c1a839725a8",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7666354775428772,
+          "selector_bbox": [
+            877.2771199544271,
+            402.81880696614587,
+            966.3457234700521,
+            562.4621073404949
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              877.2771199544271,
+              402.81880696614587
+            ],
+            [
+              966.3457234700521,
+              402.81880696614587
+            ],
+            [
+              966.3457234700521,
+              562.4621073404949
+            ],
+            [
+              877.2771199544271,
+              562.4621073404949
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.716986358165741
+        }
+      ],
+      "image_id": 53830,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_a60b499b-935ae1f9.jpg__a60b499b-935ae1f9.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "d640e6a6b7259ad8da1f",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7096257209777832,
+          "selector_bbox": [
+            425.7842000325521,
+            525.7659403483074,
+            538.6795552571615,
+            720.0
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              425.7842000325521,
+              525.7659403483074
+            ],
+            [
+              538.6795552571615,
+              525.7659403483074
+            ],
+            [
+              538.6795552571615,
+              720.0
+            ],
+            [
+              425.7842000325521,
+              720.0
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.5553737282752991
+        }
+      ],
+      "image_id": 65169,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "automotive",
+      "file_name": "images/train/bdd100k_images_100k__train__train_img_a63a9bdd-5a31a9ff.jpg__a63a9bdd-5a31a9ff.jpg",
+      "focus_regions": [
+        {
+          "candidate_id": "c23e9dcfb8f9f8121be8",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6696456074714661,
+          "selector_bbox": [
+            981.6899617513021,
+            369.9029541015625,
+            1093.7493896484375,
+            500.95525105794275
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              981.6899617513021,
+              369.9029541015625
+            ],
+            [
+              1093.7493896484375,
+              369.9029541015625
+            ],
+            [
+              1093.7493896484375,
+              500.95525105794275
+            ],
+            [
+              981.6899617513021,
+              500.95525105794275
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 1.0
+        }
+      ],
+      "image_id": 65268,
+      "source_dataset": "bdd100k_images_100k"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_00097_MVR.png__rgb_00097_MVR.png",
+      "focus_regions": [
+        {
+          "candidate_id": "f7e5e974f75e874eabf7",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6369069814682007,
+          "selector_bbox": [
+            88.95889282226562,
+            63.81659952799481,
+            223.2280985514323,
+            193.10569254557294
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              88.95889282226562,
+              63.81659952799481
+            ],
+            [
+              223.2280985514323,
+              63.81659952799481
+            ],
+            [
+              223.2280985514323,
+              193.10569254557294
+            ],
+            [
+              88.95889282226562,
+              193.10569254557294
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7775354385375977
+        }
+      ],
+      "image_id": 255664,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_00586_MVL.png__rgb_00586_MVL.png",
+      "focus_regions": [
+        {
+          "candidate_id": "01d6121e75bf4e267a95",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6524161696434021,
+          "selector_bbox": [
+            967.0773315429688,
+            57.347076416015646,
+            1087.3457845052085,
+            198.4442850748698
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              967.0773315429688,
+              57.347076416015646
+            ],
+            [
+              1087.3457845052085,
+              57.347076416015646
+            ],
+            [
+              1087.3457845052085,
+              198.4442850748698
+            ],
+            [
+              967.0773315429688,
+              198.4442850748698
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.8443385362625122
+        },
+        {
+          "candidate_id": "d5fa6bda9110a82ed864",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.633749783039093,
+          "selector_bbox": [
+            900.7342529296875,
+            40.03985850016278,
+            1036.832987467448,
+            161.74226888020837
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              900.7342529296875,
+              40.03985850016278
+            ],
+            [
+              1036.832987467448,
+              40.03985850016278
+            ],
+            [
+              1036.832987467448,
+              161.74226888020837
+            ],
+            [
+              900.7342529296875,
+              161.74226888020837
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9986519813537598
+        }
+      ],
+      "image_id": 256153,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_01075_RV.png__rgb_01075_RV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "34efc1a892a9996176b3",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6716269850730896,
+          "selector_bbox": [
+            25.60161908467611,
+            380.4766031901042,
+            149.53011830647787,
+            518.0517781575521
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              25.60161908467611,
+              380.4766031901042
+            ],
+            [
+              149.53011830647787,
+              380.4766031901042
+            ],
+            [
+              149.53011830647787,
+              518.0517781575521
+            ],
+            [
+              25.60161908467611,
+              518.0517781575521
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.8076481223106384
+        },
+        {
+          "candidate_id": "7c36d58638b4f95284aa",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7188345789909363,
+          "selector_bbox": [
+            38.51233800252279,
+            365.94052124023443,
+            158.87418111165366,
+            505.84774780273443
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              38.51233800252279,
+              365.94052124023443
+            ],
+            [
+              158.87418111165366,
+              365.94052124023443
+            ],
+            [
+              158.87418111165366,
+              505.84774780273443
+            ],
+            [
+              38.51233800252279,
+              505.84774780273443
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.6957519054412842
+        }
+      ],
+      "image_id": 256642,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_01635_RV.png__rgb_01635_RV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "41da762f1d1e4d966276",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6989775896072388,
+          "selector_bbox": [
+            742.6577250162761,
+            160.21382141113284,
+            863.7962849934896,
+            320.7110799153646
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              742.6577250162761,
+              160.21382141113284
+            ],
+            [
+              863.7962849934896,
+              160.21382141113284
+            ],
+            [
+              863.7962849934896,
+              320.7110799153646
+            ],
+            [
+              742.6577250162761,
+              320.7110799153646
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.6012384295463562
+        },
+        {
+          "candidate_id": "ce591870d7559dabe0f3",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.692429780960083,
+          "selector_bbox": [
+            429.6343994140625,
+            129.62139892578128,
+            598.7547302246094,
+            276.1216939290365
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              429.6343994140625,
+              129.62139892578128
+            ],
+            [
+              598.7547302246094,
+              129.62139892578128
+            ],
+            [
+              598.7547302246094,
+              276.1216939290365
+            ],
+            [
+              429.6343994140625,
+              276.1216939290365
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7268820405006409
+        },
+        {
+          "candidate_id": "e17b7f32df903b4bc5fd",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6923156976699829,
+          "selector_bbox": [
+            725.5260213216146,
+            147.15176391601565,
+            845.2587381998699,
+            324.0521952311198
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              725.5260213216146,
+              147.15176391601565
+            ],
+            [
+              845.2587381998699,
+              147.15176391601565
+            ],
+            [
+              845.2587381998699,
+              324.0521952311198
+            ],
+            [
+              725.5260213216146,
+              324.0521952311198
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.6382123231887817
+        }
+      ],
+      "image_id": 257199,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_01963_RV.png__rgb_01963_RV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "202546a828476d46158b",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7110617756843567,
+          "selector_bbox": [
+            286.6936492919922,
+            245.40859985351565,
+            367.9388427734375,
+            330.2991434733073
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              286.6936492919922,
+              245.40859985351565
+            ],
+            [
+              367.9388427734375,
+              245.40859985351565
+            ],
+            [
+              367.9388427734375,
+              330.2991434733073
+            ],
+            [
+              286.6936492919922,
+              330.2991434733073
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9015748500823975
+        },
+        {
+          "candidate_id": "945abd4a6e8f00168113",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7510101795196533,
+          "selector_bbox": [
+            214.8228963216146,
+            239.33082071940106,
+            340.72942097981775,
+            342.03279622395837
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              214.8228963216146,
+              239.33082071940106
+            ],
+            [
+              340.72942097981775,
+              239.33082071940106
+            ],
+            [
+              340.72942097981775,
+              342.03279622395837
+            ],
+            [
+              214.8228963216146,
+              342.03279622395837
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9999980926513672
+        },
+        {
+          "candidate_id": "e08bbfb836b356944c70",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.702131986618042,
+          "selector_bbox": [
+            256.79097493489587,
+            248.99072774251306,
+            344.9144999186198,
+            336.57243855794275
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              256.79097493489587,
+              248.99072774251306
+            ],
+            [
+              344.9144999186198,
+              248.99072774251306
+            ],
+            [
+              344.9144999186198,
+              336.57243855794275
+            ],
+            [
+              256.79097493489587,
+              336.57243855794275
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9999991059303284
+        }
+      ],
+      "image_id": 257527,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_02645_FV.png__rgb_02645_FV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "9b89c07cd9bf1ba96241",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7286895513534546,
+          "selector_bbox": [
+            1084.3397013346355,
+            259.8649037679037,
+            1179.3224080403647,
+            389.8376668294271
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1084.3397013346355,
+              259.8649037679037
+            ],
+            [
+              1179.3224080403647,
+              259.8649037679037
+            ],
+            [
+              1179.3224080403647,
+              389.8376668294271
+            ],
+            [
+              1084.3397013346355,
+              389.8376668294271
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.8353375196456909
+        },
+        {
+          "candidate_id": "d5d5ee67ccb91a33806e",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6950411200523376,
+          "selector_bbox": [
+            1076.9488525390625,
+            275.4260457356771,
+            1189.815165201823,
+            434.2784322102865
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1076.9488525390625,
+              275.4260457356771
+            ],
+            [
+              1189.815165201823,
+              275.4260457356771
+            ],
+            [
+              1189.815165201823,
+              434.2784322102865
+            ],
+            [
+              1076.9488525390625,
+              434.2784322102865
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.5594475269317627
+        }
+      ],
+      "image_id": 258208,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_02821_MVR.png__rgb_02821_MVR.png",
+      "focus_regions": [
+        {
+          "candidate_id": "50ad1f48046defd2f5c0",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.682670533657074,
+          "selector_bbox": [
+            150.90471903483075,
+            141.27616373697919,
+            294.0685017903646,
+            344.1587524414063
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              150.90471903483075,
+              141.27616373697919
+            ],
+            [
+              294.0685017903646,
+              141.27616373697919
+            ],
+            [
+              294.0685017903646,
+              344.1587524414063
+            ],
+            [
+              150.90471903483075,
+              344.1587524414063
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7415039539337158
+        },
+        {
+          "candidate_id": "8490ef29077e59cd9559",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.8207558393478394,
+          "selector_bbox": [
+            629.1759236653646,
+            0.0,
+            765.4834493001302,
+            224.56982421875003
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              629.1759236653646,
+              0.0
+            ],
+            [
+              765.4834493001302,
+              0.0
+            ],
+            [
+              765.4834493001302,
+              224.56982421875003
+            ],
+            [
+              629.1759236653646,
+              224.56982421875003
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.8203263878822327
+        },
+        {
+          "candidate_id": "c972861335ccd21e7803",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.742735743522644,
+          "selector_bbox": [
+            597.2185770670574,
+            0.0,
+            733.335927327474,
+            248.51228841145837
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              597.2185770670574,
+              0.0
+            ],
+            [
+              733.335927327474,
+              0.0
+            ],
+            [
+              733.335927327474,
+              248.51228841145837
+            ],
+            [
+              597.2185770670574,
+              248.51228841145837
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.8015855550765991
+        }
+      ],
+      "image_id": 258365,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_03683_FV.png__rgb_03683_FV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "b00c9e74679fd4970b7e",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7150328755378723,
+          "selector_bbox": [
+            1179.9106852213542,
+            438.31005859375006,
+            1277.5406901041667,
+            607.3799845377605
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1179.9106852213542,
+              438.31005859375006
+            ],
+            [
+              1277.5406901041667,
+              438.31005859375006
+            ],
+            [
+              1277.5406901041667,
+              607.3799845377605
+            ],
+            [
+              1179.9106852213542,
+              607.3799845377605
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7580746412277222
+        },
+        {
+          "candidate_id": "db6fe336101f0a0c2ee6",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6890826225280762,
+          "selector_bbox": [
+            1181.5506998697917,
+            477.57702636718756,
+            1280.0,
+            623.5998738606771
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1181.5506998697917,
+              477.57702636718756
+            ],
+            [
+              1280.0,
+              477.57702636718756
+            ],
+            [
+              1280.0,
+              623.5998738606771
+            ],
+            [
+              1181.5506998697917,
+              623.5998738606771
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.912124752998352
+        }
+      ],
+      "image_id": 259224,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_03848_RV.png__rgb_03848_RV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "9414a793c502cd20ca89",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6612853407859802,
+          "selector_bbox": [
+            34.09910837809245,
+            398.2226765950521,
+            137.9748280843099,
+            518.6612141927084
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              34.09910837809245,
+              398.2226765950521
+            ],
+            [
+              137.9748280843099,
+              398.2226765950521
+            ],
+            [
+              137.9748280843099,
+              518.6612141927084
+            ],
+            [
+              34.09910837809245,
+              518.6612141927084
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7450311183929443
+        },
+        {
+          "candidate_id": "a41f62f5a101a5d86651",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6949628591537476,
+          "selector_bbox": [
+            34.48719660441081,
+            376.27952067057294,
+            138.63084157307944,
+            488.78511555989587
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              34.48719660441081,
+              376.27952067057294
+            ],
+            [
+              138.63084157307944,
+              376.27952067057294
+            ],
+            [
+              138.63084157307944,
+              488.78511555989587
+            ],
+            [
+              34.48719660441081,
+              488.78511555989587
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.5305164456367493
+        }
+      ],
+      "image_id": 259389,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_04209_MVL.png__rgb_04209_MVL.png",
+      "focus_regions": [
+        {
+          "candidate_id": "110d85d836ef69cf30b4",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6589539647102356,
+          "selector_bbox": [
+            123.43210856119792,
+            264.9187418619792,
+            196.12476348876953,
+            357.0304565429688
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              123.43210856119792,
+              264.9187418619792
+            ],
+            [
+              196.12476348876953,
+              264.9187418619792
+            ],
+            [
+              196.12476348876953,
+              357.0304565429688
+            ],
+            [
+              123.43210856119792,
+              357.0304565429688
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7793850898742676
+        }
+      ],
+      "image_id": 259746,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_04918_MVR.png__rgb_04918_MVR.png",
+      "focus_regions": [
+        {
+          "candidate_id": "c0f62379d4e21c8a7cda",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6473682522773743,
+          "selector_bbox": [
+            150.77335357666016,
+            578.6300862630209,
+            269.1699473063151,
+            730.9390462239584
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              150.77335357666016,
+              578.6300862630209
+            ],
+            [
+              269.1699473063151,
+              578.6300862630209
+            ],
+            [
+              269.1699473063151,
+              730.9390462239584
+            ],
+            [
+              150.77335357666016,
+              730.9390462239584
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.7728599905967712
+        },
+        {
+          "candidate_id": "fe6620ed6ab3efbcb5d6",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6242795586585999,
+          "selector_bbox": [
+            13.779157002766928,
+            299.7618306477865,
+            123.84819030761719,
+            420.0352681477865
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              13.779157002766928,
+              299.7618306477865
+            ],
+            [
+              123.84819030761719,
+              299.7618306477865
+            ],
+            [
+              123.84819030761719,
+              420.0352681477865
+            ],
+            [
+              13.779157002766928,
+              420.0352681477865
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9574263095855713
+        }
+      ],
+      "image_id": 260398,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_05482_MVR.png__rgb_05482_MVR.png",
+      "focus_regions": [
+        {
+          "candidate_id": "275e752115d2dbb8d2fe",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6523518562316895,
+          "selector_bbox": [
+            411.640370686849,
+            32.64040120442711,
+            512.7526346842449,
+            124.8138631184896
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              411.640370686849,
+              32.64040120442711
+            ],
+            [
+              512.7526346842449,
+              32.64040120442711
+            ],
+            [
+              512.7526346842449,
+              124.8138631184896
+            ],
+            [
+              411.640370686849,
+              124.8138631184896
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 1.0
+        }
+      ],
+      "image_id": 260951,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_05617_MVR.png__rgb_05617_MVR.png",
+      "focus_regions": [
+        {
+          "candidate_id": "12c23e3c96bf0baebcfd",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6270173192024231,
+          "selector_bbox": [
+            336.3809712727865,
+            88.93233744303387,
+            449.5759582519531,
+            186.51631164550784
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              336.3809712727865,
+              88.93233744303387
+            ],
+            [
+              449.5759582519531,
+              88.93233744303387
+            ],
+            [
+              449.5759582519531,
+              186.51631164550784
+            ],
+            [
+              336.3809712727865,
+              186.51631164550784
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.553469181060791
+        },
+        {
+          "candidate_id": "85724ca1b76a9f8f13e6",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.696018636226654,
+          "selector_bbox": [
+            341.66590372721356,
+            57.94908650716148,
+            447.63575236002606,
+            190.93350219726565
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              341.66590372721356,
+              57.94908650716148
+            ],
+            [
+              447.63575236002606,
+              57.94908650716148
+            ],
+            [
+              447.63575236002606,
+              190.93350219726565
+            ],
+            [
+              341.66590372721356,
+              190.93350219726565
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.5715718269348145
+        },
+        {
+          "candidate_id": "956bc31357c919fe5022",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6309472918510437,
+          "selector_bbox": [
+            84.5022964477539,
+            63.965372721354186,
+            213.9275105794271,
+            208.2599589029948
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              84.5022964477539,
+              63.965372721354186
+            ],
+            [
+              213.9275105794271,
+              63.965372721354186
+            ],
+            [
+              213.9275105794271,
+              208.2599589029948
+            ],
+            [
+              84.5022964477539,
+              208.2599589029948
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.8049203157424927
+        }
+      ],
+      "image_id": 261086,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_05881_FV.png__rgb_05881_FV.png",
+      "focus_regions": [
+        {
+          "candidate_id": "2c1343ac117e5890ba00",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6732456088066101,
+          "selector_bbox": [
+            50.91017405192058,
+            144.26477559407556,
+            437.43174235026044,
+            580.4951171875
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              50.91017405192058,
+              144.26477559407556
+            ],
+            [
+              437.43174235026044,
+              144.26477559407556
+            ],
+            [
+              437.43174235026044,
+              580.4951171875
+            ],
+            [
+              50.91017405192058,
+              580.4951171875
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.55765700340271
+        }
+      ],
+      "image_id": 261350,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_06632_MVR.png__rgb_06632_MVR.png",
+      "focus_regions": [
+        {
+          "candidate_id": "3d0b45f89667f41ac2da",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.7656174898147583,
+          "selector_bbox": [
+            267.88543701171875,
+            472.50871785481775,
+            377.4590047200521,
+            622.7953287760417
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              267.88543701171875,
+              472.50871785481775
+            ],
+            [
+              377.4590047200521,
+              472.50871785481775
+            ],
+            [
+              377.4590047200521,
+              622.7953287760417
+            ],
+            [
+              267.88543701171875,
+              622.7953287760417
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.9999991655349731
+        }
+      ],
+      "image_id": 261898,
+      "source_dataset": "woodscape_rgb_fisheye"
+    },
+    {
+      "domain": "fisheye",
+      "file_name": "images/train/woodscape_rgb_fisheye__train__train_img_rgb_08017_MVL.png__rgb_08017_MVL.png",
+      "focus_regions": [
+        {
+          "candidate_id": "ba04c3ef1fd5400f3302",
+          "effective_supervision": "intersection with existing trusted-background regions only",
+          "score": 0.6571094393730164,
+          "selector_bbox": [
+            1140.9330240885417,
+            176.3421071370443,
+            1234.3341064453125,
+            301.0464172363282
+          ],
+          "selector_geometry_type": "hbb",
+          "selector_quad": [
+            [
+              1140.9330240885417,
+              176.3421071370443
+            ],
+            [
+              1234.3341064453125,
+              176.3421071370443
+            ],
+            [
+              1234.3341064453125,
+              301.0464172363282
+            ],
+            [
+              1140.9330240885417,
+              301.0464172363282
+            ]
+          ],
+          "source": "phase3_hard_negative_mining_v1",
+          "training_action": "focus_existing_trusted_background",
+          "trusted_background_fraction": 0.633983314037323
+        }
+      ],
+      "image_id": 262840,
+      "source_dataset": "woodscape_rgb_fisheye"
+    }
+  ],
+  "inputs": {
+    "candidate_manifest": "/home/sashamikoff/git/skillup/projects/visual-inference/artifacts/phase3/correction_mining_v1/full/candidates.json",
+    "candidate_manifest_sha256": "8f9be8e0d82242c70e608fbe31479fced9a6890e9f8818920e3a95be9694e259",
+    "promotion_policy": "/home/sashamikoff/git/skillup/projects/visual-inference/configs/benchmarks/correction_phase3_mining_promotion_v1.yaml",
+    "promotion_policy_sha256": "a92895d6bd2028dbdbf46d0b482b938c59b9f52461aa6d81c99d3585aca8924b"
+  },
+  "rejected_disposition": "no_training_change",
+  "requirements": {
+    "maximum_ignore_fraction": 0.5,
+    "maximum_object_iou": 0.1,
+    "minimum_trusted_background_fraction": 0.5
+  },
+  "schema_version": "visual-inference-hard-negative-supplement.v1",
+  "source_contract": {
+    "mining_pool_identity_sha256": "5f4aa91611f1893e4cba15997b5214a17877e45d3d5298d1bfa390da9a52648c",
+    "mining_pool_images": 800,
+    "train_manifest_sha256": "dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457",
+    "validation_excluded": true
+  },
+  "status": "approved_supplement_not_applied",
+  "strategy": "certified_trusted_background_only",
+  "training_action": "focus_existing_trusted_background"
+}

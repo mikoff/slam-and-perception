@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+import json
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from .decoder import InferenceDecoder
 from .evaluation import EvaluationImage, evaluate_proposals
 from .losses import LossOutput, ProposalLoss
 from .model import StudentDetector
+from .provenance import sha256_file, write_run_contract
 from .targets import TargetBuilder, point_validity_from_pixel_mask
 from .training_reporting import StandardReporter
 from .training_runtime import train_proposals
@@ -54,9 +56,7 @@ def validate(
             )
             for level in range(len(shapes))
         )
-        detections = decoder(
-            output, (images.shape[-2], images.shape[-1]), level_masks
-        )
+        detections = decoder(output, (images.shape[-2], images.shape[-1]), level_masks)
         for sample, detection in zip(samples, detections, strict=True):
             evaluated.append(
                 EvaluationImage(
@@ -87,6 +87,11 @@ class _HbbTask:
     ) -> None:
         self.target_builder = target_builder
         self.criterion = criterion
+        self.config = config
+        if config.assignment.strides == (4, 8, 16, 32):
+            self.architecture = (
+                "mobilenetv4_conv_medium_lite_fpn96_p2_p5_fcos_atss_reg2"
+            )
         self.decoder = InferenceDecoder(
             strides=config.assignment.strides,
             top_k=config.inference.pre_nms_top_k,
@@ -94,8 +99,9 @@ class _HbbTask:
             max_detections=config.inference.max_proposals,
             score_mode=config.inference.score_mode,
         )
-        self.validation_states = (
-            ("ema",) if use_ema_for_validation else ("raw",)
+        self.validation_states = ("ema",) if use_ema_for_validation else ("raw",)
+        self.level_names = tuple(
+            f"P{stride.bit_length() - 1}" for stride in config.assignment.strides
         )
 
     def build_targets(
@@ -139,8 +145,58 @@ class _HbbTask:
             "number_fallback": targets.fallback_count,
             "number_unrepresentable": targets.unrepresentable_count,
         }
-        for level, count in enumerate(targets.positive_counts_per_level):
-            values[f"positive/P{level + 3}"] = count
+        for name, count in zip(
+            self.level_names, targets.positive_counts_per_level, strict=True
+        ):
+            values[f"positive/{name}"] = count
+        for name, per_image in losses.diagnostics.items():
+            metric_prefix = (
+                "number"
+                if name.endswith(
+                    (
+                        "/points",
+                        "/total_weight",
+                        "/present_images",
+                        "/active_images",
+                        "/empty_images",
+                    )
+                )
+                else "loss"
+            )
+            values[f"{metric_prefix}/{name}"] = per_image.sum()
+        for scope, labels in (
+            ("domain", targets.domains),
+            ("source", targets.source_datasets),
+        ):
+            expected = (
+                tuple(self.config.data.domain_weights)
+                if scope == "domain"
+                else tuple(self.config.data.source_weights)
+            )
+            for label in expected:
+                selected = torch.tensor(
+                    [value == label for value in labels],
+                    dtype=torch.bool,
+                    device=losses.total.device,
+                )
+                values[f"number/{scope}/{label}/images"] = selected.sum()
+                for name, per_image in losses.diagnostics.items():
+                    metric_prefix = (
+                        "number"
+                        if name.endswith(
+                            (
+                                "/points",
+                                "/total_weight",
+                                "/present_images",
+                                "/active_images",
+                                "/empty_images",
+                            )
+                        )
+                        else "loss"
+                    )
+                    values[f"{metric_prefix}/{scope}/{label}/{name}"] = per_image[
+                        selected
+                    ].sum()
         return values
 
     def check_finite(self, output: Any, losses: LossOutput) -> None:
@@ -151,14 +207,20 @@ class _HbbTask:
         pass
 
     def checkpoint_extra(self) -> dict[str, Any]:
-        return {}
+        contract_path = self.config.output_dir / "run_contract.json"
+        if not contract_path.is_file():
+            raise FileNotFoundError(
+                "HBB experiment contract is missing at checkpoint time"
+            )
+        return {
+            "experiment_contract": json.loads(contract_path.read_text()),
+            "experiment_contract_sha256": sha256_file(contract_path),
+        }
 
     def restore_checkpoint_extra(self, state: Mapping[str, Any]) -> None:
         pass
 
-    def load_model_state(
-        self, model: nn.Module, checkpoint: Mapping[str, Any]
-    ) -> None:
+    def load_model_state(self, model: nn.Module, checkpoint: Mapping[str, Any]) -> None:
         model.load_state_dict(checkpoint["model"], strict=True)
 
     def selection_score(self, metrics: Mapping[str, float]) -> float:
@@ -178,13 +240,11 @@ class _HbbTask:
         optimizer: torch.optim.Optimizer,
     ) -> dict[str, Any]:
         train_metrics = {
-            key: value / max(batches, 1)
-            for key, value in training_totals.items()
+            key: value / max(batches, 1) for key, value in training_totals.items()
         }
-        train_metrics["fallback_rate_per_gt"] = (
-            training_totals.get("number_fallback", 0.0)
-            / max(training_totals.get("number_gt", 0.0), 1.0)
-        )
+        train_metrics["fallback_rate_per_gt"] = training_totals.get(
+            "number_fallback", 0.0
+        ) / max(training_totals.get("number_gt", 0.0), 1.0)
         state_metrics = validation.get(self.validation_states[0], {})
         return {
             **train_metrics,
@@ -194,6 +254,28 @@ class _HbbTask:
             "lr/backbone": float(optimizer.param_groups[0]["lr"]),
             "lr/fpn_head": float(optimizer.param_groups[1]["lr"]),
         }
+
+
+def _write_hbb_run_contract(**context: Any) -> None:
+    target = context["config"].output_dir / "run_contract.json"
+    if context.get("resume") is not None:
+        if not target.is_file():
+            raise FileNotFoundError(
+                "cannot certify an HBB resume without its original run_contract.json"
+            )
+        return
+    write_run_contract(
+        context["config"].output_dir,
+        config=context["config"],
+        model=context["model"],
+        repository=Path(__file__).resolve().parents[3],
+        train_images=len(context["train_loader"].dataset),
+        validation_images=len(context["val_loader"].dataset),
+        batches_per_epoch=len(context["train_loader"]),
+        optimizer_steps=context["optimizer_steps"],
+        world_size=context["world_size"],
+        geometry="hbb",
+    )
 
 
 def train_phase3(
@@ -235,6 +317,7 @@ def train_phase3(
             config.output_dir,
             batch_log="progress.jsonl",
             epoch_log="metrics.jsonl",
+            start_callback=_write_hbb_run_contract,
         ),
     )
     selected_state = task.validation_states[0]
@@ -243,4 +326,6 @@ def train_phase3(
         "best_selection_score": result["best_scores"][selected_state],
         "metrics": result["metrics"],
     }
+
+
 __all__ = ["train_phase3", "validate"]

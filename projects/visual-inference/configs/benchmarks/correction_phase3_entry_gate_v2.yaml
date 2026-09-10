@@ -1,0 +1,49 @@
+schema_version: proposal-phase3-entry-gate.v2
+status: owner_approved_conditional
+owner_approved_on: 2026-09-10
+
+decision:
+  outcome: accept_null_experiment
+  statement: >-
+    Phase 3 may retain the normalized control after every declared candidate
+    completed a contract-valid comparison and failed the frozen selection policy.
+  does_not_claim_objective_improvement: true
+
+selected_baseline:
+  geometry: hbb
+  pyramid_levels: [P3, P4, P5]
+  checkpoint_sha256: 3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063
+  objectness_weight: 1.0
+  ciou_weight: 2.0
+  ltrb_weight: 0.5
+  centerness_weight: 0.0
+  nms_iou_threshold: 0.70
+  score_threshold: 0.30
+  pre_nms_top_k: 300
+  proposal_budget: 100
+
+completed_candidates:
+  - name: objectness_1p5
+    selection_result: ../../artifacts/phase3/correction_quality_1p5_v1/selection_quality1p5_vs_baseline.json
+    selection_result_sha256: 4aae9f9a9fd230aab3f4470a8ed9a0b40f44c6cbf478f96beb65a538ccc5b8b5
+    status: fail
+  - name: mined_focus_2x
+    selection_result: ../../artifacts/phase3/correction_mining_v1/selection_candidate_vs_baseline.json
+    selection_result_sha256: 497ba875fe9ba6cd34a49a8deae8372f5a10fa2215c687855ef9f01e5e9a5cd7
+    status: fail
+
+mandatory_conditions:
+  loss_normalization_verified: pass
+  component_activity_explicit: pass
+  gradient_behavior_measured: pass
+  critical_domain_regression_protected: pass
+  model_data_config_and_reports_content_addressed: pass
+  exact_dirty_training_source_reconstructable: accepted_limitation
+  phase2_phase3_change_set_committed: pending
+  durable_gitignored_artifact_references_recorded: pending
+
+authorization:
+  phase4_planning: allowed
+  phase4_contract_and_preflight: after_pending_conditions_pass
+  cloud_pilot: separate_owner_approval_required
+  full_retraining: separate_owner_approval_required

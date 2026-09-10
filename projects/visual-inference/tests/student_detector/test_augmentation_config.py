@@ -47,3 +47,18 @@ def test_invalid_augmentation_ranges_are_rejected(
     path = _write_config(tmp_path, augmentation)
     with pytest.raises(ValueError, match="augmentation"):
         load_phase3_config(path)
+
+
+def test_data_paths_expand_environment_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_root = tmp_path / "dataset"
+    monkeypatch.setenv("TEST_DATASET_ROOT", str(dataset_root))
+    path = _write_config(tmp_path, {})
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["data"]["image_root"] = "${TEST_DATASET_ROOT}"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    config = load_phase3_config(path)
+
+    assert config.data.image_root == dataset_root

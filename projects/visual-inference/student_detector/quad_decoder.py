@@ -25,19 +25,28 @@ class QuadDetection:
     pre_nms_scores: Tensor | None = None
     candidate_count: int = 0
     invalid_candidate_count: int = 0
+    levels: Tensor | None = None
+    location_indices: Tensor | None = None
 
     @property
     def boxes(self) -> Tensor:
         """Compatibility envelope for callers that only need an HBB."""
         if self.quads.numel() == 0:
             return self.quads.new_empty((0, 4))
-        return torch.cat((self.quads[..., 0].amin(dim=1, keepdim=True),
-                          self.quads[..., 1].amin(dim=1, keepdim=True),
-                          self.quads[..., 0].amax(dim=1, keepdim=True),
-                          self.quads[..., 1].amax(dim=1, keepdim=True)), dim=1)
+        return torch.cat(
+            (
+                self.quads[..., 0].amin(dim=1, keepdim=True),
+                self.quads[..., 1].amin(dim=1, keepdim=True),
+                self.quads[..., 0].amax(dim=1, keepdim=True),
+                self.quads[..., 1].amax(dim=1, keepdim=True),
+            ),
+            dim=1,
+        )
 
 
-def class_agnostic_polygon_nms(quads: Tensor, scores: Tensor, iou_threshold: float) -> Tensor:
+def class_agnostic_polygon_nms(
+    quads: Tensor, scores: Tensor, iou_threshold: float
+) -> Tensor:
     return polygon_nms(quads, scores, iou_threshold)
 
 
@@ -57,10 +66,13 @@ def decode_dense_quad_output(
     scores = torch.cat(
         [item.sigmoid().flatten(start_dim=1) for item in output.quality], dim=1
     )
-    offsets = torch.cat([
-        item.permute(0, 2, 3, 1).reshape(item.shape[0], -1, 8)
-        for item in output.corner_offsets
-    ], dim=1)
+    offsets = torch.cat(
+        [
+            item.permute(0, 2, 3, 1).reshape(item.shape[0], -1, 8)
+            for item in output.corner_offsets
+        ],
+        dim=1,
+    )
     point_strides = offsets.new_empty(points.shape[0])
     for level_slice, stride in zip(level_slices, strides, strict=True):
         point_strides[level_slice] = stride
@@ -76,12 +88,11 @@ def decode_dense_quad_output(
         top = (pts[..., 1] - py.min(dim=-1).values).clamp(min=1e-4)
         bottom = (py.max(dim=-1).values - pts[..., 1]).clamp(min=1e-4)
         centerness = torch.sqrt(
-            (torch.minimum(left, right) / torch.maximum(left, right)) *
-            (torch.minimum(top, bottom) / torch.maximum(top, bottom))
+            (torch.minimum(left, right) / torch.maximum(left, right))
+            * (torch.minimum(top, bottom) / torch.maximum(top, bottom))
         ).clamp(min=1e-4)
-        scores = (scores ** (1.0 - centerness_alpha)) * (centerness ** centerness_alpha)
+        scores = (scores ** (1.0 - centerness_alpha)) * (centerness**centerness_alpha)
     return decoded, scores
-
 
 
 class QuadInferenceDecoder:
@@ -110,24 +121,64 @@ class QuadInferenceDecoder:
     ) -> list[QuadDetection]:
         height, width = image_size
         decoded_all, scores = decode_dense_quad_output(output, self.strides)
+        point_levels = torch.cat(
+            [
+                torch.full(
+                    (item.shape[-2] * item.shape[-1],),
+                    stride.bit_length() - 1,
+                    dtype=torch.int64,
+                    device=scores.device,
+                )
+                for item, stride in zip(output.quality, self.strides, strict=True)
+            ]
+        )
+        point_locations = torch.cat(
+            [
+                torch.arange(
+                    item.shape[-2] * item.shape[-1],
+                    dtype=torch.int64,
+                    device=scores.device,
+                )
+                for item in output.quality
+            ]
+        )
         if valid_point_masks is not None:
-            masks = torch.cat([mask.reshape(mask.shape[0], -1) for mask in valid_point_masks], dim=1)
+            masks = torch.cat(
+                [mask.reshape(mask.shape[0], -1) for mask in valid_point_masks], dim=1
+            )
             if masks.shape != scores.shape:
                 raise ValueError("valid_point_masks must match P3-P5 output shapes")
-            scores = scores.masked_fill(~masks.to(device=scores.device, dtype=torch.bool), -torch.inf)
+            scores = scores.masked_fill(
+                ~masks.to(device=scores.device, dtype=torch.bool), -torch.inf
+            )
 
         detections: list[QuadDetection] = []
         for batch in range(scores.shape[0]):
             finite = torch.isfinite(scores[batch])
             count = min(self.pre_nms_top_k, int(finite.sum().item()))
             if count == 0:
-                detections.append(QuadDetection(
-                    decoded_all.new_empty((0, 4, 2)), scores.new_empty((0,)),
-                    decoded_all.new_empty((0, 4, 2)), scores.new_empty((0,)),
-                ))
+                detections.append(
+                    QuadDetection(
+                        decoded_all.new_empty((0, 4, 2)),
+                        scores.new_empty((0,)),
+                        decoded_all.new_empty((0, 4, 2)),
+                        scores.new_empty((0,)),
+                        levels=torch.empty(
+                            (0,), dtype=torch.int64, device=scores.device
+                        ),
+                        location_indices=torch.empty(
+                            (0,), dtype=torch.int64, device=scores.device
+                        ),
+                    )
+                )
                 continue
-            selected_scores, selected_indices = torch.topk(scores[batch], count, sorted=True)
+            selected_indices = torch.argsort(
+                scores[batch], descending=True, stable=True
+            )[:count]
+            selected_scores = scores[batch, selected_indices]
             decoded = decoded_all[batch, selected_indices]
+            selected_levels = point_levels[selected_indices]
+            selected_locations = point_locations[selected_indices]
             in_bounds = (
                 (decoded[..., 0] >= 0).all(dim=1)
                 & (decoded[..., 0] <= width).all(dim=1)
@@ -138,12 +189,21 @@ class QuadInferenceDecoder:
             invalid_count = int((~valid).sum().item())
             decoded = decoded[valid]
             selected_scores = selected_scores[valid]
+            selected_levels = selected_levels[valid]
+            selected_locations = selected_locations[valid]
             if decoded.numel() == 0:
-                detections.append(QuadDetection(
-                    decoded, selected_scores, decoded, selected_scores,
-                    candidate_count=count,
-                    invalid_candidate_count=invalid_count,
-                ))
+                detections.append(
+                    QuadDetection(
+                        decoded,
+                        selected_scores,
+                        decoded,
+                        selected_scores,
+                        candidate_count=count,
+                        invalid_candidate_count=invalid_count,
+                        levels=selected_levels,
+                        location_indices=selected_locations,
+                    )
+                )
                 continue
             canonical = canonicalize_quads(decoded)
             keep = polygon_nms(
@@ -152,11 +212,18 @@ class QuadInferenceDecoder:
                 self.nms_iou_threshold,
                 max_output=self.max_proposals,
             )
-            detections.append(QuadDetection(
-                canonical[keep], selected_scores[keep], canonical, selected_scores,
-                candidate_count=count,
-                invalid_candidate_count=invalid_count,
-            ))
+            detections.append(
+                QuadDetection(
+                    canonical[keep],
+                    selected_scores[keep],
+                    canonical,
+                    selected_scores,
+                    candidate_count=count,
+                    invalid_candidate_count=invalid_count,
+                    levels=selected_levels[keep],
+                    location_indices=selected_locations[keep],
+                )
+            )
         return detections
 
 

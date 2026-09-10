@@ -1,0 +1,61 @@
+schema_version: proposal-selection-policy.v1
+
+contract:
+  required_values:
+    schema_version: visual-inference-proposal-utility-result.v1
+    checkpoint_state: ema_model
+    hbb.images: 800
+  required_equal:
+    - config_sha256
+    - policy_sha256
+    - validation_manifest_sha256
+    - validation_subset_sha256
+    - source_counts
+    - metric_contract
+    - hbb.images
+    - hbb.thresholds
+    - quad.checkpoint_sha256
+    - quad.groups
+
+objective:
+  name: maximize_ar100
+  group: aggregate
+  metric: ar/100
+  minimum_improvement_pp: 0.25
+  failure_delta_pp: -0.25
+
+# Warning boundaries create an inconclusive result; crossing a failure boundary
+# rejects the candidate. Percentage-point margins are fixed before later runs.
+relative_gates:
+  - {name: overall_r100_50, group: aggregate, metric: recall/100@0.50, direction: higher, warning_delta_pp: -0.10, failure_delta_pp: -0.50}
+  - {name: overall_r100_75, group: aggregate, metric: recall/100@0.75, direction: higher, warning_delta_pp: -0.10, failure_delta_pp: -0.30}
+  - {name: object_coverage, group: aggregate, metric: coverage/object_mean/100, direction: higher, warning_delta_pp: -0.10, failure_delta_pp: -0.50}
+  - {name: proposal_object_fraction, group: aggregate, metric: proposal/object_fraction_mean, direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -1.00}
+  - {name: general_r100_50, group: domain/general, metric: recall/100@0.50, direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -1.00}
+  - {name: automotive_r100_50, group: domain/automotive, metric: recall/100@0.50, direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -1.00}
+  - {name: fisheye_r100_50, group: domain/fisheye, metric: recall/100@0.50, direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -1.00}
+  - {name: small_r100_50, group: aggregate, metric: recall/size_small/100@0.50, direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -0.75}
+  - {name: thin_r100_50, group: aggregate, metric: recall/shape_thin/100@0.50, direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -0.75}
+  - {name: source_16_32_r100_50, group: aggregate, metric: 'recall/source_short_side_[16,32)/100@0.50', direction: higher, warning_delta_pp: -0.25, failure_delta_pp: -1.00}
+  - {name: trusted_background_false, group: aggregate, metric: false/trusted_background_fraction, direction: lower, warning_delta_pp: 0.10, failure_delta_pp: 0.25}
+  - {name: unmatched, group: aggregate, metric: false/unmatched_fraction, direction: lower, warning_delta_pp: 0.20, failure_delta_pp: 0.50}
+  - {name: duplicates, group: aggregate, metric: duplicates/100@0.50_fraction, direction: lower, warning_delta_pp: 0.20, failure_delta_pp: 0.50}
+  - {name: ego_body_overlap, group: aggregate, metric: false/ego_body_fraction_on_ego_images, direction: lower, warning_delta_pp: 1.00, failure_delta_pp: 2.00}
+
+absolute_gates:
+  - {name: production_budget, group: aggregate, metric: proposals/100_per_image, maximum: 100.0}
+
+uncertainty:
+  method: aggregate_only
+  confidence_interval: unavailable
+  reason: utility reports do not retain paired per-image sufficient statistics
+  inconclusive_action: rerun another seed or emit a future paired per-image report
+
+report_only:
+  - model-tiny recall until the baseline is nonzero
+  - medium and large object recall
+  - K=10 and K=50 recall and duplicate metrics
+  - latency because this loss-only comparison has identical architecture
+  - sky, structure and vegetation trusted-background rates because provenance was collapsed
+  - crowded-scene recall because the frozen report has no crowd slice
+  - downstream SigLIP utility because it is outside the active proposal milestone

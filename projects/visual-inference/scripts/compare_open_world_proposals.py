@@ -27,11 +27,18 @@ from torch.utils.data import DataLoader
 
 from student_detector.config import load_phase3_config
 from student_detector.checkpoints import checkpoint_neck_type, load_model_state_strict
+from student_detector.data import select_source_mixture_indices
 from student_detector.decoder import InferenceDecoder
 from student_detector.model import QuadProposalDetector, StudentDetector
-from student_detector.quad_data import QuadProposalDataset, collate_quad_proposal_samples
+from student_detector.quad_data import (
+    QuadProposalDataset,
+    collate_quad_proposal_samples,
+)
 from student_detector.quad_decoder import QuadDetection, QuadInferenceDecoder
-from student_detector.quad_evaluation import QuadEvaluationImage, evaluate_quad_proposals
+from student_detector.quad_evaluation import (
+    QuadEvaluationImage,
+    evaluate_quad_proposals,
+)
 from student_detector.quad_geometry import (
     polygon_nms,
     quad_validity,
@@ -61,17 +68,19 @@ def _checkpoint_model(
     )
 
 
-
 def _box_quads(boxes: torch.Tensor) -> torch.Tensor:
     if boxes.numel() == 0:
         return boxes.new_empty((0, 4, 2))
     x1, y1, x2, y2 = boxes.unbind(dim=1)
-    return torch.stack((
-        torch.stack((x1, y1), dim=1),
-        torch.stack((x2, y1), dim=1),
-        torch.stack((x2, y2), dim=1),
-        torch.stack((x1, y2), dim=1),
-    ), dim=1)
+    return torch.stack(
+        (
+            torch.stack((x1, y1), dim=1),
+            torch.stack((x2, y1), dim=1),
+            torch.stack((x2, y2), dim=1),
+            torch.stack((x1, y2), dim=1),
+        ),
+        dim=1,
+    )
 
 
 def _sync(device: torch.device) -> None:
@@ -87,6 +96,7 @@ def _evaluate(
     config: Any,
     device: torch.device,
     state_key: str,
+    strides: tuple[int, ...],
 ) -> tuple[dict[str, float], dict[str, float], dict[str, Any]]:
     model: torch.nn.Module
     checkpoint_preview = torch.load(
@@ -94,9 +104,11 @@ def _evaluate(
     )
     neck_type = checkpoint_neck_type(checkpoint_preview)
     if kind == "hbb":
-        model = StudentDetector(pretrained_backbone=False, neck_type=neck_type)
+        model = StudentDetector(
+            pretrained_backbone=False, neck_type=neck_type, strides=strides
+        )
         decoder: Any = InferenceDecoder(
-            strides=config.assignment.strides,
+            strides=strides,
             top_k=300,
             nms_iou_threshold=1.0,
             max_detections=300,
@@ -133,12 +145,16 @@ def _evaluate(
             (tensor.shape[-2], tensor.shape[-1])
             for tensor in (output.objectness if kind == "hbb" else output.quality)
         )
-        validity = tuple(zip(*(
-            point_validity_from_pixel_mask(
-                sample.valid_mask.to(device), feature_shapes, config.assignment.strides
-            )[1]
-            for sample in samples
-        )))
+        validity = tuple(
+            zip(
+                *(
+                    point_validity_from_pixel_mask(
+                        sample.valid_mask.to(device), feature_shapes, strides
+                    )[1]
+                    for sample in samples
+                )
+            )
+        )
         valid_masks = tuple(torch.stack(level) for level in validity)
         _sync(device)
         started = time.perf_counter()
@@ -153,7 +169,9 @@ def _evaluate(
                 _sync(device)
                 started = time.perf_counter()
                 keep = polygon_nms(
-                    pre_quads, pre_scores, config.inference.nms_iou_threshold,
+                    pre_quads,
+                    pre_scores,
+                    config.inference.nms_iou_threshold,
                     max_output=300,
                 )
                 _sync(device)
@@ -166,27 +184,31 @@ def _evaluate(
                     detection.pre_nms_quads,
                     detection.pre_nms_scores,
                 )
-            evaluated.append(QuadEvaluationImage(
-                image_id=sample.image_id,
-                domain=sample.domain,
-                camera_type=sample.camera_type,
-                image_size=(images.shape[-2], images.shape[-1]),
-                ground_truth=sample.quads.cpu(),
-                ignore_quads=sample.ignore_quads.cpu(),
-                detection=QuadDetection(final.quads.cpu(), final.scores.cpu()),
-                pre_nms_detection=QuadDetection(pre.quads.cpu(), pre.scores.cpu()),
-                geometry_tiers=sample.geometry_tiers,
-                object_conditions=sample.object_conditions,
-                seen_statuses=sample.seen_statuses,
-                size_bins=sample.size_bins,
-                aspect_bins=sample.aspect_bins,
-                radial_bins=sample.radial_bins,
-            ))
+            evaluated.append(
+                QuadEvaluationImage(
+                    image_id=sample.image_id,
+                    domain=sample.domain,
+                    camera_type=sample.camera_type,
+                    image_size=(images.shape[-2], images.shape[-1]),
+                    ground_truth=sample.quads.cpu(),
+                    ignore_quads=sample.ignore_quads.cpu(),
+                    detection=QuadDetection(final.quads.cpu(), final.scores.cpu()),
+                    pre_nms_detection=QuadDetection(pre.quads.cpu(), pre.scores.cpu()),
+                    geometry_tiers=sample.geometry_tiers,
+                    object_conditions=sample.object_conditions,
+                    seen_statuses=sample.seen_statuses,
+                    size_bins=sample.size_bins,
+                    aspect_bins=sample.aspect_bins,
+                    radial_bins=sample.radial_bins,
+                )
+            )
             image_count += 1
     timings = {
         "images": float(image_count),
         "forward_ms_per_image": 1000 * forward_seconds / max(image_count, 1),
-        "decode_including_nms_ms_per_image": 1000 * decode_seconds / max(image_count, 1),
+        "decode_including_nms_ms_per_image": 1000
+        * decode_seconds
+        / max(image_count, 1),
         "external_polygon_nms_ms_per_image": 1000 * nms_seconds / max(image_count, 1),
     }
     return evaluate_quad_proposals(evaluated), timings, checkpoint
@@ -197,6 +219,8 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--hbb-checkpoint", type=Path, required=True)
     parser.add_argument("--quad-checkpoint", type=Path, required=True)
+    parser.add_argument("--hbb-p2-checkpoint", type=Path)
+    parser.add_argument("--validation-images", type=int)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -212,12 +236,17 @@ def main() -> None:
     dataset = QuadProposalDataset(
         manifest,
         config.data.image_root,
-        config.data.index_dir / "open_world_comparison.sqlite",
+        config.data.index_dir / "quad_val.sqlite",
         config.data,
         config.augmentation,
         training=False,
-        force_index=True,
+        force_index=False,
     )
+    if args.validation_images is not None:
+        selected_indices = select_source_mixture_indices(
+            dataset.records, config.data.source_weights, args.validation_images
+        )
+        dataset.records = [dataset.records[index] for index in selected_indices]
     loader = DataLoader(
         dataset,
         batch_size=config.data.batch_size,
@@ -227,12 +256,22 @@ def main() -> None:
         pin_memory=device.type == "cuda",
     )
     hbb_metrics, hbb_timings, hbb_checkpoint = _evaluate(
-        "hbb", args.hbb_checkpoint.resolve(), loader, config, device,
+        "hbb",
+        args.hbb_checkpoint.resolve(),
+        loader,
+        config,
+        device,
         args.checkpoint_state,
+        (8, 16, 32),
     )
     quad_metrics, quad_timings, quad_checkpoint = _evaluate(
-        "quad", args.quad_checkpoint.resolve(), loader, config, device,
+        "quad",
+        args.quad_checkpoint.resolve(),
+        loader,
+        config,
+        device,
         args.checkpoint_state,
+        (8, 16, 32),
     )
     keys = sorted(set(hbb_metrics) | set(quad_metrics))
     report = {
@@ -242,7 +281,7 @@ def main() -> None:
             "validation_manifest": str(Path(manifest).resolve()),
             "validation_manifest_sha256": _sha256(Path(manifest)),
             "images": len(dataset),
-            "proposal_budgets": [50, 100, 300],
+            "proposal_budgets": [10, 50, 100, 300],
             "checkpoint_state": args.checkpoint_state,
             "iou": "exact convex polygon IoU",
             "nms_iou_threshold": config.inference.nms_iou_threshold,
@@ -250,8 +289,7 @@ def main() -> None:
         "hbb": {"metrics": hbb_metrics, "timings": hbb_timings},
         "quad": {"metrics": quad_metrics, "timings": quad_timings},
         "delta_quad_minus_hbb": {
-            key: quad_metrics.get(key, 0.0) - hbb_metrics.get(key, 0.0)
-            for key in keys
+            key: quad_metrics.get(key, 0.0) - hbb_metrics.get(key, 0.0) for key in keys
         },
         "artifacts": {
             "config": str(args.config.resolve()),
@@ -266,11 +304,37 @@ def main() -> None:
             "quad_neck_type": checkpoint_neck_type(quad_checkpoint),
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
-            "device": torch.cuda.get_device_name(device) if device.type == "cuda" else str(device),
+            "device": torch.cuda.get_device_name(device)
+            if device.type == "cuda"
+            else str(device),
         },
     }
+    if args.hbb_p2_checkpoint is not None:
+        p2_metrics, p2_timings, p2_checkpoint = _evaluate(
+            "hbb",
+            args.hbb_p2_checkpoint.resolve(),
+            loader,
+            config,
+            device,
+            args.checkpoint_state,
+            (4, 8, 16, 32),
+        )
+        report["hbb_p2"] = {"metrics": p2_metrics, "timings": p2_timings}
+        report["delta_hbb_p2_minus_p3"] = {
+            key: p2_metrics.get(key, 0.0) - hbb_metrics.get(key, 0.0)
+            for key in sorted(set(p2_metrics) | set(hbb_metrics))
+        }
+        report["artifacts"].update(
+            {
+                "hbb_p2_checkpoint": str(args.hbb_p2_checkpoint.resolve()),
+                "hbb_p2_checkpoint_sha256": _sha256(args.hbb_p2_checkpoint.resolve()),
+                "hbb_p2_global_step": p2_checkpoint.get("global_step"),
+            }
+        )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
 
 

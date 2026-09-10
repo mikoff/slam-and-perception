@@ -197,7 +197,8 @@ class StandardReporter:
         timestamped_print(
             "Training progress: "
             f"epoch={epoch + 1} batch={batch}/{batches_per_epoch} "
-            f"step={global_step} loss={float(metrics.get('loss', 0.0)):.6f}",
+            f"step={global_step} "
+            f"loss={float(metrics.get('loss/total', metrics.get('loss', 0.0))):.6f}",
         )
 
     def on_validation(

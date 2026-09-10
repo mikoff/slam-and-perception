@@ -347,6 +347,7 @@ def train_proposals(
             val_loader=val_loader,
             optimizer_steps=steps_per_epoch * config.schedule.epochs,
             world_size=accelerator.num_processes,
+            resume=resume,
         )
     optimizer.zero_grad(set_to_none=True)
 

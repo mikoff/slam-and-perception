@@ -61,6 +61,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--max-val-batches", type=int)
+    parser.add_argument("--validation-images", type=int)
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--workers", type=int)
     parser.add_argument("--batch-size", type=int)
@@ -290,6 +291,13 @@ def main() -> None:
             seed=config.schedule.seed,
             force_index=args.force_index,
         )
+    if args.validation_images is not None:
+        selected_indices = select_source_mixture_indices(
+            val_dataset.records,
+            config.data.source_weights,
+            args.validation_images,
+        )
+        val_dataset.records = [val_dataset.records[index] for index in selected_indices]
     if overfit:
         if args.overfit_images is not None and args.overfit_images < 1:
             raise ValueError("--overfit-images must be positive")

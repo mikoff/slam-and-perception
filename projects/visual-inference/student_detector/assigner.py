@@ -31,8 +31,8 @@ class ATSSAssigner:
     def __init__(
         self,
         *,
-        strides: tuple[int, int, int] = (8, 16, 32),
-        prior_sizes: tuple[int, int, int] = (64, 128, 256),
+        strides: tuple[int, ...] = (8, 16, 32),
+        prior_sizes: tuple[int, ...] = (64, 128, 256),
         top_k: int = 9,
         center_radius: float | None = 1.5,
     ) -> None:
@@ -46,7 +46,9 @@ class ATSSAssigner:
         self.center_radius = center_radius
 
     def _priors(self, points: Tensor, level_slices: Sequence[slice]) -> Tensor:
-        priors = torch.empty((points.shape[0], 4), device=points.device, dtype=points.dtype)
+        priors = torch.empty(
+            (points.shape[0], 4), device=points.device, dtype=points.dtype
+        )
         for level_slice, side in zip(level_slices, self.prior_sizes, strict=True):
             half_side = side / 2.0
             priors[level_slice, :2] = points[level_slice] - half_side
@@ -135,9 +137,9 @@ class ATSSAssigner:
         candidate_quality = torch.full_like(prior_ious, -1.0)
         candidate_masks = torch.zeros_like(prior_ious, dtype=torch.bool)
         gt_centers = (boxes[:, :2] + boxes[:, 2:]) * 0.5
-        squared_distances = (
-            (points[:, None, :] - gt_centers[None, :, :]) ** 2
-        ).sum(dim=2)
+        squared_distances = ((points[:, None, :] - gt_centers[None, :, :]) ** 2).sum(
+            dim=2
+        )
 
         for gt_index in range(boxes.shape[0]):
             candidate_parts: list[Tensor] = []
@@ -146,23 +148,17 @@ class ATSSAssigner:
                 count = min(self.top_k, int(level_valid.sum().item()))
                 if count == 0:
                     continue
-                level_distances = squared_distances[
-                    level_slice, gt_index
-                ].masked_fill(~level_valid, torch.inf)
-                relative = torch.topk(
-                    level_distances, k=count, largest=False
-                ).indices
-                candidate_parts.append(
-                    relative + int(level_slice.start or 0)
+                level_distances = squared_distances[level_slice, gt_index].masked_fill(
+                    ~level_valid, torch.inf
                 )
+                relative = torch.topk(level_distances, k=count, largest=False).indices
+                candidate_parts.append(relative + int(level_slice.start or 0))
             if not candidate_parts:
                 continue
             candidates = torch.cat(candidate_parts)
             candidate_masks[candidates, gt_index] = True
             candidate_ious = prior_ious[candidates, gt_index]
-            threshold = candidate_ious.mean() + candidate_ious.std(
-                unbiased=False
-            )
+            threshold = candidate_ious.mean() + candidate_ious.std(unbiased=False)
             candidate_points = points[candidates]
             distances = encode_ltrb(
                 candidate_points,
@@ -194,18 +190,12 @@ class ATSSAssigner:
                     & (candidate_points[:, 1] >= center_top)
                     & (candidate_points[:, 1] <= center_bottom)
                 )
-            positives = candidates[
-                (candidate_ious >= threshold) & inside & in_center
-            ]
-            candidate_quality[positives, gt_index] = prior_ious[
-                positives, gt_index
-            ]
+            positives = candidates[(candidate_ious >= threshold) & inside & in_center]
+            candidate_quality[positives, gt_index] = prior_ious[positives, gt_index]
 
         best_quality, best_local_gt = candidate_quality.max(dim=1)
         normally_positive = best_quality >= 0
-        matched[normally_positive] = valid_indices[
-            best_local_gt[normally_positive]
-        ]
+        matched[normally_positive] = valid_indices[best_local_gt[normally_positive]]
 
         unrepresentable: list[Tensor] = []
         fallbacks: list[Tensor] = []
@@ -228,42 +218,34 @@ class ATSSAssigner:
             quality = prior_ious[:, local_gt].masked_fill(~pool, -1.0)
             best_iou = quality.max()
             tied = pool & torch.isclose(quality, best_iou)
-            fallback_point = squared_distances[:, local_gt].masked_fill(
-                ~tied, torch.inf
-            ).argmin()
+            fallback_point = (
+                squared_distances[:, local_gt].masked_fill(~tied, torch.inf).argmin()
+            )
             matched[fallback_point] = original_gt
             fallbacks.append(original_gt)
 
         positive = matched >= 0
         if torch.any(positive):
-            targets = encode_ltrb(
-                points[positive], gt_boxes[matched[positive]]
-            )
+            targets = encode_ltrb(points[positive], gt_boxes[matched[positive]])
             box_targets[positive] = targets
             left, top, right, bottom = targets.unbind(dim=1)
-            horizontal = torch.minimum(left, right) / torch.maximum(
-                left, right
-            ).clamp(min=1e-7)
-            vertical = torch.minimum(top, bottom) / torch.maximum(
-                top, bottom
-            ).clamp(min=1e-7)
-            centerness[positive] = torch.sqrt(
-                (horizontal * vertical).clamp(min=0)
+            horizontal = torch.minimum(left, right) / torch.maximum(left, right).clamp(
+                min=1e-7
             )
+            vertical = torch.minimum(top, bottom) / torch.maximum(top, bottom).clamp(
+                min=1e-7
+            )
+            centerness[positive] = torch.sqrt((horizontal * vertical).clamp(min=0))
 
         unrepresentable_indices = (
             torch.stack(unrepresentable)
             if unrepresentable
-            else torch.empty(
-                (0,), dtype=torch.long, device=gt_boxes.device
-            )
+            else torch.empty((0,), dtype=torch.long, device=gt_boxes.device)
         )
         fallback_indices = (
             torch.stack(fallbacks)
             if fallbacks
-            else torch.empty(
-                (0,), dtype=torch.long, device=gt_boxes.device
-            )
+            else torch.empty((0,), dtype=torch.long, device=gt_boxes.device)
         )
         positive_counts = torch.stack(
             [positive[level_slice].sum() for level_slice in level_slices]

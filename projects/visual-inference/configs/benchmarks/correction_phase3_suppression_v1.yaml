@@ -1,0 +1,45 @@
+schema_version: proposal-suppression-calibration.v1
+status: owner_approved
+
+base_config: correction_phase2_short_v1.yaml
+checkpoint_state: ema_model
+validation_images: 800
+validation_manifest_sha256: 68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf
+validation_subset_sha256: e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806
+source_counts:
+  coco_2017: 400
+  woodscape_rgb_fisheye: 160
+  nuimages: 144
+  bdd100k_images_100k: 96
+
+sweep:
+  report: ../../artifacts/phase3/suppression_calibration_v1/suppression_sweep_ema.json
+  report_sha256: babb5bbb57da4f4d75c578b3f72029ec5339881e79fe42d6862d73e771530c11
+  pre_nms_top_k: 300
+  proposal_budget: 100
+  nms_iou_thresholds: [0.60, 0.70, 0.80]
+  score_thresholds: [0.20, 0.30, 0.40]
+  reliability_score_bin_width: 0.10
+
+geometry:
+  hbb:
+    role: primary
+    checkpoint_sha256: 3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063
+    selected:
+      nms_iou_threshold: 0.70
+      score_threshold: 0.30
+  quad:
+    role: control
+    checkpoint_sha256: cf4d1a7228fab007317b1a9d6f2c037ccc139fa16e1c223a7d2d3a44fc8c095d
+    selected:
+      nms_iou_threshold: 0.80
+      score_threshold: 0.20
+
+decision:
+  objective: maximize_ar100_at_k100
+  guardrails:
+    - retain low-IoU, small, thin, and per-domain recall
+    - avoid trusted-background and unmatched false-proposal regressions
+    - prefer the lower score cutoff when recall loss is not compensated by utility
+  result: retain_phase2_operating_points
+  owner_approved_on: 2026-09-10

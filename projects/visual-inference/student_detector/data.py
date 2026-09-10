@@ -69,6 +69,7 @@ class ProposalSample:
     original_size: tuple[int, int]
     transform: tuple[float, float, float]
     trusted_background_boxes: Tensor | None = None
+    hard_negative_focus_boxes: Tensor | None = None
 
 
 def _source_signature(path: Path) -> str:
@@ -85,6 +86,7 @@ def build_coco_sqlite_index(
     *,
     force: bool = False,
     build_if_missing: bool = True,
+    verify_source_signature: bool = True,
 ) -> Path:
     """Build a compact random-access index without loading COCO JSON into RAM."""
     source = Path(annotations).resolve()
@@ -98,16 +100,21 @@ def build_coco_sqlite_index(
         for stale in destination.parent.glob(f".{destination.name}.*.tmp"):
             if stale.is_file() and stale.stat().st_mtime < cutoff:
                 stale.unlink()
-    signature = _source_signature(source)
     if destination.exists() and not force:
         try:
             with sqlite3.connect(destination) as connection:
                 metadata = dict(
                     connection.execute("SELECT key, value FROM metadata").fetchall()
                 )
-            if metadata.get("source_signature") == signature and metadata.get(
-                "schema_version"
-            ) in (INDEX_SCHEMA_VERSION, f"{INDEX_SCHEMA_VERSION}:proposal-manifest"):
+            schema_matches = metadata.get("schema_version") in (
+                INDEX_SCHEMA_VERSION,
+                f"{INDEX_SCHEMA_VERSION}:proposal-manifest",
+            )
+            if schema_matches and not verify_source_signature:
+                return destination
+            if schema_matches and metadata.get("source_signature") == _source_signature(
+                source
+            ):
                 return destination
         except Exception:
             pass
@@ -116,6 +123,7 @@ def build_coco_sqlite_index(
             f"prebuilt index is missing, corrupt, or does not match annotations: {destination}"
         )
 
+    signature = _source_signature(source)
     with source.open("rb") as stream:
         first_image = next(ijson.items(stream, "images.item"), None)
 
@@ -467,9 +475,18 @@ class ProposalTransform:
         boxes: Tensor,
         ignore_boxes: Tensor,
         trusted_background_boxes: Tensor | None = None,
+        hard_negative_focus_boxes: Tensor | None = None,
         *,
         seed: int,
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor, tuple[float, float, float]]:
+    ) -> tuple[
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        Tensor,
+        tuple[float, float, float],
+        Tensor,
+    ]:
         image = image.convert("RGB")
         width, height = image.size
         parameters = sample_augmentation_parameters(
@@ -483,12 +500,26 @@ class ProposalTransform:
             if trusted_background_boxes is not None
             else boxes.new_empty((0, 4))
         )
-        all_boxes = torch.cat((boxes, ignore_boxes, trusted_background_boxes), dim=0)
+        hard_negative_focus_boxes = (
+            hard_negative_focus_boxes
+            if hard_negative_focus_boxes is not None
+            else boxes.new_empty((0, 4))
+        )
+        all_boxes = torch.cat(
+            (
+                boxes,
+                ignore_boxes,
+                trusted_background_boxes,
+                hard_negative_focus_boxes,
+            ),
+            dim=0,
+        )
         state = torch.cat(
             (
                 torch.zeros(boxes.shape[0], dtype=torch.long),
                 torch.ones(ignore_boxes.shape[0], dtype=torch.long),
                 torch.full((trusted_background_boxes.shape[0],), 2, dtype=torch.long),
+                torch.full((hard_negative_focus_boxes.shape[0],), 3, dtype=torch.long),
             )
         )
 
@@ -510,6 +541,7 @@ class ProposalTransform:
                 trusted_background_boxes,
                 augmented.valid_mask,
                 augmented.transform,
+                hard_negative_focus_boxes,
             )
         transformed = all_boxes * scale
         transformed[:, 0::2] += offset_x
@@ -533,13 +565,18 @@ class ProposalTransform:
             & (torch.minimum(clipped_width, clipped_height) >= self.tiny_min_side)
         )
         ignore = (
-            (state != 2)
+            ((state == 0) | (state == 1))
             & geometrically_valid
             & (visibility >= self.augmentation.ignore_visible_fraction)
             & ~positive
         )
         trusted = (
             (state == 2)
+            & geometrically_valid
+            & (visibility >= self.augmentation.ignore_visible_fraction)
+        )
+        focus = (
+            (state == 3)
             & geometrically_valid
             & (visibility >= self.augmentation.ignore_visible_fraction)
         )
@@ -550,7 +587,43 @@ class ProposalTransform:
             clipped[trusted],
             augmented.valid_mask,
             augmented.transform,
+            clipped[focus],
         )
+
+
+def _load_hard_negative_focus(
+    data_config: DataConfig,
+) -> dict[tuple[str, int], tuple[str, Tensor]]:
+    path = data_config.hard_negative_supplement
+    if path is None:
+        return {}
+    expected = data_config.hard_negative_supplement_sha256
+    if _source_signature(path) != f"sha256:{expected}":
+        raise ValueError("hard-negative supplement SHA-256 mismatch")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != (
+        "visual-inference-hard-negative-supplement.v1"
+    ):
+        raise ValueError("unsupported hard-negative supplement")
+    if manifest.get("status") != "approved_supplement_not_applied":
+        raise ValueError("hard-negative supplement is not approved")
+    expected_action = "focus_existing_trusted_background"
+    if manifest.get("training_action") != expected_action:
+        raise ValueError("unsupported hard-negative training action")
+    result: dict[tuple[str, int], tuple[str, Tensor]] = {}
+    for image in manifest["images"]:
+        key = (str(image["source_dataset"]), int(image["image_id"]))
+        if key in result:
+            raise ValueError(f"duplicate hard-negative supplement image {key}")
+        boxes = []
+        for region in image["focus_regions"]:
+            if region["training_action"] != expected_action:
+                raise ValueError("focus region has an unsupported training action")
+            if region["effective_supervision"] != manifest["effective_supervision"]:
+                raise ValueError("focus region supervision contract mismatch")
+            boxes.append(region["selector_bbox"])
+        result[key] = (str(image["file_name"]), _boxes_tensor(boxes))
+    return result
 
 
 class IndexedCocoProposalDataset(Dataset[ProposalSample]):
@@ -581,11 +654,15 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             resolved_index,
             force=force_index,
             build_if_missing=not require_prebuilt,
+            verify_source_signature=not require_prebuilt,
         )
         self.data_config = data_config
         self.training = training
         self.seed = seed
         self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
+        self.hard_negative_focus = (
+            _load_hard_negative_focus(data_config) if training else {}
+        )
         self.transform = ProposalTransform(
             data_config.input_size,
             augmentation,
@@ -664,6 +741,12 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
         boxes = _boxes_tensor([row[:4] for row in positive_rows])
         ignore_boxes = _boxes_tensor([row[:4] for row in ignore_rows])
         trusted_background_boxes = _boxes_tensor([row[:4] for row in trusted_rows])
+        focus = self.hard_negative_focus.get((record.source_dataset, record.image_id))
+        if focus is not None and focus[0] != record.file_name:
+            raise ValueError("hard-negative supplement file identity mismatch")
+        hard_negative_focus_boxes = (
+            focus[1] if focus is not None else boxes.new_empty((0, 4))
+        )
         with Image.open(self.image_root / record.file_name) as loaded:
             image = loaded.convert("RGB")
         transformed = self.transform(
@@ -671,6 +754,7 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             boxes,
             ignore_boxes,
             trusted_background_boxes,
+            hard_negative_focus_boxes,
             seed=self.seed + int(self._epoch.item()) * max(len(self), 1) + index,
         )
         domain = self.data_config.source_domains.get(record.source_dataset, "unknown")
@@ -688,6 +772,7 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             (record.height, record.width),
             transformed[5],
             transformed[3],
+            transformed[6],
         )
 
 
@@ -867,3 +952,103 @@ class DomainMixtureBatchSampler(Sampler[list[int]]):
             generator.shuffle(batch)
             if batch_index >= self.start_batch:
                 yield batch
+
+
+class HardNegativeFocusBatchSampler(DomainMixtureBatchSampler):
+    """Inject one same-source, non-empty focus image per optimizer window."""
+
+    def __init__(
+        self,
+        dataset: IndexedCocoProposalDataset,
+        batch_size: int,
+        *,
+        domain_weights: dict[str, float],
+        source_weights: dict[str, float],
+        empty_fraction: float,
+        seed: int,
+        accumulation_steps: int,
+        focus_source_weights: dict[str, float],
+        batches_per_epoch: int | None = None,
+    ) -> None:
+        super().__init__(
+            dataset,
+            batch_size,
+            domain_weights=domain_weights,
+            source_weights=source_weights,
+            empty_fraction=empty_fraction,
+            seed=seed,
+            batches_per_epoch=batches_per_epoch,
+        )
+        if accumulation_steps < 1:
+            raise ValueError("accumulation steps must be positive")
+        if abs(sum(focus_source_weights.values()) - 1.0) > 1e-6:
+            raise ValueError("focus source weights must sum to 1")
+        self.accumulation_steps = accumulation_steps
+        self.focus_source_weights = dict(focus_source_weights)
+        self.focus_pools: dict[str, list[int]] = defaultdict(list)
+        for index, record in enumerate(dataset.records):
+            identity = (record.source_dataset, record.image_id)
+            if identity not in dataset.hard_negative_focus:
+                continue
+            if record.positive_count == 0:
+                raise ValueError("focus images must be non-empty")
+            self.focus_pools[record.source_dataset].append(index)
+        missing = set(self.focus_source_weights) - set(self.focus_pools)
+        if missing:
+            raise ValueError(
+                f"no focus images for configured sources: {sorted(missing)}"
+            )
+        focus_indices = {
+            index for values in self.focus_pools.values() for index in values
+        }
+        for key in tuple(self.pools):
+            self.pools[key] = [
+                index for index in self.pools[key] if index not in focus_indices
+            ]
+
+    def __iter__(self) -> Iterator[list[int]]:
+        start_batch = self.start_batch
+        self.start_batch = 0
+        try:
+            batches = [list(batch) for batch in super().__iter__()]
+        finally:
+            self.start_batch = start_batch
+        focus_order = {}
+        for source, pool in self.focus_pools.items():
+            values = list(pool)
+            random.Random(self.seed + 10_000).shuffle(values)
+            focus_order[source] = values
+        windows_per_epoch = math.ceil(self.batches_per_epoch / self.accumulation_steps)
+        for window_start in range(0, self.batches_per_epoch, self.accumulation_steps):
+            global_window = self.epoch * windows_per_epoch + (
+                window_start // self.accumulation_steps
+            )
+            source_quota = mixture_quota_delta(
+                self.focus_source_weights, global_window, 1
+            )
+            source = next(
+                source for source, count in source_quota.items() if count == 1
+            )
+            prior_draws = _integer_quotas(self.focus_source_weights, global_window)[
+                source
+            ]
+            focus_index = focus_order[source][prior_draws % len(focus_order[source])]
+            replaced = False
+            window_stop = min(
+                window_start + self.accumulation_steps, self.batches_per_epoch
+            )
+            for batch_index in range(window_start, window_stop):
+                batch = batches[batch_index]
+                for position, index in enumerate(batch):
+                    record = self.dataset.records[index]
+                    if record.source_dataset == source and record.positive_count > 0:
+                        batch[position] = focus_index
+                        replaced = True
+                        break
+                if replaced:
+                    break
+            if not replaced:
+                raise RuntimeError(
+                    f"optimizer window {global_window} lacks a non-empty {source} slot"
+                )
+        yield from batches[start_batch:]

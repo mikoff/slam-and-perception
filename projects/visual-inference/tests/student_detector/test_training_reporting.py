@@ -100,7 +100,7 @@ def test_console_and_jsonl_records_have_utc_timestamps(
     optimizer = SimpleNamespace(param_groups=[{"lr": 1e-5}, {"lr": 1e-4}])
 
     reporter.on_batch(
-        metrics={"loss": 0.25},
+        metrics={"loss": 0.25, "loss/total": 0.5},
         epoch=0,
         batch=10,
         batches_per_epoch=100,
@@ -110,7 +110,7 @@ def test_console_and_jsonl_records_have_utc_timestamps(
 
     output = capsys.readouterr().out
     assert output.startswith("20")
-    assert "Z Training progress: epoch=1 batch=10/100 step=1 loss=0.250000" in output
+    assert "Z Training progress: epoch=1 batch=10/100 step=1 loss=0.500000" in output
     record = json.loads(
         (tmp_path / "metrics.jsonl").read_text(encoding="utf-8").strip()
     )

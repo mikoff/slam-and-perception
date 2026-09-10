@@ -26,6 +26,10 @@ def test_quad_decoder_caps_and_suppresses_candidates() -> None:
     assert detections[0].quads.shape[0] <= 3
     assert detections[0].quads.shape[-2:] == (4, 2)
     assert detections[0].pre_nms_quads is not None
+    assert detections[0].levels is not None
+    assert detections[0].location_indices is not None
+    assert detections[0].levels.shape == detections[0].scores.shape
+    assert detections[0].location_indices.shape == detections[0].scores.shape
 
 
 def test_quad_evaluation_reports_fixed_budget_average_recall() -> None:
@@ -85,6 +89,35 @@ def test_quad_evaluation_accumulates_batches_without_changing_metrics() -> None:
     assert expected["score/positive/p50"] == pytest.approx(0.8, abs=2e-5)
     assert expected["score/trusted_background/count"] == 4.0
     assert expected["score/trusted_background/p50"] == pytest.approx(0.15, abs=2e-5)
+
+
+def test_quad_evaluation_reports_duplicate_and_pairwise_overlap_rates() -> None:
+    target = quad_from_bbox([0.0, 0.0, 10.0, 10.0])
+    distant = quad_from_bbox([20.0, 20.0, 30.0, 30.0])
+    image = QuadEvaluationImage(
+        image_id=1,
+        domain="general",
+        camera_type="perspective",
+        image_size=(32, 32),
+        ground_truth=target.unsqueeze(0),
+        ignore_quads=torch.empty((0, 4, 2)),
+        detection=type(
+            "D",
+            (),
+            {
+                "quads": torch.stack((target, target, distant)),
+                "scores": torch.tensor([0.9, 0.8, 0.7]),
+            },
+        )(),
+    )
+
+    metrics = evaluate_quad_proposals([image], log_interval=0)
+
+    assert metrics["proposals/10_per_image"] == 3.0
+    assert metrics["duplicates/10@0.50_fraction"] == pytest.approx(1 / 3)
+    assert metrics["duplicates/10@0.50_of_matched"] == pytest.approx(1 / 2)
+    assert metrics["pairwise/10@0.50_fraction"] == pytest.approx(1 / 3)
+    assert metrics["pairwise/10@0.75_fraction"] == pytest.approx(1 / 3)
 
 
 def test_quad_evaluation_progress_identifies_weight_state(capsys) -> None:

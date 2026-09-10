@@ -261,6 +261,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
         training: bool,
         seed: int = 42,
         force_index: bool = False,
+        verify_index_source: bool = True,
     ) -> None:
         self.annotations = Path(annotations).resolve()
         self.image_root = Path(image_root).resolve()
@@ -275,6 +276,7 @@ class QuadProposalDataset(Dataset[QuadProposalSample]):
             resolved_index,
             force=force_index,
             build_if_missing=not require_prebuilt,
+            verify_source_signature=verify_index_source and not require_prebuilt,
         )
         self.data_config = data_config
         self.training = training

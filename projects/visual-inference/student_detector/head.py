@@ -12,11 +12,11 @@ from .neck import DepthwiseSeparableConv
 
 
 class DetectorOutput(NamedTuple):
-    """Raw, fixed-shape outputs ordered as P3, P4 and P5."""
+    """Raw fixed-shape outputs ordered by configured pyramid stride."""
 
-    objectness: tuple[Tensor, Tensor, Tensor]
-    box_distances: tuple[Tensor, Tensor, Tensor]
-    centerness: tuple[Tensor, Tensor, Tensor]
+    objectness: tuple[Tensor, ...]
+    box_distances: tuple[Tensor, ...]
+    centerness: tuple[Tensor, ...]
 
 
 class QuadDetectorOutput(NamedTuple):
@@ -32,7 +32,7 @@ class SharedDetectionHead(nn.Module):
     def __init__(
         self,
         channels: int = 96,
-        strides: tuple[int, int, int] = (8, 16, 32),
+        strides: tuple[int, ...] = (8, 16, 32),
         prior_probability: float = 0.01,
     ) -> None:
         super().__init__()
@@ -69,14 +69,17 @@ class SharedDetectionHead(nn.Module):
         centerness = self.centerness(regression_feature)
         return objectness, distance, centerness
 
-    def forward(self, features: tuple[Tensor, Tensor, Tensor]) -> DetectorOutput:
-        level3 = self._forward_level(features[0], 0)
-        level4 = self._forward_level(features[1], 1)
-        level5 = self._forward_level(features[2], 2)
+    def forward(self, features: tuple[Tensor, ...]) -> DetectorOutput:
+        if len(features) != len(self.strides):
+            raise ValueError("feature count must match configured strides")
+        levels = tuple(
+            self._forward_level(feature, level)
+            for level, feature in enumerate(features)
+        )
         return DetectorOutput(
-            objectness=(level3[0], level4[0], level5[0]),
-            box_distances=(level3[1], level4[1], level5[1]),
-            centerness=(level3[2], level4[2], level5[2]),
+            objectness=tuple(level[0] for level in levels),
+            box_distances=tuple(level[1] for level in levels),
+            centerness=tuple(level[2] for level in levels),
         )
 
 
@@ -118,5 +121,3 @@ class SharedQuadProposalHead(nn.Module):
             quality=tuple(level[0] for level in levels),
             corner_offsets=tuple(level[1] for level in levels),
         )
-
-

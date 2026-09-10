@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import replace
+import json
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -149,6 +151,18 @@ def test_padding_and_ignore_are_masked_but_positive_overrides():
     assert targets.positive_mask.any()
     assert torch.all(targets.objectness_mask[targets.positive_mask])
     assert not targets.valid_point_masks[0][0, :, 7].any()
+    valid = torch.cat(
+        [level.flatten(start_dim=1) for level in targets.valid_point_masks], dim=1
+    )
+    states = torch.stack(
+        (
+            targets.positive_mask,
+            targets.trusted_background_mask,
+            targets.weak_background_mask,
+            targets.ignore_mask,
+        )
+    )
+    assert torch.equal(states.sum(dim=0), valid.to(dtype=torch.int64))
 
 
 def test_positive_overrides_coincident_ignore_and_trusted_background():
@@ -205,6 +219,29 @@ def test_qfl_mode_has_finite_gradients_and_dormant_centerness():
         centerness_weight=0.0,
         box_weighting="uniform",
     )(output, targets)
+    diagnostics = losses.diagnostics
+    torch.testing.assert_close(
+        diagnostics["component/objectness/raw"].sum(), losses.objectness
+    )
+    torch.testing.assert_close(
+        diagnostics["component/box_ciou/weighted"].sum(), 2 * losses.box_ciou
+    )
+    torch.testing.assert_close(
+        diagnostics["component/box_ltrb/weighted"].sum(), 0.5 * losses.box_ltrb
+    )
+    weighted_total = sum(
+        diagnostics[f"component/{name}/weighted"].sum()
+        for name in ("objectness", "box_ciou", "box_ltrb", "centerness")
+    )
+    torch.testing.assert_close(weighted_total, losses.total)
+    state_effective = sum(
+        diagnostics[f"state/{state}/objectness_effective"]
+        for state in ("positive", "trusted_background", "weak_background", "ignore")
+    )
+    torch.testing.assert_close(state_effective.sum(), losses.objectness)
+    assert diagnostics["state/weak_background/objectness_raw"].sum() > 0
+    assert diagnostics["state/weak_background/objectness_effective"].sum() == 0
+    assert diagnostics["state/ignore/objectness_effective"].sum() == 0
     losses.total.backward()
     assert torch.isfinite(losses.total)
     assert losses.box_ltrb.item() >= 0
@@ -240,6 +277,90 @@ def test_empty_positive_batch_losses_are_finite():
     assert losses.box_ciou.item() == 0
     assert losses.box_ltrb.item() == 0
     assert losses.centerness.item() == 0
+    diagnostics = losses.diagnostics
+    assert diagnostics["component/objectness/empty_images"].sum() == 1
+    assert diagnostics["state/positive/empty_images"].sum() == 1
+    assert diagnostics["state/trusted_background/empty_images"].sum() == 1
+    assert diagnostics["state/weak_background/present_images"].sum() == 1
+    assert diagnostics["state/weak_background/active_images"].sum() == 0
+    assert diagnostics["state/weak_background/total_weight"].sum() == 0
+
+
+def test_per_image_reduction_is_invariant_to_duplicate_samples() -> None:
+    torch.manual_seed(7)
+    model = StudentDetector(backbone=StubBackbone()).eval()
+    sample = _sample(ignore=True)
+    criterion = ProposalLoss(
+        objectness_loss="quality_focal",
+        ltrb_weight=0.5,
+        centerness_weight=0.0,
+    )
+
+    def compute(samples: list[ProposalSample]):
+        output = model(torch.stack([item.image for item in samples]))
+        shapes = tuple(
+            (tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness
+        )
+        targets = TargetBuilder(ATSSAssigner())(
+            samples, shapes, device=torch.device("cpu")
+        )
+        return criterion(output, targets)
+
+    single = compute([sample])
+    duplicate = compute([sample, sample])
+    for name in ("total", "objectness", "box_ciou", "box_ltrb", "centerness"):
+        torch.testing.assert_close(getattr(single, name), getattr(duplicate, name))
+
+
+def test_microbatch_partition_preserves_loss_and_one_step_update() -> None:
+    torch.manual_seed(11)
+    full_model = StudentDetector(backbone=StubBackbone()).eval()
+    split_model = copy.deepcopy(full_model).eval()
+    samples = [
+        _sample(dense=True),
+        _sample(dense=False),
+        _sample(dense=True, ignore=True),
+        _sample(dense=False, ignore=True),
+    ]
+    criterion = ProposalLoss(
+        objectness_loss="quality_focal",
+        ltrb_weight=0.5,
+        centerness_weight=0.0,
+    )
+
+    def compute(model: StudentDetector, batch: list[ProposalSample]):
+        output = model(torch.stack([item.image for item in batch]))
+        shapes = tuple(
+            (tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness
+        )
+        targets = TargetBuilder(ATSSAssigner())(
+            batch, shapes, device=torch.device("cpu")
+        )
+        return criterion(output, targets)
+
+    full_optimizer = torch.optim.SGD(full_model.parameters(), lr=1e-3)
+    full_loss = compute(full_model, samples).total
+    full_loss.backward()
+    full_optimizer.step()
+
+    split_optimizer = torch.optim.SGD(split_model.parameters(), lr=1e-3)
+    split_losses = []
+    for start in (0, 2):
+        micro_loss = compute(split_model, samples[start : start + 2]).total
+        split_losses.append(micro_loss.detach())
+        (micro_loss / 2).backward()
+    split_optimizer.step()
+
+    torch.testing.assert_close(full_loss.detach(), torch.stack(split_losses).mean())
+    for full_parameter, split_parameter in zip(
+        full_model.parameters(), split_model.parameters(), strict=True
+    ):
+        torch.testing.assert_close(
+            full_parameter,
+            split_parameter,
+            atol=2e-6,
+            rtol=2e-6,
+        )
 
 
 def test_disabled_dense_branch_is_finite_in_float16():
@@ -375,6 +496,9 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
         max_val_batches=1,
     )
     assert result["global_step"] == 1
+    contract_path = config.output_dir / "run_contract.json"
+    assert contract_path.is_file()
+    original_contract = contract_path.read_bytes()
     for name in ("last.pt", "best.pt"):
         checkpoint = torch.load(
             config.output_dir / name, map_location="cpu", weights_only=False
@@ -383,6 +507,8 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
         assert checkpoint["selected_state"] == (
             "ema_model" if name == "best.pt" else "model"
         )
+        assert checkpoint["experiment_contract"]["initial_model_state_sha256"]
+        assert checkpoint["experiment_contract_sha256"]
         if name == "last.pt":
             assert "model" in checkpoint
             assert "ema_model" in checkpoint
@@ -406,6 +532,13 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
         resume=config.output_dir / "last.pt",
     )
     assert resumed["global_step"] == 2
+    assert contract_path.read_bytes() == original_contract
+    metrics = json.loads(
+        (config.output_dir / "metrics.jsonl").read_text().splitlines()[-1]
+    )
+    assert "loss/component/objectness/weighted" in metrics
+    assert "loss/domain/general/state/positive/objectness_raw" in metrics
+    assert "loss/source/coco_2017/component/box_ciou/weighted" in metrics
 
 
 def test_mid_epoch_checkpoint_resumes_the_same_epoch(tmp_path):

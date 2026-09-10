@@ -1,11 +1,9 @@
 # Module Purpose & Boundaries
 
-This project owns the approved proposal-object contract and trains class-agnostic
-HBB and quad detectors. Dense P3-P5 outputs exclude decoding, NMS, and metrics;
-LiteFPN/AttnResLiteFPN are quad variants; `docs/proposal_detector_roadmap.md` sets scope.
+This project owns the approved proposal-object contract and trains class-agnostic HBB and
+quad detectors. HBB supports dense P3–P5 and P2–P5 outputs; quad uses P3–P5.
 
-GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridge
-provisions hosts and registers dstack SSH fleets using the same task contract.
+GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridge provisions hosts and registers dstack SSH fleets using the same task contract.
 
 # Technical Contracts & Interfaces
 
@@ -19,8 +17,10 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   `indexes/quad_val.sqlite`; a cloud worker may not silently rebuild an index.
 - HBB/quad workers lazily reopen SQLite read-only per process and fetch one
   image's annotations; shared epoch tensors propagate to persistent workers.
-- HBB/quad share `proposal-manifest.v2`; state is fixed before geometry encoding.
-- Phase 1.8 hard-fails effective state conflicts/leakage; raw precedence overlaps warn.
+- HBB/quad share `proposal-manifest.v2` and an immutable decoded K=100 record
+  with stable IDs, inverse-letterboxed geometry, and deterministic score ties.
+- FP32 deployment artifacts are flattened raw-output PT2 graphs; decoding and
+  geometry-specific NMS remain outside the exported network.
 - Both geometry adapters consume one sampled affine/photometric policy; validation
   is letterbox-only and effective bounds/exclusions are recorded in run metadata.
 - RTX 3060 uses FP16 `[B=8, 3, 384, 384]`, eight-step accumulation, and 5-epoch validation.
@@ -30,7 +30,6 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   restores all state and takes precedence when auto-resume finds a checkpoint.
 - Quality recipes starting at centerness use the staged curriculum; explicit
   blend/geometry recipes stay fixed, including the mature-EMA min-8 warm start.
-- S3 manifests retain latest plus two immutable SHA-256 recovery candidates.
 - Run contracts bind source/data/config; parent resumes require descendant source.
 
 # Active Design Patterns & Decisions
@@ -57,8 +56,10 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   no-candidate fallback remains per-object.
 - Frozen bounded-v1 results are accepted only when every seed/state primary
   metric matches the reference to four decimal places.
-- Phase 3 HBB and quad recipes share proposal manifests; historical benchmarks stay frozen.
-- `analyze_small_object_policy.py` streams model-coordinate policy evidence from SQLite.
+- HBB loss is per-image/state; frozen utility gates drive selection. The
+  tested candidates failed; v2 permits baseline retention after evidence commit.
+- HBB P3–P5 is primary and quad P3–P5 is control; matched Phase 3.7 calibration
+  freezes HBB NMS/score 0.70/0.30 and quad 0.80/0.20.
 
 # Local Constraints & Gotchas
 
@@ -77,4 +78,3 @@ provisions hosts and registers dstack SSH fleets using the same task contract.
   Packet targets its unique attempt-specific fleet.
 - Packet rotates valid pool/region placements and never adopts existing servers.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Versioning aids manual recovery; automatic resume does not read prior versions.

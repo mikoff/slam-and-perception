@@ -1,0 +1,12 @@
+schema_version: visual-inference-hard-negative-promotion.v1
+candidate_manifest_sha256: 8f9be8e0d82242c70e608fbe31479fced9a6890e9f8818920e3a95be9694e259
+strategy: certified_trusted_background_only
+promote_classifications:
+  - certified_trusted_background
+requirements:
+  maximum_object_iou: 0.10
+  maximum_ignore_fraction: 0.50
+  minimum_trusted_background_fraction: 0.50
+rejected_disposition: no_training_change
+training_action: focus_existing_trusted_background
+effective_supervision: intersection with existing trusted-background regions only
