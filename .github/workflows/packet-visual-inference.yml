@@ -21,6 +21,7 @@ on:
         default: configs/phase3.yaml
         type: choice
         options:
+          - configs/correction_phase4_hbb_p3_v1.yaml
           - configs/phase3.yaml
           - configs/phase3_attnres.yaml
           - configs/phase3_rtx4090_bs128_v1.yaml
@@ -70,6 +71,7 @@ jobs:
       RUN_ID: vi-${{ github.run_id }}-${{ github.run_attempt }}
       RUN_DISPLAY_NAME: ${{ inputs.run_name }}
       DSTACK_GPU: ${{ inputs.gpu }}
+      CLOUD_PROVIDER: ${{ inputs.provider }}
       CONFIG_PATH: ${{ inputs.config }}
       DATASET_ID: ${{ inputs.dataset_id }}
       RUN_MODE: ${{ inputs.mode }}

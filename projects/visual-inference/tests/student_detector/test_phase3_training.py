@@ -496,16 +496,17 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
         max_val_batches=1,
     )
     assert result["global_step"] == 1
+    assert set(result["best_scores"]) == {"raw", "ema"}
     contract_path = config.output_dir / "run_contract.json"
     assert contract_path.is_file()
     original_contract = contract_path.read_bytes()
-    for name in ("last.pt", "best.pt"):
+    for name in ("last.pt", "best.pt", "best_raw.pt", "best_ema.pt"):
         checkpoint = torch.load(
             config.output_dir / name, map_location="cpu", weights_only=False
         )
         assert checkpoint["phase"] == 3
         assert checkpoint["selected_state"] == (
-            "ema_model" if name == "best.pt" else "model"
+            "model" if name in {"last.pt", "best_raw.pt"} else "ema_model"
         )
         assert checkpoint["experiment_contract"]["initial_model_state_sha256"]
         assert checkpoint["experiment_contract_sha256"]
@@ -516,7 +517,7 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
             assert "rng_state" in checkpoint
         else:
             assert checkpoint["checkpoint_kind"] == "weights_only"
-            assert "ema_model" in checkpoint
+            assert checkpoint["selected_state"] in checkpoint
             assert "optimizer" not in checkpoint
     resumed_config = replace(config, schedule=replace(config.schedule, epochs=2))
     resumed = train_phase3(
@@ -539,6 +540,8 @@ def test_one_step_trainer_writes_resumable_checkpoints(tmp_path):
     assert "loss/component/objectness/weighted" in metrics
     assert "loss/domain/general/state/positive/objectness_raw" in metrics
     assert "loss/source/coco_2017/component/box_ciou/weighted" in metrics
+    assert "val_raw/selection_score" in metrics
+    assert "val_ema/selection_score" in metrics
 
 
 def test_mid_epoch_checkpoint_resumes_the_same_epoch(tmp_path):

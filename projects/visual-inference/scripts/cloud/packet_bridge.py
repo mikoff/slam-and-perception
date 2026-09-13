@@ -894,6 +894,8 @@ class DstackClient:
     def submit(self, state: RunState) -> None:
         config = yaml.safe_load(self.task_config.read_text(encoding="utf-8"))
         config["name"] = state.run_id
+        if state.config == "configs/correction_phase4_hbb_p3_v1.yaml":
+            config["max_duration"] = "12h"
         resources = config.setdefault("resources", {})
         resources["gpu"] = "1" if state.fleet_name else f"{state.gpu}:1"
         config.setdefault("tags", {})["run_id"] = state.run_id

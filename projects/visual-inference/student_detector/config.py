@@ -148,6 +148,8 @@ class ScheduleConfig:
     ema_ramp_steps: int = 0
     accumulation_steps: int = 1
     amp: bool = True
+    amp_initial_scale: float = 65536.0
+    optimizer_step_skip_policy: str = "allow"
     seed: int = 42
     checkpoint_every_epochs: int = 1
     checkpoint_every_steps: int = 500
@@ -312,6 +314,10 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("ema_decay must be in [0, 1)")
     if config.schedule.ema_ramp_steps < 0:
         raise ValueError("ema_ramp_steps must be non-negative")
+    if config.schedule.amp_initial_scale <= 0:
+        raise ValueError("amp_initial_scale must be positive")
+    if config.schedule.optimizer_step_skip_policy not in {"allow", "error"}:
+        raise ValueError("optimizer_step_skip_policy must be allow or error")
     if config.inference.score_mode not in {"objectness", "objectness_x_centerness"}:
         raise ValueError("score_mode must be 'objectness' or 'objectness_x_centerness'")
     if config.quad.top_k < 1 or config.quad.eligible_levels < 1:

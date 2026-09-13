@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
+import pathlib
+import sys
+import types
 from typing import Any, Literal
 
 import torch
@@ -10,6 +14,41 @@ import torch
 DetectorKind = Literal["hbb", "quad"]
 NeckType = Literal["lite", "attn_res"]
 CheckpointState = Literal["model", "ema_model"]
+
+
+def load_checkpoint(path: Path) -> dict[str, Any]:
+    """Load trusted project checkpoints across the Python 3.12/3.13 pathlib split."""
+    if not hasattr(pathlib, "_local"):
+        local_module = types.ModuleType("pathlib._local")
+        local_module.PosixPath = pathlib.PosixPath
+        local_module.WindowsPath = pathlib.WindowsPath
+        local_module.Path = pathlib.Path
+        sys.modules["pathlib._local"] = local_module
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, dict):
+        raise ValueError("checkpoint root must be a dictionary")
+    return checkpoint
+
+
+def initialize_model_weights(
+    model: torch.nn.Module,
+    checkpoint_path: Path,
+    *,
+    kind: DetectorKind,
+    neck_type: NeckType,
+    required_state: CheckpointState | None = None,
+) -> CheckpointState:
+    """Strictly warm-start one model state without restoring training state."""
+    checkpoint = load_checkpoint(checkpoint_path)
+    state_key = required_state or selected_checkpoint_state(checkpoint)
+    load_model_state_strict(
+        model,
+        checkpoint,
+        kind=kind,
+        neck_type=neck_type,
+        state_key=state_key,
+    )
+    return state_key
 
 
 def architecture_id(kind: DetectorKind, neck_type: NeckType) -> str:
@@ -92,6 +131,8 @@ __all__ = [
     "NeckType",
     "architecture_id",
     "checkpoint_neck_type",
+    "initialize_model_weights",
+    "load_checkpoint",
     "load_model_state_strict",
     "selected_checkpoint_state",
     "validate_checkpoint_contract",

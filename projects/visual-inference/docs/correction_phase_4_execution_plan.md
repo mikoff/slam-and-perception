@@ -1,8 +1,8 @@
 # Correction Phase 4 execution plan
 
-Status: Phase 4.0 complete and awaiting owner confirmation before Phase 4.1.
-The source boundary and durable artifacts are recorded in the
-[Phase 4.0 evidence report](correction_phase_4_0_evidence_boundary.md).
+Status: Phase 4.0 through the
+[Phase 4.2a promotion contract](correction_phase_4_2a_promotion_contract.md) are
+complete. Phase 4.3 is waiting for a separate owner launch approval.
 
 ## Goal and stopping point
 
@@ -35,7 +35,7 @@ not be retrained without a new proposal-level justification.
 ### 4.0 Commit and evidence boundary
 
 Complete. The evidence set is immutable and remotely verified; the manifest was
-uploaded last. Owner confirmation remains required before Phase 4.1.
+uploaded last.
 
 - Use the verified [Phases 2–3 commit review](correction_phase_2_3_commit_review.md).
 - Review and commit the complete Phase 2/3 source, tests, configs, and reports.
@@ -49,6 +49,9 @@ uploaded last. Owner confirmation remains required before Phase 4.1.
 Stop for owner confirmation before Phase 4.1.
 
 ### 4.1 Freeze the full-run contract
+
+Approved. The machine-readable recipe and contract fix the budget, cadence,
+seed policy, Packet path, and ceilings.
 
 Create one immutable config and run contract. Resolve the remaining decisions:
 
@@ -66,6 +69,10 @@ Stop for owner approval of initialization, budget, cost, and stopping rules.
 
 ### 4.2 Run local preflight
 
+Complete. All required gates passed; details and measured evidence are recorded
+in the [local preflight report](correction_phase_4_2_local_preflight.md). No
+Packet host or other cloud resource was launched.
+
 Run, in order:
 
 1. static schema/hash/config checks;
@@ -80,7 +87,19 @@ The AI reviews target/proposal overlays using the conservative default strategy
 and reports exceptions; the owner is not required to inspect every image. Stop
 on any failed check and ask for supervision before remediation or cloud work.
 
+### 4.2a Freeze the HBB-versus-quad promotion contract
+
+Complete. Quad is the incumbent and HBB is the challenger. HBB must pass the
+existing comparison against the retained HBB baseline and the versioned
+[quad-incumbent promotion policy](correction_phase_4_2a_promotion_contract.md).
+Deployment speed is report-only and cannot override a quality failure. The
+current HBB correctly fails this new gate, so no production switch has occurred.
+
 ### 4.3 Run a bounded cloud pilot
+
+The pilot exercises the HBB challenger but does not replace the quad incumbent.
+Promotion later requires both the HBB-baseline policy and the Phase 4 quad-
+incumbent policy to pass.
 
 - Stage or verify the immutable dataset and initialization artifact.
 - Run enough steps to cross warm-up and at least one validation/checkpoint event.

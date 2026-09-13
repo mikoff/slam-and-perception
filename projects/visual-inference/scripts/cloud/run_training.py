@@ -30,10 +30,22 @@ else:
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY_ROOT = PROJECT_ROOT.parents[1]
 ALLOWED_CONFIGS = {
+    "configs/correction_phase4_hbb_p3_v1.yaml",
     "configs/phase3.yaml",
     "configs/phase3_attnres.yaml",
     "configs/phase3_rtx4090_bs128_v1.yaml",
 }
+PHASE4_CONFIG = "configs/correction_phase4_hbb_p3_v1.yaml"
+PHASE4_DATASET_ID = "phase3-production-bg-policy-v2-2026-08-29"
+PHASE4_DATASET_MANIFEST_SHA256 = (
+    "c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c"
+)
+PHASE4_INITIALIZATION_KEY = (
+    "artifacts/proposal-correction/phase3-entry-v1/hbb/step_0200.pt"
+)
+PHASE4_INITIALIZATION_SHA256 = (
+    "3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063"
+)
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -75,6 +87,14 @@ def verify_environment() -> dict[str, str]:
         raise ValueError("BATCH_CANDIDATES must contain integers") from error
     if not parsed_candidates or any(value < 1 for value in parsed_candidates):
         raise ValueError("BATCH_CANDIDATES must contain positive integers")
+    geometry = "hbb" if config == PHASE4_CONFIG else "quad"
+    if config == PHASE4_CONFIG:
+        if dataset_id != PHASE4_DATASET_ID:
+            raise ValueError("Phase 4 HBB requires its immutable approved dataset")
+        if _required("CLOUD_PROVIDER") != "packet":
+            raise ValueError("Phase 4 HBB is approved only for Packet")
+        if _required("DSTACK_GPU") != "RTX4090":
+            raise ValueError("Phase 4 HBB is approved only for one RTX4090")
     return {
         "run_id": run_id,
         "dataset_id": dataset_id,
@@ -82,6 +102,8 @@ def verify_environment() -> dict[str, str]:
         "mode": mode,
         "resume_from_run_id": resume_from_run_id,
         "batch_candidates": ",".join(str(value) for value in parsed_candidates),
+        "geometry": geometry,
+        "initialization_path": "",
     }
 
 
@@ -99,7 +121,14 @@ def _replace_with_symlink(link: Path, target: Path) -> None:
 
 def verify_remote_dataset(values: dict[str, str], *, bucket: str, aws: AwsCli) -> None:
     """Validate the small S3 manifest without downloading the dataset archive."""
-    download_manifest(bucket=bucket, dataset_id=values["dataset_id"], aws=aws)
+    download_manifest(
+        bucket=bucket,
+        dataset_id=values["dataset_id"],
+        aws=aws,
+        expected_sha256=(
+            PHASE4_DATASET_MANIFEST_SHA256 if values["geometry"] == "hbb" else None
+        ),
+    )
 
 
 def verify_checkpoint_io(values: dict[str, str], *, bucket: str, aws: AwsCli) -> None:
@@ -123,9 +152,26 @@ def verify_checkpoint_io(values: dict[str, str], *, bucket: str, aws: AwsCli) ->
             raise ValueError("S3 checkpoint I/O probe read-back mismatch")
 
 
-def verify_resume_source(
-    values: dict[str, str], *, bucket: str, aws: AwsCli
-) -> None:
+def stage_initialization(
+    values: dict[str, str], *, output_dir: Path, bucket: str, aws: AwsCli
+) -> Path | None:
+    """Download and hash-check the immutable HBB warm-start artifact."""
+    if values["geometry"] != "hbb" or values["resume_from_run_id"]:
+        return None
+    destination = output_dir / "preflight" / "initialization.pt"
+    aws.download(f"s3://{bucket}/{PHASE4_INITIALIZATION_KEY}", destination)
+    actual = sha256_file(destination)
+    if actual != PHASE4_INITIALIZATION_SHA256:
+        destination.unlink(missing_ok=True)
+        raise ValueError(
+            "Phase 4 initialization SHA-256 mismatch: "
+            f"expected {PHASE4_INITIALIZATION_SHA256}, found {actual}"
+        )
+    values["initialization_path"] = str(destination)
+    return destination
+
+
+def verify_resume_source(values: dict[str, str], *, bucket: str, aws: AwsCli) -> None:
     """Fail before GPU allocation when an explicit resume parent is incompatible."""
     parent_run_id = values["resume_from_run_id"]
     if not parent_run_id:
@@ -181,6 +227,11 @@ def verify_resume_source(
 
 
 def build_training_command(values: dict[str, str], output_dir: Path) -> list[str]:
+    script = (
+        "scripts/train_phase3.py"
+        if values.get("geometry") == "hbb"
+        else "scripts/train_quad_proposals.py"
+    )
     command = [
         sys.executable,
         "-m",
@@ -193,7 +244,7 @@ def build_training_command(values: dict[str, str], output_dir: Path) -> list[str
         "no",
         "--mixed_precision",
         "fp16",
-        "scripts/train_quad_proposals.py",
+        script,
         "--config",
         values["config"],
         "--output-dir",
@@ -202,11 +253,23 @@ def build_training_command(values: dict[str, str], output_dir: Path) -> list[str
         values["run_id"],
         "--resume-mode",
         "auto",
-        "--validation-interval",
-        "5" if values["mode"] == "production" else "1",
     ]
+    if values.get("geometry") != "hbb" or values["mode"] != "production":
+        command.extend(
+            [
+                "--validation-interval",
+                "5" if values["mode"] == "production" else "1",
+            ]
+        )
     if values["resume_from_run_id"]:
         command.extend(["--resume-from-run-id", values["resume_from_run_id"]])
+    elif values.get("geometry") == "hbb":
+        initialization = values.get("initialization_path", "")
+        if not initialization:
+            raise ValueError("Phase 4 HBB initialization has not been staged")
+        command.extend(
+            ["--initialize-from", initialization, "--initialize-state", "ema_model"]
+        )
     if values["mode"] == "smoke":
         command.extend(
             [
@@ -304,6 +367,11 @@ def main() -> None:
     os.environ["DATASET_MANIFEST_SHA256"] = sha256_file(
         dataset / ".dataset-manifest.json"
     )
+    if (
+        values["geometry"] == "hbb"
+        and os.environ["DATASET_MANIFEST_SHA256"] != PHASE4_DATASET_MANIFEST_SHA256
+    ):
+        raise ValueError("staged dataset manifest does not match Phase 4 contract")
     _replace_with_symlink(
         REPOSITORY_ROOT / "data/visual-inference-datasets/output", dataset
     )
@@ -315,6 +383,14 @@ def main() -> None:
     output_root = Path(os.getenv("RUN_ROOT", "/workspace/runs"))
     output_dir = output_root / values["run_id"]
     output_dir.mkdir(parents=True, exist_ok=True)
+    staged_initialization = stage_initialization(
+        values,
+        output_dir=output_dir,
+        bucket=bucket,
+        aws=aws,
+    )
+    if staged_initialization is not None:
+        print(f"Verified Phase 4 initialization at {staged_initialization}", flush=True)
     print(f"Launching {values['mode']} workload for run {values['run_id']}", flush=True)
     process = subprocess.Popen(
         build_workload_command(values, output_dir),

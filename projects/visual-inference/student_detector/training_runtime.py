@@ -17,6 +17,7 @@ import torch
 from torch import Tensor, nn
 
 from .config import Phase3Config
+from .checkpoints import load_checkpoint
 from .data import DomainMixtureBatchSampler, mixture_quota_delta
 from .training_optimization import (
     ExponentialMovingAverage,
@@ -31,8 +32,10 @@ from .training_reporting import StandardReporter, timestamped_print
 
 try:
     from accelerate import Accelerator
+    from accelerate.utils import GradScalerKwargs
 except ImportError:  # pragma: no cover - exercised by the explicit runtime check
     Accelerator = None
+    GradScalerKwargs = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +293,8 @@ def train_proposals(
     if Accelerator is None:
         raise RuntimeError("Accelerate is required for proposal training")
     if accelerator is None:
+        if GradScalerKwargs is None:
+            raise RuntimeError("Accelerate AMP utilities are required for training")
         accelerator = Accelerator(
             cpu=device.type == "cpu",
             gradient_accumulation_steps=config.schedule.accumulation_steps,
@@ -297,6 +302,9 @@ def train_proposals(
                 "fp16" if config.schedule.amp and device.type == "cuda" else "no"
             ),
             split_batches=True,
+            kwargs_handlers=[
+                GradScalerKwargs(init_scale=config.schedule.amp_initial_scale)
+            ],
         )
     device = accelerator.device
     set_reproducibility_seed(config.schedule.seed)
@@ -352,7 +360,7 @@ def train_proposals(
     optimizer.zero_grad(set_to_none=True)
 
     if resume is not None:
-        checkpoint = torch.load(resume, map_location="cpu", weights_only=False)
+        checkpoint = load_checkpoint(resume)
         _verify_runtime_contract(checkpoint, resume_contract)
         task.load_model_state(base_model, checkpoint)
         ema.module.load_state_dict(checkpoint["ema_model"], strict=True)
@@ -484,6 +492,14 @@ def train_proposals(
                         accelerator.sync_gradients
                         and not accelerator.optimizer_step_was_skipped
                     )
+                    if (
+                        accelerator.sync_gradients
+                        and accelerator.optimizer_step_was_skipped
+                        and config.schedule.optimizer_step_skip_policy == "error"
+                    ):
+                        raise FloatingPointError(
+                            "AMP skipped an optimizer step under the fail-closed policy"
+                        )
                     if optimizer_step_succeeded:
                         scheduler.step()
                         ema.update(base_model)

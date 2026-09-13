@@ -98,12 +98,25 @@ def required_staging_bytes(manifest: dict[str, Any]) -> int:
     return archive_size + extracted_size
 
 
-def download_manifest(*, bucket: str, dataset_id: str, aws: AwsCli) -> dict[str, Any]:
+def download_manifest(
+    *,
+    bucket: str,
+    dataset_id: str,
+    aws: AwsCli,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
     """Download and validate an immutable dataset manifest."""
     uri = f"s3://{bucket}/datasets/{dataset_id}/dataset-manifest.json"
     with tempfile.TemporaryDirectory(prefix="dataset-manifest-") as temporary:
         path = Path(temporary) / "dataset-manifest.json"
         aws.download(uri, path)
+        if expected_sha256 is not None:
+            actual_sha256 = sha256_file(path)
+            if actual_sha256 != expected_sha256:
+                raise ValueError(
+                    "dataset manifest SHA-256 mismatch: "
+                    f"expected {expected_sha256}, found {actual_sha256}"
+                )
         manifest = json.loads(path.read_text(encoding="utf-8"))
     validate_manifest(manifest, dataset_id)
     return manifest

@@ -87,6 +87,7 @@ def build_coco_sqlite_index(
     force: bool = False,
     build_if_missing: bool = True,
     verify_source_signature: bool = True,
+    compatible_schema_versions: tuple[str, ...] = (),
 ) -> Path:
     """Build a compact random-access index without loading COCO JSON into RAM."""
     source = Path(annotations).resolve()
@@ -109,6 +110,7 @@ def build_coco_sqlite_index(
             schema_matches = metadata.get("schema_version") in (
                 INDEX_SCHEMA_VERSION,
                 f"{INDEX_SCHEMA_VERSION}:proposal-manifest",
+                *compatible_schema_versions,
             )
             if schema_matches and not verify_source_signature:
                 return destination
@@ -655,6 +657,10 @@ class IndexedCocoProposalDataset(Dataset[ProposalSample]):
             force=force_index,
             build_if_missing=not require_prebuilt,
             verify_source_signature=not require_prebuilt,
+            # Phase 4 HBB reads only the stable image and x1/y1/x2/y2/state
+            # columns. Production schema-6 proposal indexes contain exactly
+            # that contract; newer attribute columns remain quad-only.
+            compatible_schema_versions=("6:proposal-manifest",),
         )
         self.data_config = data_config
         self.training = training

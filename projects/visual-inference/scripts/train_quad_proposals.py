@@ -6,24 +6,13 @@ import argparse
 import json
 import math
 import os
-import pathlib
 import subprocess
-import sys
-import types
 from dataclasses import replace
 from pathlib import Path
 
-# Compatibility shim: Python 3.13 refactored pathlib to pathlib._local.
-# Provide alias when loading 3.13 checkpoints under Python 3.12 environments.
-if not hasattr(pathlib, "_local"):
-    _local_mod = types.ModuleType("pathlib._local")
-    _local_mod.PosixPath = pathlib.PosixPath
-    _local_mod.WindowsPath = pathlib.WindowsPath
-    _local_mod.Path = pathlib.Path
-    sys.modules["pathlib._local"] = _local_mod
-
 import torch
 from accelerate import Accelerator
+from accelerate.utils import GradScalerKwargs
 from torch.utils.data import DataLoader
 
 from student_detector.checkpoint_transport import (
@@ -33,8 +22,7 @@ from student_detector.checkpoint_transport import (
 )
 from student_detector.checkpoints import (
     NeckType,
-    load_model_state_strict,
-    selected_checkpoint_state,
+    initialize_model_weights,
 )
 from student_detector.config import load_phase3_config
 from student_detector.data import (
@@ -146,16 +134,12 @@ def _initialize_model(
     *,
     neck_type: NeckType,
 ) -> str:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state_key = selected_checkpoint_state(checkpoint)
-    load_model_state_strict(
+    return initialize_model_weights(
         model,
-        checkpoint,
+        checkpoint_path,
         kind="quad",
         neck_type=neck_type,
-        state_key=state_key,
     )
-    return state_key
 
 
 def main() -> None:
@@ -257,6 +241,9 @@ def main() -> None:
             "fp16" if config.schedule.amp and requested_device.type == "cuda" else "no"
         ),
         log_with="wandb" if args.wandb_project else None,
+        kwargs_handlers=[
+            GradScalerKwargs(init_scale=config.schedule.amp_initial_scale)
+        ],
     )
     device = accelerator.device
     # Model construction initializes the proposal head, so seed before creating

@@ -10,6 +10,7 @@ repos:
 
 env:
   - RUN_ID
+  - CLOUD_PROVIDER
   - RUN_DISPLAY_NAME
   - CONFIG_PATH
   - DATASET_ID

@@ -14,10 +14,16 @@ def _value_at(document: dict[str, Any], path: str) -> Any:
     return value
 
 
-def _metric(report: dict[str, Any], group: str, metric: str) -> float:
-    value = _value_at(report, f"hbb.groups.{group}")
+def _metric(
+    report: dict[str, Any], geometry: str, group: str, metric: str
+) -> float:
+    if geometry not in {"hbb", "quad"}:
+        raise ValueError(f"unsupported selection geometry {geometry!r}")
+    value = _value_at(report, f"{geometry}.groups.{group}")
     if not isinstance(value, dict) or metric not in value:
-        raise KeyError(f"HBB group {group!r} does not contain metric {metric!r}")
+        raise KeyError(
+            f"{geometry.upper()} group {group!r} does not contain metric {metric!r}"
+        )
     result = float(value[metric])
     if not (-float("inf") < result < float("inf")):
         raise ValueError(f"metric {group}/{metric} is not finite")
@@ -57,6 +63,12 @@ def compare_selection_reports(
 ) -> dict[str, Any]:
     """Classify a candidate as pass, fail, inconclusive, or invalid."""
     contract = policy["contract"]
+    comparison = policy.get("comparison", {})
+    baseline_geometry = str(comparison.get("baseline_geometry", "hbb"))
+    candidate_geometry = str(comparison.get("candidate_geometry", "hbb"))
+    for geometry in (baseline_geometry, candidate_geometry):
+        if geometry not in {"hbb", "quad"}:
+            raise ValueError(f"unsupported selection geometry {geometry!r}")
     contract_checks = []
     for path in contract["required_equal"]:
         baseline_value = _value_at(baseline, path)
@@ -81,6 +93,10 @@ def compare_selection_reports(
         return {
             "schema_version": "proposal-selection-result.v1",
             "status": "invalid_contract",
+            "comparison": {
+                "baseline_geometry": baseline_geometry,
+                "candidate_geometry": candidate_geometry,
+            },
             "contract_checks": contract_checks,
             "objective": None,
             "gates": [],
@@ -90,10 +106,16 @@ def compare_selection_reports(
 
     objective_policy = policy["objective"]
     objective_baseline = _metric(
-        baseline, objective_policy["group"], objective_policy["metric"]
+        baseline,
+        baseline_geometry,
+        objective_policy["group"],
+        objective_policy["metric"],
     )
     objective_candidate = _metric(
-        candidate, objective_policy["group"], objective_policy["metric"]
+        candidate,
+        candidate_geometry,
+        objective_policy["group"],
+        objective_policy["metric"],
     )
     objective_delta_pp = 100.0 * (objective_candidate - objective_baseline)
     if objective_delta_pp < float(objective_policy["failure_delta_pp"]):
@@ -114,8 +136,12 @@ def compare_selection_reports(
 
     gates = []
     for gate in policy["relative_gates"]:
-        baseline_value = _metric(baseline, gate["group"], gate["metric"])
-        candidate_value = _metric(candidate, gate["group"], gate["metric"])
+        baseline_value = _metric(
+            baseline, baseline_geometry, gate["group"], gate["metric"]
+        )
+        candidate_value = _metric(
+            candidate, candidate_geometry, gate["group"], gate["metric"]
+        )
         delta_pp = 100.0 * (candidate_value - baseline_value)
         gates.append(
             {
@@ -139,7 +165,9 @@ def compare_selection_reports(
 
     absolute_gates = []
     for gate in policy.get("absolute_gates", []):
-        candidate_value = _metric(candidate, gate["group"], gate["metric"])
+        candidate_value = _metric(
+            candidate, candidate_geometry, gate["group"], gate["metric"]
+        )
         maximum = float(gate["maximum"])
         absolute_gates.append(
             {
@@ -164,6 +192,10 @@ def compare_selection_reports(
     return {
         "schema_version": "proposal-selection-result.v1",
         "status": status,
+        "comparison": {
+            "baseline_geometry": baseline_geometry,
+            "candidate_geometry": candidate_geometry,
+        },
         "contract_checks": contract_checks,
         "objective": objective,
         "gates": gates,

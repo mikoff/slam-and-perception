@@ -1,9 +1,8 @@
 # Module Purpose & Boundaries
 
-This project owns the approved proposal-object contract and trains class-agnostic HBB and
-quad detectors. HBB supports dense P3–P5 and P2–P5 outputs; quad uses P3–P5.
+This project owns the approved proposal-object contract and trains class-agnostic HBB and quad detectors. HBB supports dense P3–P5 and P2–P5 outputs; quad uses P3–P5.
 
-GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridge provisions hosts and registers dstack SSH fleets using the same task contract.
+GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge provisions fresh hosts and registers attempt-specific SSH fleets.
 
 # Technical Contracts & Interfaces
 
@@ -13,8 +12,8 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
 - `DATASET_ID` identifies an immutable S3 prefix with an archive-level hash manifest.
 - Production bundles use native tar/pigz/AWS streaming while hashing and
   dereferencing symlinks; the manifest uploads only after archive verification.
-- Cloud datasets must contain prebuilt `indexes/quad_train.sqlite` and
-  `indexes/quad_val.sqlite`; a cloud worker may not silently rebuild an index.
+- Cloud datasets must contain prebuilt train/validation SQLite indexes; HBB may
+  read schema 6's stable subset, while quad requires its current schema.
 - HBB/quad workers lazily reopen SQLite read-only per process and fetch one
   image's annotations; shared epoch tensors propagate to persistent workers.
 - HBB/quad share `proposal-manifest.v2` and an immutable decoded K=100 record
@@ -23,7 +22,8 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
   geometry-specific NMS remain outside the exported network.
 - Both geometry adapters consume one sampled affine/photometric policy; validation
   is letterbox-only and effective bounds/exclusions are recorded in run metadata.
-- RTX 3060 uses FP16 `[B=8, 3, 384, 384]`, eight-step accumulation, and 5-epoch validation.
+- Phase 4 uses FP16 `[B=128, 3, 384, 384]` on one Packet RTX 4090; reduced local
+  batches are preflight evidence only and do not alter the frozen contract.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - A weights-only warm start resets optimizer, scheduler, and EMA; full resume
@@ -45,8 +45,8 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
   histograms. No validation-long proposal or ground-truth tensors are kept.
 - NMS audits promote FP16 outputs to FP32 geometry; interactive visualization
   defaults to NMS 0.7/score 0.4, supports overrides and per-source sampling.
-- Raw and EMA states share one dataloader traversal and target construction
-  pass; each state owns an independent streaming metric accumulator.
+- Quad raw and EMA states share one validation traversal; HBB also reports both
+  states, each with an independent streaming metric accumulator.
 - Production validates every five epochs and at completion. Frozen benchmark
   recipes validate every epoch so their comparison contract is unchanged.
 - `batch_preflight` tests real benchmark samples in isolated FP16 subprocesses,
@@ -58,8 +58,8 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
 - HBB loss is per-image/state; frozen utility gates drive selection. The
   tested candidates failed; v2 permits baseline retention after evidence commit.
-- HBB P3–P5 is primary and quad P3–P5 is control; matched Phase 3.7 calibration
-  freezes HBB NMS/score 0.70/0.30 and quad 0.80/0.20.
+- Quad P3–P5 is the incumbent and HBB P3–P5 the Phase 4 challenger; promotion
+  requires both HBB-baseline and quad-incumbent policies to pass.
 
 # Local Constraints & Gotchas
 
@@ -69,12 +69,12 @@ GitHub Actions dispatches cloud work; dstack owns RunPod tasks. The Packet bridg
   replacing an existing S3 prefix or local staged directory.
 - Production images are local symlinks and exceed archive scratch space; use the
   runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
-- Phase 4 entry artifacts use an immutable S3 prefix; launch rechecks the
-  manifest-bound remote sizes and SHA-256 metadata.
-- RunPod needs a configured dstack backend; Packet needs its registered SSH key.
+- Phase 4 strictly warm-starts HBB from the approved EMA tensor state, resets
+  runtime state, starts AMP at 8192, and aborts on any skipped optimizer step.
+- Packet provisioning requires its registered SSH key and explicit owner cost check.
 - `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
   keys/versions, sets Docker's 32G shm default, then verifies before dstack.
-- Task submissions render concrete run IDs, tags, commits, and GPU resources;
-  Packet targets its unique attempt-specific fleet.
-- Packet rotates valid pool/region placements and never adopts existing servers.
+- Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
+  valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
+- Phase 4.2 local CUDA preflight passed; the Packet pilot remains owner-gated.

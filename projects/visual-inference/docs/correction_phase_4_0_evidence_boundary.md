@@ -1,6 +1,6 @@
 # Correction Phase 4.0 evidence boundary
 
-Status: complete; awaiting owner confirmation before Phase 4.1.
+Status: complete; owner confirmed and subsequent Phase 4.1–4.2a gates passed.
 
 ## Source boundary
 

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+import pytest
+
 from student_detector.selection_policy import compare_selection_reports
 
 
@@ -121,3 +123,34 @@ def test_contract_mismatch_is_invalid() -> None:
 
     assert result["status"] == "invalid_contract"
     assert result["objective"] is None
+
+
+def test_cross_geometry_policy_compares_quad_incumbent_to_hbb() -> None:
+    report = _report()
+    report["quad"] = deepcopy(report["hbb"])
+    report["hbb"]["groups"]["aggregate"]["ar/100"] = 0.153  # type: ignore[index]
+    policy = _policy()
+    policy["comparison"] = {
+        "baseline_geometry": "quad",
+        "candidate_geometry": "hbb",
+    }
+
+    result = compare_selection_reports(report, report, policy)
+
+    assert result["status"] == "pass"
+    assert result["comparison"] == {
+        "baseline_geometry": "quad",
+        "candidate_geometry": "hbb",
+    }
+    assert result["objective"]["delta_pp"] == pytest.approx(0.3)  # type: ignore[index]
+
+
+def test_cross_geometry_policy_rejects_unknown_geometry() -> None:
+    policy = _policy()
+    policy["comparison"] = {
+        "baseline_geometry": "rotated_hbb",
+        "candidate_geometry": "hbb",
+    }
+
+    with pytest.raises(ValueError, match="unsupported selection geometry"):
+        compare_selection_reports(_report(), _report(), policy)

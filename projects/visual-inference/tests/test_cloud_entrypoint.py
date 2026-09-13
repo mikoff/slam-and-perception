@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 from scripts.cloud.run_training import (
     build_training_command,
     build_workload_command,
+    stage_initialization,
     upload_batch_preflight_report,
     verify_checkpoint_io,
     verify_environment,
@@ -22,6 +24,15 @@ def _environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATASET_ID", "phase3-release-1")
     monkeypatch.setenv("CONFIG_PATH", "configs/phase3.yaml")
     monkeypatch.setenv("RUN_MODE", "production")
+
+
+def _phase4_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RUN_ID", "vi-phase4-1")
+    monkeypatch.setenv("DATASET_ID", "phase3-production-bg-policy-v2-2026-08-29")
+    monkeypatch.setenv("CONFIG_PATH", "configs/correction_phase4_hbb_p3_v1.yaml")
+    monkeypatch.setenv("RUN_MODE", "production")
+    monkeypatch.setenv("CLOUD_PROVIDER", "packet")
+    monkeypatch.setenv("DSTACK_GPU", "RTX4090")
 
 
 def test_cloud_environment_rejects_unversioned_recipe(
@@ -39,6 +50,18 @@ def test_cloud_environment_accepts_rtx4090_production_recipe(
     _environment(monkeypatch)
     monkeypatch.setenv("CONFIG_PATH", "configs/phase3_rtx4090_bs128_v1.yaml")
     assert verify_environment()["config"] == "configs/phase3_rtx4090_bs128_v1.yaml"
+
+
+def test_phase4_environment_is_packet_rtx4090_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _phase4_environment(monkeypatch)
+    values = verify_environment()
+    assert values["geometry"] == "hbb"
+
+    monkeypatch.setenv("CLOUD_PROVIDER", "runpod")
+    with pytest.raises(ValueError, match="only for Packet"):
+        verify_environment()
 
 
 def test_production_command_can_resume_from_an_immutable_parent(
@@ -107,6 +130,51 @@ def test_smoke_command_is_bounded_and_resume_enabled(
     assert command[command.index("--log-interval") + 1] == "1"
     assert command[command.index("--resume-mode") + 1] == "auto"
     assert command[command.index("--validation-interval") + 1] == "1"
+
+
+def test_phase4_command_selects_hbb_and_strict_ema_initialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _phase4_environment(monkeypatch)
+    values = verify_environment()
+    values["initialization_path"] = "/runs/vi-phase4-1/preflight/initialization.pt"
+
+    command = build_training_command(values, Path("/runs/vi-phase4-1"))
+
+    assert "scripts/train_phase3.py" in command
+    assert command[command.index("--initialize-state") + 1] == "ema_model"
+    assert (
+        command[command.index("--initialize-from") + 1] == values["initialization_path"]
+    )
+    assert "--validation-interval" not in command
+
+
+def test_phase4_initialization_is_downloaded_and_hash_checked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _phase4_environment(monkeypatch)
+    values = verify_environment()
+    payload = b"approved checkpoint"
+    monkeypatch.setattr(
+        "scripts.cloud.run_training.PHASE4_INITIALIZATION_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+    class Store:
+        def download(self, _uri: str, destination: Path) -> None:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(payload)
+
+    staged = stage_initialization(
+        values,
+        output_dir=tmp_path,
+        bucket="bucket",
+        aws=Store(),  # type: ignore[arg-type]
+    )
+
+    assert staged is not None
+    assert staged.read_bytes() == payload
+    assert values["initialization_path"] == str(staged)
 
 
 def test_batch_preflight_uses_isolated_benchmark_command(

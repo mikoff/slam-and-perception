@@ -759,6 +759,28 @@ def test_packet_task_is_fully_rendered_for_exact_fleet(
     assert options["environment"]["DSTACK_GPU"] == "A100"
 
 
+def test_phase4_packet_task_narrows_maximum_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = DstackClient()
+    applied: list[dict[str, Any]] = []
+    client._apply = lambda config, **_options: applied.append(config)  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "scripts.cloud.packet_bridge.subprocess.run",
+        lambda *_args, **_options: subprocess.CompletedProcess(
+            [], 0, "git@example.com:team/repository.git\n", ""
+        ),
+    )
+    state = _state()
+    state.config = "configs/correction_phase4_hbb_p3_v1.yaml"
+    state.source_commit = "a" * 40
+    state.fleet_name = "packet-r1-1"
+
+    client.submit(state)
+
+    assert applied[0]["max_duration"] == "12h"
+
+
 def test_runpod_task_renders_selected_gpu_and_keeps_backend_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

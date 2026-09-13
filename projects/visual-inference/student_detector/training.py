@@ -99,7 +99,7 @@ class _HbbTask:
             max_detections=config.inference.max_proposals,
             score_mode=config.inference.score_mode,
         )
-        self.validation_states = ("ema",) if use_ema_for_validation else ("raw",)
+        self.validation_states = ("raw", "ema") if use_ema_for_validation else ("raw",)
         self.level_names = tuple(
             f"P{stride.bit_length() - 1}" for stride in config.assignment.strides
         )
@@ -227,7 +227,9 @@ class _HbbTask:
         return float(metrics.get("selection_score", 0.0))
 
     def best_checkpoint_names(self, state: str) -> tuple[str, ...]:
-        return ("best.pt",)
+        if state == "raw":
+            return ("best_raw.pt",)
+        return ("best_ema.pt", "best.pt")
 
     def finalize_epoch_metrics(
         self,
@@ -245,15 +247,18 @@ class _HbbTask:
         train_metrics["fallback_rate_per_gt"] = training_totals.get(
             "number_fallback", 0.0
         ) / max(training_totals.get("number_gt", 0.0), 1.0)
-        state_metrics = validation.get(self.validation_states[0], {})
-        return {
+        values: dict[str, Any] = {
             **train_metrics,
-            **{f"val/{key}": value for key, value in state_metrics.items()},
             "epoch": float(epoch),
             "global_step": float(global_step),
             "lr/backbone": float(optimizer.param_groups[0]["lr"]),
             "lr/fpn_head": float(optimizer.param_groups[1]["lr"]),
         }
+        for state, state_metrics in validation.items():
+            values.update(
+                {f"val_{state}/{key}": value for key, value in state_metrics.items()}
+            )
+        return values
 
 
 def _write_hbb_run_contract(**context: Any) -> None:
@@ -290,9 +295,15 @@ def train_phase3(
     max_steps: int | None = None,
     max_val_batches: int | None = None,
     resume: Path | None = None,
+    resume_contract: Mapping[str, str] | None = None,
     log_interval: int = 50,
     use_ema_for_validation: bool = True,
     validation_interval: int = 1,
+    wandb_project: str | None = None,
+    wandb_entity: str | None = None,
+    wandb_run_name: str | None = None,
+    run_id: str | None = None,
+    accelerator: Any | None = None,
 ) -> dict[str, Any]:
     """Train the HBB proposal task through the shared runtime."""
     task = _HbbTask(
@@ -311,19 +322,26 @@ def train_phase3(
         max_steps=max_steps,
         max_val_batches=max_val_batches,
         resume=resume,
+        resume_contract=resume_contract,
         log_interval=log_interval,
         validation_interval=validation_interval,
+        accelerator=accelerator,
         reporter=StandardReporter(
             config.output_dir,
             batch_log="progress.jsonl",
             epoch_log="metrics.jsonl",
+            wandb_project=wandb_project,
+            wandb_entity=wandb_entity,
+            wandb_run_name=wandb_run_name,
+            run_id=run_id,
+            accelerator=accelerator,
             start_callback=_write_hbb_run_contract,
         ),
     )
-    selected_state = task.validation_states[0]
     return {
         "global_step": result["global_step"],
-        "best_selection_score": result["best_scores"][selected_state],
+        "best_selection_score": max(result["best_scores"].values()),
+        "best_scores": result["best_scores"],
         "metrics": result["metrics"],
     }
 

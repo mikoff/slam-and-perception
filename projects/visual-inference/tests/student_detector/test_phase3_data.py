@@ -167,6 +167,35 @@ def test_hbb_requires_prebuilt_index_in_cloud(
         _dataset(tmp_path)
 
 
+def test_hbb_accepts_schema6_proposal_index_without_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = _dataset(tmp_path)
+    with sqlite3.connect(original.index_path) as connection:
+        connection.execute(
+            "UPDATE metadata SET value='6:proposal-manifest' WHERE key='schema_version'"
+        )
+    monkeypatch.setenv("REQUIRE_PREBUILT_INDEX", "1")
+
+    restored = IndexedCocoProposalDataset(
+        original.annotations,
+        original.image_root,
+        original.index_path,
+        original.data_config,
+        AugmentationConfig(
+            horizontal_flip_probability=0,
+            color_jitter_probability=0,
+            blur_probability=0,
+            noise_probability=0,
+            jpeg_probability=0,
+        ),
+        training=False,
+    )
+
+    assert len(restored) == len(original)
+    assert restored[0].boxes.shape == (1, 4)
+
+
 def test_fixed_domain_batch_composition(tmp_path):
     dataset = _dataset(tmp_path)
     sampler = DomainMixtureBatchSampler(

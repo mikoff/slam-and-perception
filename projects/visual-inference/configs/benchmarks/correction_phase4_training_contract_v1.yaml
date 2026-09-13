@@ -1,0 +1,156 @@
+schema_version: proposal-phase4-training-contract.v1
+status: approved
+
+scope:
+  geometry: hbb
+  pyramid_levels: [P3, P4, P5]
+  quad_role: existing_control_only
+  siglip: deferred
+  architecture_search: closed
+
+source:
+  evidence_boundary_commit: 4379e42ad00226ecd5704b6246105cadea983cea
+  launch_commit_policy: exact GitHub workflow SHA containing the approved contract
+  cleanliness_policy: reject tracked changes and untracked files inside projects/visual-inference
+  dependency_lock_sha256: 327a20f27cc0bfe1ef3add793791cef735d6c2133627fab5f8a5ce20545bb316
+  config_path: configs/correction_phase4_hbb_p3_v1.yaml
+  config_sha256: 5224ab61782666ed0f1487d92f644eac344cc76e796482698dd346b873e3bd02
+
+dataset:
+  id: phase3-production-bg-policy-v2-2026-08-29
+  manifest_s3_key: datasets/phase3-production-bg-policy-v2-2026-08-29/dataset-manifest.json
+  manifest_sha256: c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c
+  contract_sha256: 0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a
+  input_shape: [B, 3, 384, 384]
+  input_storage_precision: fp32
+  training_precision: fp16
+  source_short_side_minimum: 16
+  source_weights:
+    coco_2017: 0.50
+    nuimages: 0.18
+    bdd100k_images_100k: 0.12
+    woodscape_rgb_fisheye: 0.20
+  empty_fraction: 0.075
+
+initialization:
+  mode: weights_only
+  artifact_s3_key: artifacts/proposal-correction/phase3-entry-v1/hbb/step_0200.pt
+  artifact_sha256: 3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063
+  checkpoint_state: ema_model
+  required: true
+  reset:
+    - optimizer
+    - scheduler
+    - scaler
+    - ema
+    - global_step
+    - epoch
+    - sampler_position
+    - rng_state
+    - run_identity
+
+optimization:
+  optimizer: adamw
+  successful_optimizer_steps: 20000
+  batches_per_epoch: 1000
+  epochs: 20
+  microbatch: 128
+  accumulation_steps: 1
+  effective_batch: 128
+  sampled_images: 2560000
+  freeze_backbone_epochs: 0
+  head_learning_rate: 0.0003
+  backbone_learning_rate: 0.00003
+  weight_decay: 0.0001
+  scheduler: warmup_cosine
+  warmup_steps: 1000
+  min_learning_rate_ratio: 0.01
+  gradient_clip_norm: 10.0
+  amp_initial_scale: 8192
+  optimizer_step_skip_policy: error
+  ema_decay: 0.9998
+  ema_ramp_steps: 1000
+  seed: 42
+  second_seed:
+    seed: 43
+    action: run only when the frozen selection policy returns inconclusive
+    authorization: separate_owner_approval
+
+loss:
+  reduction: per_image_and_supervision_state
+  objectness: {type: quality_focal, weight: 1.0, beta: 2.0}
+  box: {type: ciou, weight: 2.0}
+  ltrb: {type: stride_normalized_smooth_l1, weight: 0.5}
+  centerness: {weight: 0.0, status: intentionally_disabled}
+  hard_negative_focus: {weight: 1.0, selectors: 0}
+
+validation:
+  states: [raw, ema]
+  every_optimizer_steps: 2000
+  final_validation: required
+  checkpoint_every_optimizer_steps: 500
+  checkpoint_retention: [latest, previous, best_primary, best_constraint]
+  training_decoder:
+    pre_nms_top_k: 300
+    nms_iou_threshold: 0.70
+    final_k: 100
+  frozen_selection:
+    hbb_baseline_policy: correction_phase3_selection_v1.yaml
+    incumbent_promotion_policy: correction_phase4_promotion_v1.yaml
+    incumbent_promotion_policy_sha256: 2f5357907fa115807a27fa473cb38443d80ea971386f23417839202e51377ac5
+    incumbent_geometry: quad
+    challenger_geometry: hbb
+    checkpoint_state: ema_model
+    images: 800
+    score_threshold: 0.30
+    nms_iou_threshold: 0.70
+    minimum_ar100_improvement_pp: 0.25
+    promotion_requires_both_policies_to_pass: true
+  early_stopping:
+    metric_patience: disabled
+    reason: frozen proposal-utility selection is external to epoch validation
+    hard_stop_conditions:
+      - non_finite_loss_or_gradient
+      - unrecoverable_oom
+      - corrupt_or_contract_mismatched_data
+      - repeated_checkpoint_or_validation_failure
+      - runtime_or_cost_ceiling
+
+cloud:
+  provider: packet
+  gpu: RTX4090
+  gpu_count: 1
+  launch_path: GitHub workflow -> Packet bridge -> attempt-specific dstack SSH fleet
+  placement: resolve an available exact-RTX4090 pool and compatible region at launch
+  instance_policy: fresh attempt-specific host; never adopt an existing instance
+  maximum_launch_attempts: 3
+  maximum_wall_time_hours: 12
+  maximum_projected_compute_cost_usd: 12.00
+  cost_policy: owner records the current Packet account rate before dispatch and rejects a projection above the ceiling
+  s3_run_prefix: runs/${RUN_ID}
+  wandb:
+    project: visual-inference
+    entity: required protected environment value
+    run_id: ${RUN_ID}
+    display_name: proposal-phase4-hbb-p3-seed42-v1
+
+pilot:
+  successful_optimizer_steps: 2000
+  crosses_warmup: true
+  validation_events: 1
+  checkpoint_interval_steps: 500
+  interruption_and_resume: required
+  launch_authorization: separate_owner_approval
+
+full_run:
+  launch_authorization: separate_owner_approval
+  replacement_runs: prohibited_without_new_contract
+
+implementation_gates_before_local_preflight:
+  - cloud entrypoint selects HBB instead of the current quad-only path
+  - HBB accepts mandatory weights-only initialization with strict state validation
+  - HBB validates and reports raw and EMA states
+  - HBB uses verified S3 auto-resume and checkpoint transport
+  - HBB initializes W&B with the immutable run identity
+  - Phase 4 task rendering narrows the shared 72-hour task maximum to 12 hours
+  - runtime enforces the source, config, initialization, and runtime contract
