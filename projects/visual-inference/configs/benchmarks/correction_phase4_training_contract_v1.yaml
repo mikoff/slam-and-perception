@@ -126,6 +126,7 @@ cloud:
   maximum_launch_attempts: 3
   maximum_wall_time_hours: 12
   maximum_projected_compute_cost_usd: 12.00
+  hourly_rate_input: PACKET_HOURLY_RATE_USD
   cost_policy: owner records the current Packet account rate before dispatch and rejects a projection above the ceiling
   s3_run_prefix: runs/${RUN_ID}
   wandb:
@@ -135,6 +136,7 @@ cloud:
     display_name: proposal-phase4-hbb-p3-seed42-v1
 
 pilot:
+  mode: pilot
   successful_optimizer_steps: 2000
   crosses_warmup: true
   validation_events: 1

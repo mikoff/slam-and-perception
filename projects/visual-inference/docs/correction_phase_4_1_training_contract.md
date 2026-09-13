@@ -28,11 +28,11 @@ Status: approved and implemented; Phase 4.2 and 4.2a passed.
 | S3 | immutable `runs/${RUN_ID}` prefix |
 
 The dollar ceiling is not a claim about Packet's current price. Packet's launch
-options used by the bridge do not expose a price, so the owner must record the
-current Packet account rate before dispatch and reject the run when its
-projected 12-hour cost exceeds `$12.00`. This is an approval check, not invented
-automation. The bounded pilot then records throughput, projected runtime, and
-projected cost before the full-run approval decision.
+options used by the bridge do not expose a price, so the owner enters the exact
+current account rate as `PACKET_HOURLY_RATE_USD`. Preflight rejects the dispatch
+when rate times 12 hours exceeds `$12.00`, and GitHub records the supplied rate
+in its summary. The bounded pilot then records measured throughput, projected
+runtime, and projected cost before the full-run approval decision.
 Each attempt uses a fresh, uniquely named Packet host and fleet; it may not
 adopt an existing instance. The bridge may make at most three replacement
 attempts using its existing cleanup and reconciliation path.
@@ -53,7 +53,7 @@ Machine-readable inputs:
 - recipe: `configs/correction_phase4_hbb_p3_v1.yaml`, SHA-256
   `5224ab61782666ed0f1487d92f644eac344cc76e796482698dd346b873e3bd02`;
 - contract: `configs/benchmarks/correction_phase4_training_contract_v1.yaml`,
-  SHA-256 `301f894b9f72b88c7e40ecdf11c90dd8dd282bad1a8db6ab27a2066e28a94445`;
+  SHA-256 `2056ab74806c6201e47916c834be3f21a96a257e1f974a4cf58d098261eadc44`;
 - promotion policy: `configs/benchmarks/correction_phase4_promotion_v1.yaml`,
   SHA-256 `2f5357907fa115807a27fa473cb38443d80ea971386f23417839202e51377ac5`.
 
@@ -70,9 +70,9 @@ setup, and raw-plus-EMA validation.
 The [Phase 4.2 local preflight](correction_phase_4_2_local_preflight.md) proves
 the implementation gates, including real CUDA FP16 updates and a mid-epoch
 resume. The Packet renderer still removes dstack's marketplace `max_price`,
-because that field cannot protect a Packet-launched SSH fleet; the explicit
-owner price check remains mandatory. Passing this preflight does not authorize
-a cloud pilot or full run.
+because that field cannot protect a Packet-launched SSH fleet; the exact
+owner-supplied hourly rate and automated projection check remain mandatory.
+Passing this preflight does not authorize a cloud pilot or full run.
 
 Step 4.2a subsequently made quad the explicit production incumbent. A final HBB
 checkpoint must pass both the original HBB-baseline policy and the new

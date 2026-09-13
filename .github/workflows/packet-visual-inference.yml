@@ -30,11 +30,11 @@ on:
         required: true
         type: string
       mode:
-        description: Training, bounded smoke, or GPU batch preflight
+        description: Full training, 2k-step pilot, bounded smoke, or GPU batch preflight
         required: true
         default: production
         type: choice
-        options: [production, smoke, batch_preflight]
+        options: [production, pilot, smoke, batch_preflight]
       batch_candidates:
         description: Batch sizes tested only in batch_preflight mode
         required: true
@@ -46,6 +46,10 @@ on:
         type: string
       resume_from_run_id:
         description: Optional previous run whose latest checkpoint seeds this new run
+        required: false
+        type: string
+      packet_hourly_rate_usd:
+        description: Current Packet hourly rate; required by the Phase 4 cost gate
         required: false
         type: string
 
@@ -90,6 +94,7 @@ jobs:
       PACKET_SSH_PRIVATE_KEY: ${{ secrets.PACKET_SSH_PRIVATE_KEY }}
       PACKET_SSH_KEY_ID: ${{ secrets.PACKET_SSH_KEY_ID || secrets.CLOUD_SSH_KEY_ID }}
       PACKET_STORAGE_BLOCK_ID: ${{ secrets.PACKET_STORAGE_BLOCK_ID }}
+      PACKET_HOURLY_RATE_USD: ${{ inputs.packet_hourly_rate_usd }}
 
     steps:
       - name: Checkout exact source revision
@@ -139,6 +144,10 @@ jobs:
             echo "- Mode: \`${RUN_MODE}\`"
             if [[ -n "${RESUME_FROM_RUN_ID}" ]]; then
               echo "- Resume parent: \`${RESUME_FROM_RUN_ID}\`"
+            fi
+            if [[ '${{ inputs.provider }}' == 'packet' && "${CONFIG_PATH}" == 'configs/correction_phase4_hbb_p3_v1.yaml' ]]; then
+              echo "- Packet hourly rate: \`\$${PACKET_HOURLY_RATE_USD}/h\`"
+              echo '- Maximum charged duration: `12h`'
             fi
             if [[ "${RUN_MODE}" == 'batch_preflight' ]]; then
               echo "- Candidates: \`${BATCH_CANDIDATES}\`"

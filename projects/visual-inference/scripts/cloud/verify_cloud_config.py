@@ -78,6 +78,8 @@ def main() -> None:
         raise ValueError("RunPod dispatch must use the validated dstack task renderer")
     if "--verify-checkpoint-io" not in cloud_text:
         raise ValueError("cloud dispatch must verify checkpoint object I/O")
+    if "options: [production, pilot, smoke, batch_preflight]" not in cloud_text:
+        raise ValueError("cloud dispatch must expose the bounded pilot mode")
     workflow_configs = set(re.findall(r"configs/[\w./-]+\.yaml", cloud_text))
     if workflow_configs != ALLOWED_CONFIGS:
         raise ValueError(

@@ -214,12 +214,14 @@ Packet fleet registration remains attached to the GitHub submission job.
 Packet bootstrap also sets Docker's host-wide `default-shm-size` to `32G` and
 validates the merged daemon configuration before restart. The dstack task still
 requests `resources.shm_size: 32GB`. As a final effective-runtime check, every
-task—batch preflight, smoke, or production—requires at least 16 GiB at
+task—batch preflight, smoke, pilot, or production—requires at least 16 GiB at
 `/dev/shm` before installing dependencies or staging data. This prevents
 PyTorch DataLoader failures even if either orchestration layer drops its setting.
-Production training uses the same `spawn` and file-system sharing policy as
-preflight, while retaining pinned-memory transfers and per-process read-only
-SQLite connections.
+Pilot and production training use the same `spawn` and file-system sharing
+policy as preflight, while retaining pinned-memory transfers and per-process
+read-only SQLite connections. Phase 4 `pilot` is capped at 2,000 successful
+optimizer steps with checkpoints every 500; `production` retains the separately
+approved 20,000-step budget.
 
 Before creating a fleet, the bridge waits for Packet's active SSH endpoint and
 then streams the bootstrap through that exact endpoint with passwordless sudo.
@@ -311,15 +313,15 @@ checkpoint from S3. Incomplete epochs resume at the recorded batch. Scheduler,
 EMA, and global step advance only after a successful optimizer step.
 
 To continue a failed run after a code-only compatibility fix, dispatch a new
-production run with the same dataset and config and set `resume_from_run_id` to
-the failed run ID. The new run first prefers its own checkpoints (important for
-provider retries), then falls back to the named parent. GitHub verifies that the
-parent manifest matches the dataset/config and that its source commit is an
-ancestor of the new commit. The worker additionally verifies the dataset
-manifest hash and checkpoint SHA-256 before restoring model, EMA, optimizer,
-scheduler, RNG, epoch, and batch state. New checkpoints use the new run ID and
-record the parent ID; the parent prefix is never overwritten. Do not use this
-path for a changed recipe, dataset, or divergent source branch.
+run in the same `pilot` or `production` mode with the same dataset and config,
+then set `resume_from_run_id` to the failed run ID. The new run first prefers
+its own checkpoints (important for provider retries), then falls back to the
+named parent. GitHub verifies that the parent manifest matches the dataset/config
+and that its source commit is an ancestor of the new commit. The worker also
+verifies the dataset-manifest and checkpoint hashes before restoring model, EMA,
+optimizer, scheduler, RNG, epoch, and batch state. New checkpoints use the new
+run ID and record the parent ID; the parent prefix is never overwritten. Do not
+use this path across modes or for a changed recipe, dataset, or divergent branch.
 
 Do not delete an instance merely because GitHub submission ended: the 30-minute
 lease allows the submission to finish, after which the Packet reconciler owns

@@ -516,6 +516,8 @@ def main() -> None:
             "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
             "config_path": os.getenv("CONFIG_PATH", ""),
         }
+        if os.getenv("CONFIG_PATH") == "configs/correction_phase4_hbb_p3_v1.yaml":
+            expected_contract["run_mode"] = os.getenv("RUN_MODE", "")
         if args.resume_from_run_id:
             expected_contract["resume_from_run_id"] = args.resume_from_run_id
         store = AwsCheckpointStore(bucket, os.getenv("S3_ENDPOINT_URL") or None)
@@ -534,6 +536,8 @@ def main() -> None:
                     "config_path",
                 )
             }
+            if "run_mode" in expected_contract:
+                parent_expected["run_mode"] = expected_contract["run_mode"]
             resolved = resolve_resume_checkpoint(
                 run_id=args.resume_from_run_id,
                 output_dir=config.output_dir,

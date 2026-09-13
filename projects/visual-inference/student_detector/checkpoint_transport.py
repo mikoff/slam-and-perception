@@ -334,6 +334,8 @@ def uploader_from_environment(
         "dataset_manifest_sha256": os.getenv("DATASET_MANIFEST_SHA256", ""),
         "config_path": os.getenv("CONFIG_PATH", ""),
     }
+    if run_mode := os.getenv("RUN_MODE", ""):
+        contract["run_mode"] = run_mode
     if parent_run_id := os.getenv("RESUME_FROM_RUN_ID", ""):
         contract["resume_from_run_id"] = parent_run_id
     return CheckpointUploader(

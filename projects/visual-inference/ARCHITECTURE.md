@@ -77,4 +77,4 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Phase 4.2 local CUDA preflight passed; the Packet pilot remains owner-gated.
+- Packet `pilot` caps HBB at 2,000 successful steps with 500-step saves; `production` remains the separately approved 20,000-step path.

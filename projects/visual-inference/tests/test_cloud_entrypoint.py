@@ -33,6 +33,7 @@ def _phase4_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUN_MODE", "production")
     monkeypatch.setenv("CLOUD_PROVIDER", "packet")
     monkeypatch.setenv("DSTACK_GPU", "RTX4090")
+    monkeypatch.setenv("PACKET_HOURLY_RATE_USD", "0.75")
 
 
 def test_cloud_environment_rejects_unversioned_recipe(
@@ -64,6 +65,16 @@ def test_phase4_environment_is_packet_rtx4090_only(
         verify_environment()
 
 
+def test_phase4_environment_rejects_cost_above_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _phase4_environment(monkeypatch)
+    monkeypatch.setenv("PACKET_HOURLY_RATE_USD", "1.01")
+
+    with pytest.raises(ValueError, match="projected 12-hour cost exceeds"):
+        verify_environment()
+
+
 def test_production_command_can_resume_from_an_immutable_parent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -80,7 +91,7 @@ def test_smoke_rejects_cross_run_resume(monkeypatch: pytest.MonkeyPatch) -> None
     _environment(monkeypatch)
     monkeypatch.setenv("RUN_MODE", "smoke")
     monkeypatch.setenv("RESUME_FROM_RUN_ID", "vi-parent-1")
-    with pytest.raises(ValueError, match="only in production"):
+    with pytest.raises(ValueError, match="only in production or pilot"):
         verify_environment()
 
 
@@ -147,6 +158,76 @@ def test_phase4_command_selects_hbb_and_strict_ema_initialization(
         command[command.index("--initialize-from") + 1] == values["initialization_path"]
     )
     assert "--validation-interval" not in command
+
+
+def test_phase4_pilot_is_exactly_bounded_and_checkpointed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _phase4_environment(monkeypatch)
+    monkeypatch.setenv("RUN_MODE", "pilot")
+    values = verify_environment()
+    values["initialization_path"] = "/runs/vi-phase4-1/preflight/initialization.pt"
+
+    command = build_training_command(values, Path("/runs/vi-phase4-1"))
+
+    assert command[command.index("--max-steps") + 1] == "2000"
+    assert command[command.index("--checkpoint-every-steps") + 1] == "500"
+    assert command[command.index("--log-interval") + 1] == "50"
+    assert "--max-val-batches" not in command
+    assert "--validation-interval" not in command
+
+
+def test_phase4_pilot_accepts_verified_parent_resume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _phase4_environment(monkeypatch)
+    monkeypatch.setenv("RUN_MODE", "pilot")
+    monkeypatch.setenv("RESUME_FROM_RUN_ID", "vi-phase4-parent")
+
+    values = verify_environment()
+    command = build_training_command(values, Path("/runs/vi-phase4-1"))
+
+    assert command[command.index("--resume-from-run-id") + 1] == "vi-phase4-parent"
+    assert "--initialize-from" not in command
+
+
+def test_phase4_pilot_rejects_parent_from_another_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _phase4_environment(monkeypatch)
+    monkeypatch.setenv("RUN_MODE", "pilot")
+    monkeypatch.setenv("RESUME_FROM_RUN_ID", "vi-phase4-parent")
+    monkeypatch.setenv("SOURCE_COMMIT", "same-commit")
+    values = verify_environment()
+    manifest = {
+        "schema_version": "visual-inference-checkpoints.v1",
+        "run_id": "vi-phase4-parent",
+        "contract": {
+            "source_commit": "same-commit",
+            "dataset_id": values["dataset_id"],
+            "config_path": values["config"],
+            "run_mode": "production",
+        },
+        "latest": {
+            "global_step": 500,
+            "key": "runs/vi-phase4-parent/checkpoints/last/last-step-500.pt",
+        },
+    }
+
+    class Store:
+        def download(self, _uri: str, destination: Path) -> None:
+            destination.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="contract mismatch for run_mode"):
+        verify_resume_source(values, bucket="bucket", aws=Store())  # type: ignore[arg-type]
+
+
+def test_pilot_rejects_non_phase4_recipe(monkeypatch: pytest.MonkeyPatch) -> None:
+    _environment(monkeypatch)
+    monkeypatch.setenv("RUN_MODE", "pilot")
+
+    with pytest.raises(ValueError, match="reserved for the approved Phase 4"):
+        verify_environment()
 
 
 def test_phase4_initialization_is_downloaded_and_hash_checked(

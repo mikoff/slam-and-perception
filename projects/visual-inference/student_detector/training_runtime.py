@@ -126,6 +126,7 @@ def _runtime_contract() -> dict[str, str]:
         "dataset_id": "DATASET_ID",
         "dataset_manifest_sha256": "DATASET_MANIFEST_SHA256",
         "config_path": "CONFIG_PATH",
+        "run_mode": "RUN_MODE",
         "resume_from_run_id": "RESUME_FROM_RUN_ID",
     }
     return {

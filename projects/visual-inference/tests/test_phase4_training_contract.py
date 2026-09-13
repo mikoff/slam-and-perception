@@ -92,9 +92,11 @@ def test_phase4_contract_freezes_selection_and_cloud_ceilings(
 ) -> None:
     validation = contract["validation"]
     cloud = contract["cloud"]
+    pilot = contract["pilot"]
 
     assert isinstance(validation, dict)
     assert isinstance(cloud, dict)
+    assert isinstance(pilot, dict)
     assert validation["states"] == ["raw", "ema"]
     assert validation["frozen_selection"]["score_threshold"] == 0.30
     assert validation["frozen_selection"]["nms_iou_threshold"] == 0.70
@@ -111,7 +113,12 @@ def test_phase4_contract_freezes_selection_and_cloud_ceilings(
     assert cloud["maximum_launch_attempts"] == 3
     assert cloud["maximum_wall_time_hours"] == 12
     assert cloud["maximum_projected_compute_cost_usd"] == 12.00
+    assert cloud["hourly_rate_input"] == "PACKET_HOURLY_RATE_USD"
     assert "exact-RTX4090" in cloud["placement"]
+    assert pilot["mode"] == "pilot"
+    assert pilot["successful_optimizer_steps"] == 2_000
+    assert pilot["checkpoint_interval_steps"] == 500
+    assert pilot["interruption_and_resume"] == "required"
 
 
 def test_phase4_promotion_policy_keeps_quad_as_current_incumbent() -> None:

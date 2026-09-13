@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal, InvalidOperation
 import json
 import os
 import re
@@ -46,6 +47,8 @@ PHASE4_INITIALIZATION_KEY = (
 PHASE4_INITIALIZATION_SHA256 = (
     "3bb70fcbc3e81ee5cd2198d2626f570f0bb6a4b3e4e10cb82fd61497958f8063"
 )
+PHASE4_PILOT_STEPS = 2_000
+PHASE4_CHECKPOINT_INTERVAL = 500
 SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -69,15 +72,19 @@ def verify_environment() -> dict[str, str]:
         raise ValueError("DATASET_ID contains unsupported characters")
     if config not in ALLOWED_CONFIGS:
         raise ValueError(f"CONFIG_PATH must be one of {sorted(ALLOWED_CONFIGS)}")
-    if mode not in {"production", "smoke", "batch_preflight"}:
-        raise ValueError("RUN_MODE must be production, smoke, or batch_preflight")
+    if mode not in {"production", "pilot", "smoke", "batch_preflight"}:
+        raise ValueError(
+            "RUN_MODE must be production, pilot, smoke, or batch_preflight"
+        )
     if resume_from_run_id:
         if SAFE_ID.fullmatch(resume_from_run_id) is None:
             raise ValueError("RESUME_FROM_RUN_ID contains unsupported characters")
         if resume_from_run_id == run_id:
             raise ValueError("RESUME_FROM_RUN_ID must identify a previous run")
-        if mode != "production":
-            raise ValueError("RESUME_FROM_RUN_ID is supported only in production mode")
+        if mode not in {"production", "pilot"}:
+            raise ValueError(
+                "RESUME_FROM_RUN_ID is supported only in production or pilot mode"
+            )
     batch_candidates = os.getenv("BATCH_CANDIDATES", "16,32,64,96,128").strip()
     try:
         parsed_candidates = [
@@ -88,6 +95,8 @@ def verify_environment() -> dict[str, str]:
     if not parsed_candidates or any(value < 1 for value in parsed_candidates):
         raise ValueError("BATCH_CANDIDATES must contain positive integers")
     geometry = "hbb" if config == PHASE4_CONFIG else "quad"
+    if mode == "pilot" and config != PHASE4_CONFIG:
+        raise ValueError("pilot mode is reserved for the approved Phase 4 HBB config")
     if config == PHASE4_CONFIG:
         if dataset_id != PHASE4_DATASET_ID:
             raise ValueError("Phase 4 HBB requires its immutable approved dataset")
@@ -95,6 +104,15 @@ def verify_environment() -> dict[str, str]:
             raise ValueError("Phase 4 HBB is approved only for Packet")
         if _required("DSTACK_GPU") != "RTX4090":
             raise ValueError("Phase 4 HBB is approved only for one RTX4090")
+        hourly_rate_text = _required("PACKET_HOURLY_RATE_USD")
+        try:
+            hourly_rate = Decimal(hourly_rate_text)
+        except InvalidOperation as error:
+            raise ValueError("PACKET_HOURLY_RATE_USD must be a decimal number") from error
+        if not hourly_rate.is_finite() or hourly_rate <= 0:
+            raise ValueError("PACKET_HOURLY_RATE_USD must be positive and finite")
+        if hourly_rate * Decimal(12) > Decimal(12):
+            raise ValueError("Packet's projected 12-hour cost exceeds $12")
     return {
         "run_id": run_id,
         "dataset_id": dataset_id,
@@ -104,6 +122,7 @@ def verify_environment() -> dict[str, str]:
         "batch_candidates": ",".join(str(value) for value in parsed_candidates),
         "geometry": geometry,
         "initialization_path": "",
+        "packet_hourly_rate_usd": os.getenv("PACKET_HOURLY_RATE_USD", "").strip(),
     }
 
 
@@ -197,6 +216,11 @@ def verify_resume_source(values: dict[str, str], *, bucket: str, aws: AwsCli) ->
                 f"resume parent contract mismatch for {key}: "
                 f"expected {expected!r}, found {contract.get(key)!r}"
             )
+    if values["geometry"] == "hbb" and contract.get("run_mode") != values["mode"]:
+        raise ValueError(
+            "resume parent contract mismatch for run_mode: "
+            f"expected {values['mode']!r}, found {contract.get('run_mode')!r}"
+        )
     parent_commit = contract.get("source_commit", "")
     current_commit = os.getenv("SOURCE_COMMIT", "")
     if not parent_commit or not current_commit:
@@ -254,13 +278,15 @@ def build_training_command(values: dict[str, str], output_dir: Path) -> list[str
         "--resume-mode",
         "auto",
     ]
-    if values.get("geometry") != "hbb" or values["mode"] != "production":
+    if values.get("geometry") != "hbb":
         command.extend(
             [
                 "--validation-interval",
                 "5" if values["mode"] == "production" else "1",
             ]
         )
+    elif values["mode"] == "smoke":
+        command.extend(["--validation-interval", "1"])
     if values["resume_from_run_id"]:
         command.extend(["--resume-from-run-id", values["resume_from_run_id"]])
     elif values.get("geometry") == "hbb":
@@ -279,6 +305,17 @@ def build_training_command(values: dict[str, str], output_dir: Path) -> list[str
                 "2",
                 "--log-interval",
                 "1",
+            ]
+        )
+    elif values["mode"] == "pilot":
+        command.extend(
+            [
+                "--max-steps",
+                str(PHASE4_PILOT_STEPS),
+                "--checkpoint-every-steps",
+                str(PHASE4_CHECKPOINT_INTERVAL),
+                "--log-interval",
+                "50",
             ]
         )
     for option, variable in (

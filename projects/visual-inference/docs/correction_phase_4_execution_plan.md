@@ -99,7 +99,8 @@ current HBB correctly fails this new gate, so no production switch has occurred.
 
 The pilot exercises the HBB challenger but does not replace the quad incumbent.
 Promotion later requires both the HBB-baseline policy and the Phase 4 quad-
-incumbent policy to pass.
+incumbent policy to pass. GitHub `mode=pilot` is machine-capped at 2,000
+successful optimizer steps and 500-step checkpoints; `production` is not used.
 
 - Stage or verify the immutable dataset and initialization artifact.
 - Run enough steps to cross warm-up and at least one validation/checkpoint event.
