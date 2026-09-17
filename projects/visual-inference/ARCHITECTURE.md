@@ -30,7 +30,7 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   restores all state and takes precedence when auto-resume finds a checkpoint.
 - Quality recipes starting at centerness use the staged curriculum; explicit
   blend/geometry recipes stay fixed, including the mature-EMA min-8 warm start.
-- Run contracts bind source/data/config; parent resumes require descendant source.
+- Run contracts bind source/data/config/project Git state; resumes require descendant source.
 
 # Active Design Patterns & Decisions
 

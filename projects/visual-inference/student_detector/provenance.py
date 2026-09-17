@@ -48,6 +48,12 @@ def _git_value(repository: Path, *arguments: str) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _project_git_status(repository: Path, project: Path) -> str | None:
+    """Return status only for the project governed by this run contract."""
+    relative_project = project.resolve().relative_to(repository.resolve())
+    return _git_value(repository, "status", "--short", "--", str(relative_project))
+
+
 def model_signature(model: torch.nn.Module) -> str:
     """Hash parameter and buffer names, shapes, and dtypes—not their values."""
     description = [
@@ -121,7 +127,7 @@ def write_run_contract(
     train_index = config.data.index_dir / "quad_train.sqlite"
     validation_index = config.data.index_dir / "quad_val.sqlite"
     lockfile = repository / "projects" / "visual-inference" / "uv.lock"
-    status = _git_value(repository, "status", "--short")
+    status = _project_git_status(repository, Path(__file__).resolve().parents[1])
     contract = {
         "schema_version": "phase3-run-contract.v1",
         "geometry": geometry,

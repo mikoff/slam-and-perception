@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import torch
+from pathlib import Path
+import subprocess
 
-from student_detector.provenance import model_state_sha256
+from student_detector.provenance import _project_git_status
 
 
-def test_model_state_hash_is_value_sensitive_and_repeatable() -> None:
-    model = torch.nn.Sequential(
-        torch.nn.Linear(2, 3),
-        torch.nn.BatchNorm1d(3),
-    )
-    first = model_state_sha256(model)
-    assert model_state_sha256(model) == first
+def test_project_git_status_ignores_unrelated_monorepo_files(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
+    project = tmp_path / "projects/visual-inference"
+    project.mkdir(parents=True)
+    (tmp_path / "unrelated.txt").write_text("outside project", encoding="utf-8")
+    (project / "changed.py").write_text("inside project", encoding="utf-8")
 
-    with torch.no_grad():
-        model[0].weight[0, 0] += 1
-    assert model_state_sha256(model) != first
+    status = _project_git_status(tmp_path, project)
+    assert status == "?? projects/visual-inference/"
+    assert "unrelated.txt" not in status
