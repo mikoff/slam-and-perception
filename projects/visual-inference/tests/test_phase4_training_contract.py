@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
+import sqlite3
 
 import pytest
 import yaml
 
 from student_detector.config import load_phase3_config
+from student_detector.phase4_identity import verify_phase4_launch_inputs
 from student_detector.selection_policy import compare_selection_reports
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = PROJECT_ROOT / "configs/correction_phase4_hbb_p3_v1.yaml"
+LOCAL_PILOT_CONFIG_PATH = (
+    PROJECT_ROOT / "configs/correction_phase4_hbb_p3_local_rtx3060_pilot_v1.yaml"
+)
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
 )
@@ -29,6 +35,96 @@ CURRENT_HBB_REPORT_PATH = (
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_phase4_identity_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[object, Path, Path, Path]:
+    dataset_id = "phase3-production-bg-policy-v2-2026-08-29"
+    workspace = tmp_path / dataset_id
+    output = workspace / "output"
+    annotations = output / "annotations"
+    indexes = output / "indexes"
+    annotations.mkdir(parents=True)
+    indexes.mkdir()
+    artifacts: dict[str, object] = {}
+    for split in ("train", "val"):
+        manifest = annotations / f"proposals_{split}.json"
+        manifest.write_text(f"{split}-manifest", encoding="utf-8")
+        manifest_sha256 = _sha256(manifest)
+        index = indexes / f"quad_{split}.sqlite"
+        with sqlite3.connect(index) as connection:
+            connection.executescript(
+                """
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE images (row_index INTEGER PRIMARY KEY);
+                INSERT INTO images VALUES (0);
+                """
+            )
+            connection.executemany(
+                "INSERT INTO metadata VALUES (?, ?)",
+                (
+                    ("schema_version", "8:proposal-manifest"),
+                    ("source_signature", f"sha256:{manifest_sha256}"),
+                ),
+            )
+        artifacts[f"proposals_{split}.json"] = {
+            "bytes": manifest.stat().st_size,
+            "sha256": manifest_sha256,
+        }
+        artifacts[f"quad_{split}.sqlite"] = {
+            "bytes": index.stat().st_size,
+            "images": 1,
+            "schema_version": "8:proposal-manifest",
+            "source_signature": f"sha256:{manifest_sha256}",
+        }
+    dataset_contract_path = workspace / "dataset_contract.json"
+    dataset_contract_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "phase3-dataset-contract.v1",
+                "dataset_id": dataset_id,
+                "artifacts": artifacts,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    dataset_contract_sha256 = _sha256(dataset_contract_path)
+    cloud_manifest_path = workspace / "reports/cloud_bundle/dataset-manifest.json"
+    cloud_manifest_path.parent.mkdir(parents=True)
+    cloud_manifest_path.write_text(
+        json.dumps(
+            {
+                "dataset_id": dataset_id,
+                "dataset_contract_sha256": dataset_contract_sha256,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    initialization = tmp_path / "initialization.pt"
+    initialization.write_bytes(b"phase4-initialization")
+    training_contract_path = tmp_path / "training-contract.yaml"
+    training_contract_path.write_text(
+        yaml.safe_dump(
+            {
+                "dataset": {
+                    "id": dataset_id,
+                    "contract_sha256": dataset_contract_sha256,
+                    "manifest_sha256": _sha256(cloud_manifest_path),
+                },
+                "initialization": {
+                    "artifact_sha256": _sha256(initialization),
+                    "checkpoint_state": "ema_model",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", str(output))
+    config = load_phase3_config(LOCAL_PILOT_CONFIG_PATH)
+    return config, training_contract_path, initialization, indexes / "quad_val.sqlite"
 
 
 @pytest.fixture
@@ -64,6 +160,85 @@ def test_phase4_recipe_matches_optimizer_contract(
     assert config.schedule.optimizer_step_skip_policy == "error"
     assert config.schedule.validation_interval == 2
     assert config.schedule.checkpoint_every_steps == 500
+
+
+def test_local_rtx3060_pilot_preserves_effective_optimizer_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    cloud = load_phase3_config(CONFIG_PATH)
+    local = load_phase3_config(LOCAL_PILOT_CONFIG_PATH)
+
+    assert local.data.batch_size == 16
+    assert local.schedule.accumulation_steps == 8
+    assert local.data.batch_size * local.schedule.accumulation_steps == 128
+    assert local.data.batches_per_epoch // local.schedule.accumulation_steps == 1_000
+    assert local.data.workers == 0
+    assert local.schedule == replace(cloud.schedule, accumulation_steps=8)
+    assert local.data == replace(
+        cloud.data,
+        batch_size=16,
+        batches_per_epoch=8_000,
+        workers=0,
+    )
+
+
+def test_phase4_local_launch_accepts_exact_dataset_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, contract_path, initialization, _ = _write_phase4_identity_fixture(
+        tmp_path, monkeypatch
+    )
+
+    result = verify_phase4_launch_inputs(
+        config,
+        training_contract_path=contract_path,
+        initialization_path=initialization,
+        initialization_state="ema_model",
+        initialization_required=True,
+    )
+
+    assert result["dataset_id"] == "phase3-production-bg-policy-v2-2026-08-29"
+    assert result["index_schema"] == "8:proposal-manifest"
+
+
+def test_phase4_local_launch_rejects_stale_schema6_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, contract_path, initialization, validation_index = (
+        _write_phase4_identity_fixture(tmp_path, monkeypatch)
+    )
+    with sqlite3.connect(validation_index) as connection:
+        connection.execute(
+            "UPDATE metadata SET value='6:proposal-manifest' WHERE key='schema_version'"
+        )
+
+    with pytest.raises(ValueError, match="val index schema mismatch"):
+        verify_phase4_launch_inputs(
+            config,
+            training_contract_path=contract_path,
+            initialization_path=initialization,
+            initialization_state="ema_model",
+            initialization_required=True,
+        )
+
+
+def test_phase4_local_launch_rejects_wrong_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, contract_path, initialization, _ = _write_phase4_identity_fixture(
+        tmp_path, monkeypatch
+    )
+    initialization.write_bytes(b"wrong")
+
+    with pytest.raises(ValueError, match="initialization SHA-256 mismatch"):
+        verify_phase4_launch_inputs(
+            config,
+            training_contract_path=contract_path,
+            initialization_path=initialization,
+            initialization_state="ema_model",
+            initialization_required=True,
+        )
 
 
 def test_phase4_contract_binds_published_initialization_and_dataset(

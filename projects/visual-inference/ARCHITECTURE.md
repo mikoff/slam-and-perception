@@ -12,8 +12,8 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - `DATASET_ID` identifies an immutable S3 prefix with an archive-level hash manifest.
 - Production bundles use native tar/pigz/AWS streaming while hashing and
   dereferencing symlinks; the manifest uploads only after archive verification.
-- Cloud datasets must contain prebuilt train/validation SQLite indexes; HBB may
-  read schema 6's stable subset, while quad requires its current schema.
+- Phase 4 launch fails before GPU setup unless the exact dataset/cloud-contract
+  hashes, schema-8 indexes, manifest bindings, and initialization hash match.
 - HBB/quad workers lazily reopen SQLite read-only per process and fetch one
   image's annotations; shared epoch tensors propagate to persistent workers.
 - HBB/quad share `proposal-manifest.v2` and an immutable decoded K=100 record
@@ -77,4 +77,4 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Packet `pilot` caps HBB at 2,000 successful steps with 500-step saves; `production` remains the separately approved 20,000-step path.
+- Packet pilot uses microbatch 128; the RTX 3060 fallback uses 16 × 8 accumulation. Both preserve 2,000 successful steps, 256k samples, and 500-step saves.

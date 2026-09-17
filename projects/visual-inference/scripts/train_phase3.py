@@ -37,10 +37,23 @@ from student_detector.data import (
 )
 from student_detector.losses import ProposalLoss
 from student_detector.model import StudentDetector
+from student_detector.phase4_identity import verify_phase4_launch_inputs
 from student_detector.targets import TargetBuilder
 from student_detector.training import train_phase3
 from student_detector.training_optimization import set_reproducibility_seed
 from student_detector.training_reporting import timestamped_print
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PHASE4_CONFIG_PATHS = {
+    (PROJECT_ROOT / "configs/correction_phase4_hbb_p3_v1.yaml").resolve(),
+    (
+        PROJECT_ROOT / "configs/correction_phase4_hbb_p3_local_rtx3060_pilot_v1.yaml"
+    ).resolve(),
+}
+PHASE4_TRAINING_CONTRACT = (
+    PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -339,6 +352,24 @@ def main() -> None:
         )
     if args.output_dir is not None:
         config = replace(config, output_dir=args.output_dir.resolve())
+    if args.config.resolve() in PHASE4_CONFIG_PATHS:
+        identity = verify_phase4_launch_inputs(
+            config,
+            training_contract_path=PHASE4_TRAINING_CONTRACT,
+            initialization_path=args.initialize_from,
+            initialization_state=args.initialize_state,
+            initialization_required=(
+                args.resume is None and args.resume_from_run_id is None
+            ),
+        )
+        timestamped_print(
+            "Verified Phase 4 launch inputs: "
+            f"dataset={identity['dataset_id']} "
+            f"contract={identity['dataset_contract_sha256']} "
+            f"train={identity['train_manifest_sha256']} "
+            f"validation={identity['validation_manifest_sha256']} "
+            f"indexes={identity['index_schema']}"
+        )
     requested_device = torch.device(
         "cuda"
         if args.device == "auto" and torch.cuda.is_available()
