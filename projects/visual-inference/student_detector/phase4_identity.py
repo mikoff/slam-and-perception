@@ -123,14 +123,22 @@ def verify_phase4_launch_inputs(
             artifacts.get(f"quad_{split}.sqlite"), f"{split} index contract"
         )
         if not manifest_path.is_file():
-            raise FileNotFoundError(f"Phase 4 {split} manifest is missing: {manifest_path}")
+            raise FileNotFoundError(
+                f"Phase 4 {split} manifest is missing: {manifest_path}"
+            )
         _require_equal(
-            f"{split} manifest size", manifest_path.stat().st_size, manifest_contract["bytes"]
+            f"{split} manifest size",
+            manifest_path.stat().st_size,
+            manifest_contract["bytes"],
         )
         metadata, images = _index_metadata(index_path)
-        _require_equal(f"{split} index size", index_path.stat().st_size, index_contract["bytes"])
         _require_equal(
-            f"{split} index schema", metadata.get("schema_version"), "8:proposal-manifest"
+            f"{split} index size", index_path.stat().st_size, index_contract["bytes"]
+        )
+        _require_equal(
+            f"{split} index schema",
+            metadata.get("schema_version"),
+            "8:proposal-manifest",
         )
         _require_equal(
             f"{split} index source signature",

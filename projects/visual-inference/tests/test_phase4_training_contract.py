@@ -279,10 +279,9 @@ def test_phase4_contract_freezes_selection_and_cloud_ceilings(
     assert validation["frozen_selection"]["incumbent_geometry"] == "quad"
     assert validation["frozen_selection"]["challenger_geometry"] == "hbb"
     assert validation["frozen_selection"]["promotion_requires_both_policies_to_pass"]
-    assert (
-        validation["frozen_selection"]["incumbent_promotion_policy_sha256"]
-        == _sha256(PROMOTION_POLICY_PATH)
-    )
+    assert validation["frozen_selection"][
+        "incumbent_promotion_policy_sha256"
+    ] == _sha256(PROMOTION_POLICY_PATH)
     assert cloud["provider"] == "packet"
     assert cloud["gpu"] == "RTX4090"
     assert cloud["maximum_launch_attempts"] == 3
