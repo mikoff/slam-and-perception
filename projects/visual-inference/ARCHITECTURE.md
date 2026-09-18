@@ -1,7 +1,6 @@
 # Module Purpose & Boundaries
 
 This project owns the approved proposal-object contract and trains class-agnostic HBB and quad detectors. HBB supports dense P3–P5 and P2–P5 outputs; quad uses P3–P5.
-
 GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge provisions fresh hosts and registers attempt-specific SSH fleets.
 
 # Technical Contracts & Interfaces
@@ -58,8 +57,8 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
 - HBB loss is per-image/state; frozen utility gates drive selection. The
   tested candidates failed; v2 permits baseline retention after evidence commit.
-- Quad P3–P5 is the incumbent and HBB P3–P5 the Phase 4 challenger; promotion
-  requires both HBB-baseline and quad-incumbent policies to pass.
+- Quad P3–P5 is incumbent and HBB P3–P5 the Phase 4 challenger. Matched local
+  pilots equalize batch, sample budget, seed, schedule, and production data.
 
 # Local Constraints & Gotchas
 
@@ -77,4 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Packet pilot uses microbatch 128; the RTX 3060 fallback uses 16 × 8 accumulation. Both preserve 2,000 successful steps, 256k samples, and 500-step saves.
+- Local HBB uses 16 × 8; quad uses 8 × 16. Both preserve 2,000 successful
+  steps, 256k samples, and 500-step saves.

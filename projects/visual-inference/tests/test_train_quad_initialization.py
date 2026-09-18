@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 
 from scripts.train_quad_proposals import _initialize_model
@@ -30,8 +31,39 @@ def test_weights_only_ema_checkpoint_can_initialize_a_fresh_run(
     )
     target = QuadProposalDetector(pretrained_backbone=False, neck_type="lite")
 
-    state_key = _initialize_model(target, checkpoint, neck_type="lite")
+    state_key = _initialize_model(
+        target,
+        checkpoint,
+        neck_type="lite",
+        required_state="ema_model",
+    )
 
     assert state_key == "ema_model"
     for name, value in target.state_dict().items():
         assert torch.equal(value, expected[name])
+
+
+def test_weights_only_initialization_rejects_a_missing_required_state(
+    tmp_path: Path,
+) -> None:
+    source = QuadProposalDetector(pretrained_backbone=False, neck_type="lite")
+    checkpoint = tmp_path / "raw_only.pt"
+    torch.save(
+        {
+            "phase": "quad_proposals",
+            "architecture": architecture_id("quad", "lite"),
+            "selected_state": "model",
+            "model": source.state_dict(),
+            "config": {"neck_type": "lite"},
+        },
+        checkpoint,
+    )
+
+    target = QuadProposalDetector(pretrained_backbone=False, neck_type="lite")
+    with pytest.raises(ValueError, match="ema_model"):
+        _initialize_model(
+            target,
+            checkpoint,
+            neck_type="lite",
+            required_state="ema_model",
+        )

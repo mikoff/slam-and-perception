@@ -21,6 +21,7 @@ from student_detector.checkpoint_transport import (
     resolve_resume_checkpoint,
 )
 from student_detector.checkpoints import (
+    CheckpointState,
     NeckType,
     initialize_model_weights,
 )
@@ -31,6 +32,7 @@ from student_detector.data import (
     use_file_system_tensor_sharing,
 )
 from student_detector.model import QuadProposalDetector
+from student_detector.phase4_identity import verify_phase4_launch_inputs
 from student_detector.quad_assigner import QuadAssigner
 from student_detector.quad_data import (
     QuadProposalDataset,
@@ -41,6 +43,15 @@ from student_detector.quad_targets import QuadTargetBuilder
 from student_detector.quad_training import train_quad_proposals
 from student_detector.training_optimization import set_reproducibility_seed
 from student_detector.training_reporting import timestamped_print
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PHASE4_QUAD_PILOT_CONFIG = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_pilot_v1.yaml"
+).resolve()
+PHASE4_QUAD_PILOT_CONTRACT = (
+    PROJECT_ROOT / "configs/benchmarks/correction_phase4_quad_pilot_contract_v1.yaml"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,6 +99,11 @@ def parse_args() -> argparse.Namespace:
             "used only when no resume checkpoint is found"
         ),
     )
+    parser.add_argument(
+        "--initialize-state",
+        choices=("model", "ema_model"),
+        help="Require this selected state in the initialization checkpoint",
+    )
     parser.add_argument("--resume-mode", choices=("none", "auto"), default="none")
     parser.add_argument("--resume-from-run-id")
     parser.add_argument("--run-id", type=str)
@@ -133,12 +149,14 @@ def _initialize_model(
     checkpoint_path: Path,
     *,
     neck_type: NeckType,
-) -> str:
+    required_state: CheckpointState | None = None,
+) -> CheckpointState:
     return initialize_model_weights(
         model,
         checkpoint_path,
         kind="quad",
         neck_type=neck_type,
+        required_state=required_state,
     )
 
 
@@ -150,6 +168,8 @@ def main() -> None:
         raise ValueError(
             "--resume-from-run-id and --initialize-from are mutually exclusive"
         )
+    if args.initialize_state is not None and args.initialize_from is None:
+        raise ValueError("--initialize-state requires --initialize-from")
     overfit_image_ids = (
         tuple(int(value) for value in args.overfit_image_ids.split(",") if value)
         if args.overfit_image_ids
@@ -201,6 +221,24 @@ def main() -> None:
         )
     if args.output_dir is not None:
         config = replace(config, output_dir=args.output_dir.resolve())
+    if args.config.resolve() == PHASE4_QUAD_PILOT_CONFIG:
+        identity = verify_phase4_launch_inputs(
+            config,
+            training_contract_path=PHASE4_QUAD_PILOT_CONTRACT,
+            initialization_path=args.initialize_from,
+            initialization_state=args.initialize_state,
+            initialization_required=(
+                args.resume is None and args.resume_from_run_id is None
+            ),
+        )
+        timestamped_print(
+            "Verified Phase 4 quad-pilot inputs: "
+            f"dataset={identity['dataset_id']} "
+            f"contract={identity['dataset_contract_sha256']} "
+            f"train={identity['train_manifest_sha256']} "
+            f"validation={identity['validation_manifest_sha256']} "
+            f"indexes={identity['index_schema']}"
+        )
     if args.no_pretrained:
         config = replace(config, pretrained_backbone=False)
     if (
@@ -455,6 +493,7 @@ def main() -> None:
             model,
             args.initialize_from.resolve(),
             neck_type=config.neck_type,
+            required_state=args.initialize_state,
         )
         timestamped_print(
             "Training initialized from weights: "

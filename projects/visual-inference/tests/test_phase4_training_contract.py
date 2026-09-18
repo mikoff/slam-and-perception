@@ -18,6 +18,12 @@ CONFIG_PATH = PROJECT_ROOT / "configs/correction_phase4_hbb_p3_v1.yaml"
 LOCAL_PILOT_CONFIG_PATH = (
     PROJECT_ROOT / "configs/correction_phase4_hbb_p3_local_rtx3060_pilot_v1.yaml"
 )
+QUAD_PILOT_CONFIG_PATH = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_pilot_v1.yaml"
+)
+QUAD_PILOT_CONTRACT_PATH = (
+    PROJECT_ROOT / "configs/benchmarks/correction_phase4_quad_pilot_contract_v1.yaml"
+)
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
 )
@@ -181,6 +187,29 @@ def test_local_rtx3060_pilot_preserves_effective_optimizer_contract(
         batches_per_epoch=8_000,
         workers=0,
     )
+
+
+def test_quad_pilot_is_matched_to_local_hbb_pilot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    hbb = load_phase3_config(LOCAL_PILOT_CONFIG_PATH)
+    quad = load_phase3_config(QUAD_PILOT_CONFIG_PATH)
+    contract = yaml.safe_load(QUAD_PILOT_CONTRACT_PATH.read_text(encoding="utf-8"))
+
+    assert quad.data.batch_size == 8
+    assert quad.schedule.accumulation_steps == 16
+    assert quad.data.batch_size * quad.schedule.accumulation_steps == 128
+    assert quad.data.batches_per_epoch // quad.schedule.accumulation_steps == 1_000
+    assert quad.schedule == replace(hbb.schedule, accumulation_steps=16)
+    assert quad.data == replace(
+        hbb.data,
+        batch_size=8,
+        batches_per_epoch=16_000,
+    )
+    assert contract["optimization"]["successful_optimizer_steps"] == 2_000
+    assert contract["optimization"]["sampled_images"] == 256_000
+    assert contract["initialization"]["checkpoint_state"] == "ema_model"
 
 
 def test_phase4_local_launch_accepts_exact_dataset_identity(

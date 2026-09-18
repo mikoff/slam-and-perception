@@ -1,0 +1,52 @@
+schema_version: proposal-phase4-quad-pilot-contract.v1
+status: approved_diagnostic
+
+scope:
+  geometry: quad
+  pyramid_levels: [P3, P4, P5]
+  role: matched_local_control
+  promotion_authority: none
+
+dataset:
+  id: phase3-production-bg-policy-v2-2026-08-29
+  manifest_sha256: c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c
+  contract_sha256: 0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a
+
+initialization:
+  mode: weights_only
+  artifact: artifacts/phase2/short_v1/quad_p3/last.pt
+  artifact_sha256: cf4d1a7228fab007317b1a9d6f2c037ccc139fa16e1c223a7d2d3a44fc8c095d
+  checkpoint_state: ema_model
+  required: true
+
+optimization:
+  successful_optimizer_steps: 2000
+  scheduling_horizon_steps: 20000
+  microbatch: 8
+  accumulation_steps: 16
+  effective_batch: 128
+  batches_per_epoch: 16000
+  scheduling_epochs: 20
+  sampled_images: 256000
+  warmup_steps: 1000
+  seed: 42
+  checkpoint_every_optimizer_steps: 500
+  validation_at_completion: true
+
+matching:
+  reference_config: configs/correction_phase4_hbb_p3_local_rtx3060_pilot_v1.yaml
+  equalized:
+    - dataset_identity
+    - source_and_domain_mixture
+    - augmentation
+    - effective_batch
+    - sampled_images
+    - optimizer_and_learning_rates
+    - scheduler_and_warmup
+    - ema
+    - seed
+  geometry_specific:
+    - proposal_head
+    - target_assignment
+    - loss
+    - decoder_and_nms
