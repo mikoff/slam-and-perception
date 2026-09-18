@@ -197,16 +197,12 @@ def test_quad_pilot_is_matched_to_local_hbb_pilot(
     quad = load_phase3_config(QUAD_PILOT_CONFIG_PATH)
     contract = yaml.safe_load(QUAD_PILOT_CONTRACT_PATH.read_text(encoding="utf-8"))
 
-    assert quad.data.batch_size == 8
-    assert quad.schedule.accumulation_steps == 16
+    assert quad.data.batch_size == 16
+    assert quad.schedule.accumulation_steps == 8
     assert quad.data.batch_size * quad.schedule.accumulation_steps == 128
     assert quad.data.batches_per_epoch // quad.schedule.accumulation_steps == 1_000
-    assert quad.schedule == replace(hbb.schedule, accumulation_steps=16)
-    assert quad.data == replace(
-        hbb.data,
-        batch_size=8,
-        batches_per_epoch=16_000,
-    )
+    assert quad.schedule == hbb.schedule
+    assert quad.data == hbb.data
     assert contract["optimization"]["successful_optimizer_steps"] == 2_000
     assert contract["optimization"]["sampled_images"] == 256_000
     assert contract["initialization"]["checkpoint_state"] == "ema_model"

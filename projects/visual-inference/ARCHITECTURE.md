@@ -76,5 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB uses 16 × 8; quad uses 8 × 16. Both preserve 2,000 successful
-  steps, 256k samples, and 500-step saves.
+- Local HBB and quad use 16 × 8. Both preserve 2,000 successful steps, 256k
+  samples, and 500-step saves.

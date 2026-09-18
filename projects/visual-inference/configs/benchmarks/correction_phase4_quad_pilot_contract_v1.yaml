@@ -22,10 +22,10 @@ initialization:
 optimization:
   successful_optimizer_steps: 2000
   scheduling_horizon_steps: 20000
-  microbatch: 8
-  accumulation_steps: 16
+  microbatch: 16
+  accumulation_steps: 8
   effective_batch: 128
-  batches_per_epoch: 16000
+  batches_per_epoch: 8000
   scheduling_epochs: 20
   sampled_images: 256000
   warmup_steps: 1000

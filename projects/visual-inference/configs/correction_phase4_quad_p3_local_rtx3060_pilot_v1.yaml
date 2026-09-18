@@ -1,6 +1,6 @@
 # Matched local quad control for the completed 2,000-step HBB pilot.
-# Eight-image microbatches leave additional RTX 3060 headroom for quad targets;
-# accumulation preserves the frozen effective batch of 128.
+# A sizing run verified that the HBB pilot's 16 × 8 partition is safe on the
+# RTX 3060, so both pilots use the same physical and effective batch.
 data:
   train_annotations: ${PHASE2_DATASET_ROOT}/annotations/proposals_train.json
   val_annotations: ${PHASE2_DATASET_ROOT}/annotations/proposals_val.json
@@ -9,8 +9,8 @@ data:
   image_root: ${PHASE2_DATASET_ROOT}
   index_dir: ${PHASE2_DATASET_ROOT}/indexes
   input_size: 384
-  batch_size: 8
-  batches_per_epoch: 16000
+  batch_size: 16
+  batches_per_epoch: 8000
   workers: 0
   empty_fraction: 0.075
   domain_weights:
@@ -105,7 +105,7 @@ schedule:
   gradient_clip_norm: 10
   ema_decay: 0.9998
   ema_ramp_steps: 1000
-  accumulation_steps: 16
+  accumulation_steps: 8
   amp: true
   amp_initial_scale: 8192
   optimizer_step_skip_policy: error
