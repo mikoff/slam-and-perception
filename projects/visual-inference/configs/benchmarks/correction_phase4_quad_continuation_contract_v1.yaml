@@ -1,0 +1,87 @@
+schema_version: proposal-phase4-quad-continuation-contract.v1
+status: approved_preflight_not_launched
+
+scope:
+  geometry: quad
+  pyramid_levels: [P3, P4, P5]
+  role: staged_experiment
+  production_incumbent_changes: false
+  siglip: deferred
+
+rationale:
+  evidence: artifacts/phase4/local_quad_p3_seed42_pilot_v1/proposal_diversity_800_ema.json
+  evidence_sha256: 92a8f9d5d07ae355f6c5941e2748f609b9565b95c969fbc43865778fea22f023
+  finding: extra unmatched proposals are spatially and scale diverse; overlap tails remain bounded
+  unmatched_policy: diagnostic_not_standalone_rejection
+
+dataset:
+  id: phase3-production-bg-policy-v2-2026-08-29
+  manifest_sha256: c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c
+  contract_sha256: 0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a
+  train_manifest_sha256: dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457
+  validation_manifest_sha256: 68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf
+  validation_subset_sha256: e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806
+
+configuration:
+  path: configs/correction_phase4_quad_p3_local_rtx3060_step10000_v1.yaml
+  sha256: c45bb9b98940a6d26122f73d58a535b60a0d19bef22a167b5a2794f677d7beb1
+  must_match_step5000_recipe: true
+
+initialization:
+  required: false
+
+resume:
+  mode: exact_full_state
+  artifact: artifacts/phase4/local_quad_p3_seed42_pilot_v1/last.pt
+  artifact_sha256: 3f1459627bea4dd13c8ddfd51c9edb3c8ac551769c3457f5dc312aa92c6c9926
+  source_global_step: 5000
+  source_epoch: 4
+  source_epoch_complete: true
+  source_commit: 90dbceb0070c0a0bcc52b6a260f5d2b3954422b4
+  interrupted_stage_artifact: artifacts/phase4/local_quad_p3_seed42_step10000_v1/last.pt
+  interrupted_stage_step_range: [5001, 9999]
+  preserve:
+    - model
+    - ema_model
+    - optimizer
+    - scheduler
+    - scaler
+    - sampler_position
+    - rng_state
+    - best_scores
+
+optimization:
+  target_global_step: 10000
+  additional_successful_steps: 5000
+  scheduling_horizon_steps: 20000
+  microbatch: 16
+  accumulation_steps: 8
+  effective_batch: 128
+  checkpoint_every_optimizer_steps: 500
+  output_dir: artifacts/phase4/local_quad_p3_seed42_step10000_v1
+  initial_output_must_be_absent: true
+
+evaluation:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  required_reports:
+    - proposal_utility
+    - proposal_diversity
+  continuation_gates:
+    ar_100_minimum: 0.240
+    recall_100_iou_075_minimum: 0.205
+    duplicate_fraction_maximum: 0.090
+    all_pair_iou_050_fraction_maximum: 0.040
+    unmatched_pair_iou_075_fraction_maximum: 0.0075
+    unmatched_iou_075_cluster_p95_maximum: 8
+    unmatched_iou_075_cluster_ge_20_image_fraction_maximum: 0.0
+  report_only:
+    - proposal_object_fraction
+    - unmatched_fraction
+    - trusted_background_false_fraction
+
+decision:
+  step10000_launch: separate_owner_approval
+  step15000_launch: requires_all_gates_and_separate_owner_approval
+  step20000_launch: requires_all_gates_and_separate_owner_approval
+  promotion: requires_final_frozen_audit_and_separate_owner_approval

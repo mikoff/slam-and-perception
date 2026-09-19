@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 import sqlite3
 
 import pytest
+import torch
 import yaml
 
 from student_detector.config import load_phase3_config
-from student_detector.phase4_identity import verify_phase4_launch_inputs
+from student_detector.phase4_identity import (
+    verify_phase4_launch_inputs,
+    verify_phase4_quad_continuation_inputs,
+)
 from student_detector.selection_policy import compare_selection_reports
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +27,13 @@ QUAD_PILOT_CONFIG_PATH = (
 )
 QUAD_PILOT_CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_quad_pilot_contract_v1.yaml"
+)
+QUAD_CONTINUATION_CONFIG_PATH = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step10000_v1.yaml"
+)
+QUAD_CONTINUATION_CONTRACT_PATH = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_continuation_contract_v1.yaml"
 )
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
@@ -208,6 +219,26 @@ def test_quad_pilot_is_matched_to_local_hbb_pilot(
     assert contract["initialization"]["checkpoint_state"] == "ema_model"
 
 
+def test_quad_continuation_preserves_recipe_and_binds_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    pilot = load_phase3_config(QUAD_PILOT_CONFIG_PATH)
+    continuation = load_phase3_config(QUAD_CONTINUATION_CONFIG_PATH)
+    contract = yaml.safe_load(
+        QUAD_CONTINUATION_CONTRACT_PATH.read_text(encoding="utf-8")
+    )
+
+    assert continuation == replace(
+        pilot,
+        output_dir=PROJECT_ROOT / "artifacts/phase4/local_quad_p3_seed42_step10000_v1",
+    )
+    assert contract["configuration"]["sha256"] == _sha256(QUAD_CONTINUATION_CONFIG_PATH)
+    assert contract["resume"]["source_global_step"] == 5_000
+    assert contract["optimization"]["target_global_step"] == 10_000
+    assert contract["decision"]["step15000_launch"].startswith("requires_all_gates")
+
+
 def test_phase4_local_launch_accepts_exact_dataset_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -225,6 +256,98 @@ def test_phase4_local_launch_accepts_exact_dataset_identity(
 
     assert result["dataset_id"] == "phase3-production-bg-policy-v2-2026-08-29"
     assert result["index_schema"] == "8:proposal-manifest"
+
+
+def test_phase4_quad_continuation_accepts_exact_resume_and_new_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, contract_path, _, _ = _write_phase4_identity_fixture(tmp_path, monkeypatch)
+    config_path = tmp_path / "configs/continuation.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text("continuation-config\n", encoding="utf-8")
+    resume = tmp_path / "resume.pt"
+    resume.write_bytes(b"step-5000-full-state")
+    output = tmp_path / "step10000"
+    config = replace(config, output_dir=output)
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    contract.update(
+        {
+            "configuration": {"sha256": _sha256(config_path)},
+            "resume": {
+                "artifact": "resume.pt",
+                "artifact_sha256": _sha256(resume),
+                "interrupted_stage_artifact": "step10000/last.pt",
+                "interrupted_stage_step_range": [5_001, 9_999],
+            },
+            "optimization": {
+                "target_global_step": 10_000,
+                "output_dir": "step10000",
+                "initial_output_must_be_absent": True,
+            },
+        }
+    )
+    contract_path.write_text(yaml.safe_dump(contract), encoding="utf-8")
+
+    result = verify_phase4_quad_continuation_inputs(
+        config,
+        config_path=config_path,
+        training_contract_path=contract_path,
+        resume_path=resume,
+        target_global_step=10_000,
+    )
+
+    assert result["resume_sha256"] == _sha256(resume)
+    assert result["resume_mode"] == "initial"
+
+
+def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, contract_path, _, _ = _write_phase4_identity_fixture(tmp_path, monkeypatch)
+    config_path = tmp_path / "configs/continuation.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text("continuation-config\n", encoding="utf-8")
+    output = tmp_path / "step10000"
+    output.mkdir()
+    config = replace(config, output_dir=output)
+    resume = output / "last.pt"
+    torch.save(
+        {
+            "phase": "quad_proposals",
+            "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
+            "config": asdict(config),
+            "global_step": 7_500,
+        },
+        resume,
+    )
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    contract.update(
+        {
+            "configuration": {"sha256": _sha256(config_path)},
+            "resume": {
+                "artifact": "source.pt",
+                "artifact_sha256": "unused-for-recovery",
+                "interrupted_stage_artifact": "step10000/last.pt",
+                "interrupted_stage_step_range": [5_001, 9_999],
+            },
+            "optimization": {
+                "target_global_step": 10_000,
+                "output_dir": "step10000",
+                "initial_output_must_be_absent": True,
+            },
+        }
+    )
+    contract_path.write_text(yaml.safe_dump(contract), encoding="utf-8")
+
+    result = verify_phase4_quad_continuation_inputs(
+        config,
+        config_path=config_path,
+        training_contract_path=contract_path,
+        resume_path=resume,
+        target_global_step=10_000,
+    )
+
+    assert result["resume_mode"] == "interrupted_stage"
 
 
 def test_phase4_local_launch_rejects_stale_schema6_index(

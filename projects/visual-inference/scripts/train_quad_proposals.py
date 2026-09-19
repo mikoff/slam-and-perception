@@ -32,7 +32,10 @@ from student_detector.data import (
     use_file_system_tensor_sharing,
 )
 from student_detector.model import QuadProposalDetector
-from student_detector.phase4_identity import verify_phase4_launch_inputs
+from student_detector.phase4_identity import (
+    verify_phase4_launch_inputs,
+    verify_phase4_quad_continuation_inputs,
+)
 from student_detector.quad_assigner import QuadAssigner
 from student_detector.quad_data import (
     QuadProposalDataset,
@@ -51,6 +54,13 @@ PHASE4_QUAD_PILOT_CONFIG = (
 ).resolve()
 PHASE4_QUAD_PILOT_CONTRACT = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_quad_pilot_contract_v1.yaml"
+)
+PHASE4_QUAD_CONTINUATION_CONFIG = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step10000_v1.yaml"
+).resolve()
+PHASE4_QUAD_CONTINUATION_CONTRACT = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_continuation_contract_v1.yaml"
 )
 
 
@@ -237,6 +247,22 @@ def main() -> None:
             f"contract={identity['dataset_contract_sha256']} "
             f"train={identity['train_manifest_sha256']} "
             f"validation={identity['validation_manifest_sha256']} "
+            f"indexes={identity['index_schema']}"
+        )
+    elif args.config.resolve() == PHASE4_QUAD_CONTINUATION_CONFIG:
+        identity = verify_phase4_quad_continuation_inputs(
+            config,
+            config_path=args.config,
+            training_contract_path=PHASE4_QUAD_CONTINUATION_CONTRACT,
+            resume_path=args.resume,
+            target_global_step=args.max_steps,
+        )
+        timestamped_print(
+            "Verified Phase 4 quad-continuation inputs: "
+            f"dataset={identity['dataset_id']} "
+            f"contract={identity['dataset_contract_sha256']} "
+            f"resume_mode={identity['resume_mode']} "
+            f"resume={identity['resume_sha256']} "
             f"indexes={identity['index_schema']}"
         )
     if args.no_pretrained:

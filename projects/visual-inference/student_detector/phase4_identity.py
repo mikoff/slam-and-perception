@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .checkpoints import load_checkpoint, validate_checkpoint_contract
 from .config import Phase3Config
 from .provenance import sha256_file
 
@@ -181,4 +183,105 @@ def verify_phase4_launch_inputs(
     }
 
 
-__all__ = ["verify_phase4_launch_inputs"]
+def verify_phase4_quad_continuation_inputs(
+    config: Phase3Config,
+    *,
+    config_path: Path,
+    training_contract_path: Path,
+    resume_path: Path | None,
+    target_global_step: int | None,
+) -> dict[str, str]:
+    """Verify the exact step-5k resume and isolated step-10k output boundary."""
+    identity = verify_phase4_launch_inputs(
+        config,
+        training_contract_path=training_contract_path,
+        initialization_path=None,
+        initialization_state=None,
+        initialization_required=False,
+    )
+    contract = _mapping(
+        yaml.safe_load(training_contract_path.read_text(encoding="utf-8")),
+        "quad continuation contract",
+    )
+    configuration = _mapping(contract.get("configuration"), "configuration")
+    resume = _mapping(contract.get("resume"), "resume")
+    optimization = _mapping(contract.get("optimization"), "optimization")
+    project_root = config_path.resolve().parent.parent
+
+    _require_equal(
+        "continuation config SHA-256",
+        sha256_file(config_path),
+        configuration["sha256"],
+    )
+    if resume_path is None:
+        raise ValueError("Phase 4 quad continuation requires --resume")
+    source_resume = Path(str(resume["artifact"]))
+    if not source_resume.is_absolute():
+        source_resume = project_root / source_resume
+    interrupted_resume = Path(str(resume["interrupted_stage_artifact"]))
+    if not interrupted_resume.is_absolute():
+        interrupted_resume = project_root / interrupted_resume
+    actual_resume = resume_path.resolve()
+    if not actual_resume.is_file():
+        raise FileNotFoundError(
+            f"Phase 4 continuation checkpoint is missing: {actual_resume}"
+        )
+    _require_equal(
+        "continuation target global step",
+        target_global_step,
+        optimization["target_global_step"],
+    )
+    expected_output = Path(str(optimization["output_dir"]))
+    if not expected_output.is_absolute():
+        expected_output = project_root / expected_output
+    _require_equal("continuation output directory", config.output_dir, expected_output)
+    if actual_resume == source_resume:
+        resume_sha256 = sha256_file(source_resume)
+        _require_equal(
+            "continuation resume SHA-256",
+            resume_sha256,
+            resume["artifact_sha256"],
+        )
+        if (
+            optimization.get("initial_output_must_be_absent")
+            and expected_output.exists()
+        ):
+            raise FileExistsError(
+                f"Phase 4 continuation output already exists: {expected_output}"
+            )
+        resume_mode = "initial"
+    elif actual_resume == interrupted_resume:
+        checkpoint = load_checkpoint(interrupted_resume)
+        validate_checkpoint_contract(
+            checkpoint, kind="quad", neck_type=config.neck_type
+        )
+        _require_equal(
+            "interrupted continuation config",
+            checkpoint.get("config"),
+            asdict(config),
+        )
+        global_step = int(checkpoint.get("global_step", -1))
+        minimum_step, maximum_step = resume["interrupted_stage_step_range"]
+        if not int(minimum_step) <= global_step <= int(maximum_step):
+            raise ValueError(
+                "interrupted continuation global step is outside "
+                f"[{minimum_step}, {maximum_step}]: {global_step}"
+            )
+        resume_sha256 = sha256_file(interrupted_resume)
+        resume_mode = "interrupted_stage"
+    else:
+        raise ValueError(
+            "Phase 4 continuation resume path must be the immutable step-5k "
+            f"source or the stage recovery checkpoint, found {actual_resume}"
+        )
+    return {
+        **identity,
+        "resume_mode": resume_mode,
+        "resume_sha256": resume_sha256,
+    }
+
+
+__all__ = [
+    "verify_phase4_launch_inputs",
+    "verify_phase4_quad_continuation_inputs",
+]
