@@ -103,6 +103,7 @@ def test_quad_checkpoint_resumes_and_round_trips_config(tmp_path) -> None:
     assert checkpoint["config"]["data"]["input_size"] == 64
     assert "scaler" in checkpoint
     assert checkpoint["ema_updates"] == 1
+    assert checkpoint["optimizer_step_skips"] == 0
     assert checkpoint["ema_initialization_weight"] < 1.0
     assert checkpoint["selected_state"] == "model"
     assert "rng_state" in checkpoint

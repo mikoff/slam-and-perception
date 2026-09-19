@@ -107,7 +107,8 @@ schedule:
   accumulation_steps: 8
   amp: true
   amp_initial_scale: 8192
-  optimizer_step_skip_policy: error
+  optimizer_step_skip_policy: bounded
+  max_optimizer_step_skips: 2
   seed: 42
   checkpoint_every_epochs: 1
   checkpoint_every_steps: 500

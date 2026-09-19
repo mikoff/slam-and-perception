@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
 from dataclasses import asdict
@@ -255,10 +256,26 @@ def verify_phase4_quad_continuation_inputs(
         validate_checkpoint_contract(
             checkpoint, kind="quad", neck_type=config.neck_type
         )
+        recorded_config = copy.deepcopy(checkpoint.get("config"))
+        expected_config = asdict(config)
+        if not isinstance(recorded_config, dict):
+            raise ValueError("interrupted checkpoint config must be a mapping")
+        for dotted_path in resume.get("allowed_config_overrides", []):
+            recorded_cursor = recorded_config
+            expected_cursor = expected_config
+            parts = str(dotted_path).split(".")
+            for part in parts[:-1]:
+                recorded_cursor = _mapping(
+                    recorded_cursor.get(part), f"recorded config {dotted_path}"
+                )
+                expected_cursor = _mapping(
+                    expected_cursor.get(part), f"expected config {dotted_path}"
+                )
+            recorded_cursor[parts[-1]] = expected_cursor[parts[-1]]
         _require_equal(
             "interrupted continuation config",
-            checkpoint.get("config"),
-            asdict(config),
+            recorded_config,
+            expected_config,
         )
         global_step = int(checkpoint.get("global_step", -1))
         minimum_step, maximum_step = resume["interrupted_stage_step_range"]

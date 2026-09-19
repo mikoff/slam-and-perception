@@ -1,6 +1,7 @@
 # Phase 4 staged quad continuation
 
-Status: contract prepared; step 10,000 is not launched.
+Status: interrupted at step 6,331 by one FP16 overflow; bounded recovery is
+approved but not relaunched. The last durable checkpoint is step 6,000.
 
 ## Purpose
 
@@ -50,6 +51,11 @@ If the stage is interrupted after writing a checkpoint, rerun the command with
 `--resume artifacts/phase4/local_quad_p3_seed42_step10000_v1/last.pt`. The
 preflight accepts that recovery path only when its embedded configuration
 matches and its global step is strictly between 5,000 and 10,000.
+
+The recovery permits at most two AMP-skipped optimizer windows. Skipped windows
+are logged and do not advance global step, scheduler, or EMA. PyTorch reduces
+the scaler automatically; a third skip aborts the run. This preserves the
+10,000-successful-update target while preventing silent unbounded drift.
 
 ## Step-10k decision
 

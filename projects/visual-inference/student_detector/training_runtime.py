@@ -46,6 +46,7 @@ class CheckpointContext:
     global_step: int
     best_scores: dict[str, float]
     metrics: dict[str, Any]
+    optimizer_step_skips: int = 0
 
 
 class ProposalTrainingTask(Protocol):
@@ -216,6 +217,7 @@ def save_training_checkpoint(
             "raw", next(iter(context.best_scores.values()), -1.0)
         ),
         "best_scores": context.best_scores,
+        "optimizer_step_skips": context.optimizer_step_skips,
         "config": asdict(config),
         "metrics": context.metrics,
         "rng_state": _rng_state(),
@@ -336,6 +338,7 @@ def train_proposals(
     start_epoch = 0
     resume_batch = 0
     metrics: dict[str, Any] = {}
+    optimizer_step_skips = 0
     termination_requested = False
 
     def request_termination(_signum: int, _frame: object) -> None:
@@ -378,6 +381,7 @@ def train_proposals(
                 checkpoint.get("best_score", -1.0)
             )
         metrics = dict(checkpoint.get("metrics", {}))
+        optimizer_step_skips = int(checkpoint.get("optimizer_step_skips", 0))
         task.restore_checkpoint_extra(checkpoint)
         if checkpoint.get("rng_state"):
             _restore_rng_state(checkpoint["rng_state"])
@@ -497,11 +501,31 @@ def train_proposals(
                     if (
                         accelerator.sync_gradients
                         and accelerator.optimizer_step_was_skipped
-                        and config.schedule.optimizer_step_skip_policy == "error"
                     ):
-                        raise FloatingPointError(
-                            "AMP skipped an optimizer step under the fail-closed policy"
+                        optimizer_step_skips += 1
+                        scaler_scale = (
+                            float(accelerator.scaler.get_scale())
+                            if accelerator.scaler is not None
+                            else None
                         )
+                        if accelerator.is_main_process:
+                            reporter.on_optimizer_step_skipped(
+                                epoch=epoch,
+                                batch=batch_in_epoch,
+                                global_step=global_step,
+                                skip_count=optimizer_step_skips,
+                                scaler_scale=scaler_scale,
+                            )
+                        policy = config.schedule.optimizer_step_skip_policy
+                        maximum = config.schedule.max_optimizer_step_skips
+                        if policy == "error" or (
+                            policy == "bounded" and optimizer_step_skips > maximum
+                        ):
+                            raise FloatingPointError(
+                                "AMP optimizer-step skip exceeded policy: "
+                                f"policy={policy} count={optimizer_step_skips} "
+                                f"maximum={maximum} scale={scaler_scale}"
+                            )
                     if optimizer_step_succeeded:
                         scheduler.step()
                         ema.update(base_model)
@@ -584,6 +608,7 @@ def train_proposals(
                             global_step,
                             best_scores,
                             metrics,
+                            optimizer_step_skips,
                         )
                         checkpoint_started = time.perf_counter()
                         save_training_checkpoint(
@@ -718,6 +743,7 @@ def train_proposals(
                     global_step,
                     best_scores,
                     metrics,
+                    optimizer_step_skips,
                 )
                 checkpoint_args = {
                     "model": base_model,

@@ -68,13 +68,13 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   replacing an existing S3 prefix or local staged directory.
 - Production images are local symlinks and exceed archive scratch space; use the
   runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
-- Phase 4 strictly warm-starts HBB from the approved EMA tensor state, resets
-  runtime state, starts AMP at 8192, and aborts on any skipped optimizer step.
+- Phase 4 HBB aborts on AMP skips; staged quad recovery permits at most two
+  logged skips, and advances scheduler/EMA/global step only on successful updates.
 - Packet provisioning requires its registered SSH key and explicit owner cost check.
 - `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
   keys/versions, sets Docker's 32G shm default, then verifies before dstack.
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad used 16 × 8. Quad stopped at 5k after frozen unmatched and
-  object-fraction gates worsened despite increasing AR.
+- Local HBB and quad use 16 × 8. Quad recovery resumes at step 6k after one
+  FP16 overflow; total unmatched remains diagnostic rather than a sole gate.

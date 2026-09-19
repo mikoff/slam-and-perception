@@ -231,6 +231,11 @@ def test_quad_continuation_preserves_recipe_and_binds_stage(
 
     assert continuation == replace(
         pilot,
+        schedule=replace(
+            pilot.schedule,
+            optimizer_step_skip_policy="bounded",
+            max_optimizer_step_skips=2,
+        ),
         output_dir=PROJECT_ROOT / "artifacts/phase4/local_quad_p3_seed42_step10000_v1",
     )
     assert contract["configuration"]["sha256"] == _sha256(QUAD_CONTINUATION_CONFIG_PATH)
@@ -309,13 +314,24 @@ def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(
     config_path.write_text("continuation-config\n", encoding="utf-8")
     output = tmp_path / "step10000"
     output.mkdir()
-    config = replace(config, output_dir=output)
+    config = replace(
+        config,
+        schedule=replace(
+            config.schedule,
+            optimizer_step_skip_policy="bounded",
+            max_optimizer_step_skips=2,
+        ),
+        output_dir=output,
+    )
     resume = output / "last.pt"
+    checkpoint_config = asdict(config)
+    checkpoint_config["schedule"]["optimizer_step_skip_policy"] = "error"
+    checkpoint_config["schedule"]["max_optimizer_step_skips"] = 0
     torch.save(
         {
             "phase": "quad_proposals",
             "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
-            "config": asdict(config),
+            "config": checkpoint_config,
             "global_step": 7_500,
         },
         resume,
@@ -329,6 +345,10 @@ def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(
                 "artifact_sha256": "unused-for-recovery",
                 "interrupted_stage_artifact": "step10000/last.pt",
                 "interrupted_stage_step_range": [5_001, 9_999],
+                "allowed_config_overrides": [
+                    "schedule.optimizer_step_skip_policy",
+                    "schedule.max_optimizer_step_skips",
+                ],
             },
             "optimization": {
                 "target_global_step": 10_000,

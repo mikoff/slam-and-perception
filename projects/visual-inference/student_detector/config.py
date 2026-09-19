@@ -150,6 +150,7 @@ class ScheduleConfig:
     amp: bool = True
     amp_initial_scale: float = 65536.0
     optimizer_step_skip_policy: str = "allow"
+    max_optimizer_step_skips: int = 0
     seed: int = 42
     checkpoint_every_epochs: int = 1
     checkpoint_every_steps: int = 500
@@ -316,8 +317,15 @@ def load_phase3_config(path: str | Path) -> Phase3Config:
         raise ValueError("ema_ramp_steps must be non-negative")
     if config.schedule.amp_initial_scale <= 0:
         raise ValueError("amp_initial_scale must be positive")
-    if config.schedule.optimizer_step_skip_policy not in {"allow", "error"}:
-        raise ValueError("optimizer_step_skip_policy must be allow or error")
+    if config.schedule.optimizer_step_skip_policy not in {"allow", "bounded", "error"}:
+        raise ValueError("optimizer_step_skip_policy must be allow, bounded, or error")
+    if config.schedule.max_optimizer_step_skips < 0:
+        raise ValueError("max_optimizer_step_skips must be non-negative")
+    if (
+        config.schedule.optimizer_step_skip_policy == "bounded"
+        and config.schedule.max_optimizer_step_skips < 1
+    ):
+        raise ValueError("bounded optimizer-step skips require a positive maximum")
     if config.inference.score_mode not in {"objectness", "objectness_x_centerness"}:
         raise ValueError("score_mode must be 'objectness' or 'objectness_x_centerness'")
     if config.quad.top_k < 1 or config.quad.eligible_levels < 1:

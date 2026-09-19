@@ -267,6 +267,31 @@ class StandardReporter:
                     )
             self.accelerator.log(record, step=global_step)
 
+    def on_optimizer_step_skipped(
+        self,
+        *,
+        epoch: int,
+        batch: int,
+        global_step: int,
+        skip_count: int,
+        scaler_scale: float | None,
+    ) -> None:
+        """Record an AMP overflow without counting it as an optimizer update."""
+        self._event(
+            "optimizer_step_skipped",
+            epoch=epoch,
+            batch=batch,
+            global_step=global_step,
+            skip_count=skip_count,
+            scaler_scale=scaler_scale,
+        )
+        timestamped_print(
+            "AMP optimizer step skipped: "
+            f"epoch={epoch + 1} batch={batch} step={global_step} "
+            f"count={skip_count} scale={scaler_scale}",
+            file=sys.stderr,
+        )
+
     def on_checkpoint(
         self,
         output_dir: Path,
