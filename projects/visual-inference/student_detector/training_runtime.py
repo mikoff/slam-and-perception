@@ -348,16 +348,6 @@ def train_proposals(
     for signum in previous_handlers:
         signal.signal(signum, request_termination)
 
-    if accelerator.is_main_process:
-        reporter.on_start(
-            config=config,
-            model=base_model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            optimizer_steps=steps_per_epoch * config.schedule.epochs,
-            world_size=accelerator.num_processes,
-            resume=resume,
-        )
     optimizer.zero_grad(set_to_none=True)
 
     if resume is not None:
@@ -399,6 +389,17 @@ def train_proposals(
                 f"step={global_step} epoch={int(checkpoint['epoch']) + 1} "
                 f"batch={int(checkpoint.get('batch_in_epoch', 0))}",
             )
+
+    if accelerator.is_main_process:
+        reporter.on_start(
+            config=config,
+            model=base_model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            optimizer_steps=steps_per_epoch * config.schedule.epochs,
+            world_size=accelerator.num_processes,
+            resume=resume,
+        )
 
     if max_steps is not None and global_step >= max_steps:
         reporter.close()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import json
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from torch import Tensor, nn
 
 from .checkpoints import architecture_id, load_model_state_strict
 from .config import Phase3Config
-from .provenance import write_run_contract
+from .provenance import sha256_file, write_run_contract
 from .quad_decoder import QuadDetection, QuadInferenceDecoder, decode_dense_quad_output
 from .quad_evaluation import QuadEvaluationAccumulator, QuadEvaluationImage
 from .quad_geometry import pairwise_quad_iou, quad_validity
@@ -370,12 +371,16 @@ class _QuadTask:
 
 def _write_quad_run_contract(**context: Any) -> None:
     target = context["config"].output_dir / "run_contract.json"
-    if context.get("resume") is not None:
-        if not target.is_file():
-            raise FileNotFoundError(
-                "cannot certify a quad resume without its original run_contract.json"
-            )
+    resume = context.get("resume")
+    if resume is not None and target.is_file():
         return
+    parent_contract = None
+    if resume is not None:
+        parent_contract = Path(resume).resolve().parent / "run_contract.json"
+        if not parent_contract.is_file():
+            raise FileNotFoundError(
+                "cannot certify a quad resume without its parent run_contract.json"
+            )
     write_run_contract(
         context["config"].output_dir,
         config=context["config"],
@@ -388,6 +393,20 @@ def _write_quad_run_contract(**context: Any) -> None:
         world_size=context["world_size"],
         geometry="quad",
     )
+    if resume is not None and parent_contract is not None:
+        contract = json.loads(target.read_text(encoding="utf-8"))
+        contract["resume"] = {
+            "checkpoint": str(Path(resume).resolve()),
+            "checkpoint_sha256": sha256_file(Path(resume)),
+            "parent_run_contract": str(parent_contract),
+            "parent_run_contract_sha256": sha256_file(parent_contract),
+        }
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(contract, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
 
 
 def train_quad_proposals(

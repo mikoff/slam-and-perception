@@ -56,8 +56,8 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Shared proposal-evaluation helpers prepare models, masks, ego regions, and
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
 - Diversity audits cover `[N,4,2]` overlap clusters, spatial/scale diversity, and unmatched isolation.
-- The Phase 2 quad EMA stays incumbent; exact full-state 5k→10k continuation is isolated and cannot promote without frozen audits.
-- Later 15k/20k stages require every continuation gate and owner approval.
+- The Phase 2 quad EMA stays incumbent; exact full-state 5k→10k continuation is isolated.
+- Its run contract hash-binds the parent; 15k/20k require all gates and owner approval.
 - Future ranking/background-loss work needs a new contract and step-named artifacts; it is not a Phase 4 resume.
 
 # Local Constraints & Gotchas

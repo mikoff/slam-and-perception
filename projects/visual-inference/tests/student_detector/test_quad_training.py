@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -126,6 +127,69 @@ def test_quad_checkpoint_resumes_and_round_trips_config(tmp_path) -> None:
         resume=checkpoint_path,
     )
     assert resumed["global_step"] == 2
+
+
+def test_quad_checkpoint_can_resume_into_an_isolated_stage(tmp_path) -> None:
+    loader = DataLoader(
+        _Samples(), batch_size=1, collate_fn=collate_quad_proposal_samples
+    )
+    placeholder = tmp_path / "unused.json"
+    config = Phase3Config(
+        data=DataConfig(
+            placeholder,
+            placeholder,
+            tmp_path,
+            tmp_path,
+            input_size=64,
+            batch_size=1,
+            workers=0,
+            quad_regular_min_side=8,
+        ),
+        schedule=ScheduleConfig(
+            epochs=2,
+            freeze_backbone_epochs=0,
+            warmup_steps=1,
+            amp=False,
+        ),
+        output_dir=tmp_path / "source",
+        pretrained_backbone=False,
+    )
+    builder = QuadTargetBuilder(QuadAssigner())
+    train_quad_proposals(
+        QuadProposalDetector(backbone=StubBackbone()),
+        loader,
+        loader,
+        builder,
+        QuadProposalLoss(),
+        config,
+        torch.device("cpu"),
+        max_steps=1,
+        max_val_batches=1,
+    )
+    source_checkpoint = config.output_dir / "last.pt"
+    source_contract = config.output_dir / "run_contract.json"
+    stage_config = replace(config, output_dir=tmp_path / "stage")
+
+    result = train_quad_proposals(
+        QuadProposalDetector(backbone=StubBackbone()),
+        loader,
+        loader,
+        builder,
+        QuadProposalLoss(),
+        stage_config,
+        torch.device("cpu"),
+        max_steps=2,
+        max_val_batches=1,
+        resume=source_checkpoint,
+    )
+
+    assert result["global_step"] == 2
+    stage_contract = json.loads(
+        (stage_config.output_dir / "run_contract.json").read_text(encoding="utf-8")
+    )
+    assert stage_contract["config"]["output_dir"] == str(stage_config.output_dir)
+    assert stage_contract["resume"]["checkpoint"] == str(source_checkpoint.resolve())
+    assert stage_contract["resume"]["parent_run_contract"] == str(source_contract)
 
 
 def test_raw_and_ema_validation_share_one_loader_pass(tmp_path) -> None:
