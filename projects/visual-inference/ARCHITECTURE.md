@@ -55,10 +55,10 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   no-candidate fallback remains per-object.
 - Shared proposal-evaluation helpers prepare models, masks, ego regions, and
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
+- Diversity audits cover `[N,4,2]` overlap clusters, spatial/scale diversity, and unmatched isolation.
 - Frozen utility gates reject HBB 2k and quad 2k/5k; the original quad P3–P5
   EMA remains incumbent. The unchanged 20,000-step recipe must not continue.
-- Future ranking/background-loss work requires a new contract and immutable
-  step-named artifacts; it is not a Phase 4 resume.
+- Future ranking/background-loss work needs a new contract and step-named artifacts; it is not a Phase 4 resume.
 
 # Local Constraints & Gotchas
 
