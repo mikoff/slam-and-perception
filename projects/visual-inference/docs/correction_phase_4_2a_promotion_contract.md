@@ -1,7 +1,8 @@
 # Correction Phase 4.2a HBB-versus-quad promotion contract
 
-Status: complete. Quad remains the production incumbent; HBB is the Phase 4
-challenger. No cloud work was launched by this step.
+Status: complete. Quad remains the production incumbent; the later matched HBB
+and quad pilots were rejected in the [Phase 4 closeout](correction_phase_4_closeout.md).
+No cloud or full production run was launched.
 
 ## Decision rule
 

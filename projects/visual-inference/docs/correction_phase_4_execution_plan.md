@@ -1,15 +1,14 @@
 # Correction Phase 4 execution plan
 
-Status: Phase 4.0 through the
-[Phase 4.2a promotion contract](correction_phase_4_2a_promotion_contract.md) are
-complete. Phase 4.3 is waiting for a separate owner launch approval.
+Status: complete with baseline retained. The supervised local HBB and quad
+pilots failed the frozen utility gates, so no cloud/full run or replacement
+package is authorized. See the [Phase 4 closeout](correction_phase_4_closeout.md).
 
 ## Goal and stopping point
 
-Train and package one final HBB P3–P5 proposal-detector candidate under the
-corrected dataset, normalized loss, and approved proposal policy. Compare it
-against the frozen Phase 3 baseline and retained quad control. Stop after the
-owner accepts or rejects the proposal outputs and export package.
+Test whether matched retraining can replace the retained quad P3–P5 proposal
+detector under the corrected dataset and approved utility policy. A valid frozen
+gate failure retains the incumbent and closes the branch without a new package.
 
 SigLIP integration, semantic crop utility, INT8 work, physical RPi acceptance,
 and production rollout remain deferred. Quad is an evaluation control and will
@@ -95,81 +94,61 @@ existing comparison against the retained HBB baseline and the versioned
 Deployment speed is report-only and cannot override a quality failure. The
 current HBB correctly fails this new gate, so no production switch has occurred.
 
-### 4.3 Run a bounded cloud pilot
+### 4.3 Run bounded matched pilots
 
-The pilot exercises the HBB challenger but does not replace the quad incumbent.
-Promotion later requires both the HBB-baseline policy and the Phase 4 quad-
-incumbent policy to pass. GitHub `mode=pilot` is machine-capped at 2,000
-successful optimizer steps and 500-step checkpoints; `production` is not used.
+Complete locally after the requested Packet GPUs were unavailable. HBB and quad
+used the same seed, production data, effective batch 128, 2,000-step budget,
+schedule, augmentation, and 500-step checkpoint cadence. Both warm-started the
+explicit EMA state from their approved geometry-specific checkpoint.
 
-- Stage or verify the immutable dataset and initialization artifact.
-- Run enough steps to cross warm-up and at least one validation/checkpoint event.
-- Interrupt once at a safe checkpoint, resume, and verify continuity.
-- Verify W&B telemetry, S3 checkpoint/manifest hashes, throughput, VRAM, and
-  projected full-run cost.
+- Exact dataset, schema-8 index, source commit, initialization-state, and
+  checkpoint hashes passed before CUDA setup.
+- HBB and quad completed 2,000 successful steps and full raw/EMA validation.
+- Quad resumed deterministically from step 2,000 and stopped at step 5,000 with
+  optimizer, scheduler, scaler, EMA, sampler, and RNG continuity.
+- Frozen 800-image utility and bounded suppression reports bind every decision.
 
-This requires a separate owner launch approval. The pilot does not authorize the
-full run. Present a pass/fail table and revised cost/runtime estimate.
+HBB failed proposal-object-fraction and unmatched gates. Quad improved the
+incumbent's AR but failed unmatched. The owner approved bounded suppression
+calibration and a deterministic quad continuation to a 5,000-step stop.
 
 ### 4.4 Run full HBB retraining
 
-- Launch exactly the approved contract; do not retrain quad or reopen Phase 3
-  loss/architecture search.
-- Monitor source/domain mixture, state counts, raw/weighted components, learning
-  rate, gradient/scaler state, skipped steps, throughput, memory, raw/EMA
-  validation, proposal count, duplicates, and false-proposal slices.
-- Maintain latest resumable, previous resumable, best-primary, and
-  best-constraint checkpoints with hashes.
-- Intervene only for predefined OOM, non-finite, data corruption, checkpoint,
-  validation-collapse, false-proposal, runtime, or cost conditions.
-
-This requires a separate full-run approval. Report progress without launching
-unplanned replacement runs.
+Not launched. HBB's 2,000-step frozen result is a clear gate failure, and the
+matched quad continuation worsened its protected metrics by step 5,000. The
+predefined false-proposal stop condition therefore prohibits either unchanged
+recipe from continuing to 20,000 steps.
 
 ### 4.5 Select the checkpoint
 
-- Evaluate every scheduled validation checkpoint under the frozen selection
-  policy against the Phase 3 baseline.
-- Prefer EMA only when it clears the constraints; retain raw and EMA evidence.
-- A candidate must improve AR100 by the frozen margin and pass every protected
-  recall/domain/false/duplicate gate. Otherwise retain the Phase 3 baseline.
-- Use a second seed only for a near-boundary/inconclusive result, not to rescue a
-  clear failure.
-
-Stop for owner confirmation of the selected or rejected checkpoint.
+Complete. HBB 2k fails against both required references. Quad 2k fails unmatched
+by +7.17 pp versus the incumbent; quad 5k fails proposal object fraction by
+-2.39 pp and unmatched by +10.55 pp. These are clear failures, so seed 43 is not
+authorized and the original quad EMA remains selected.
 
 ### 4.6 Final proposal audit
 
-- Evaluate selected raw/EMA states on the full hash-bound validation set.
-- Report aggregate, source/domain, size, aspect, 16 px, trusted-background,
-  unmatched, duplicate, and ego-body metrics.
-- Generate a balanced diagnostic bundle. The AI performs the default visual
-  review and produces categorized counts/examples; owner review is limited to
-  ambiguous exceptions and the final recommendation.
-- Recheck HBB/quad coordinate, stable-ID, K=100, and transform-inversion parity.
-
-SigLIP and semantic crop evaluation are explicitly outside this step.
+Closed by baseline retention. The incumbent already passed the Phase 2 utility,
+diagnostic, coordinate, K=100, and export-parity audits. Phase 4 adds no new
+production artifact requiring another visual/export acceptance cycle.
 
 ### 4.7 Export, package, and stop
 
-- Export the selected FP32 PT2 raw-output graph and verify eager/export parity.
-- Package weights, raw/EMA identity, preprocessing, decoding/NMS thresholds,
-  data/code/config hashes, validation and visual reports, runtime requirements,
-  limitations, and rollback artifact.
-- Upload the manifest last, verify remote size/hash metadata, and retain the
-  Phase 3 baseline for rollback.
-
-Stop after owner proposal-level acceptance. INT8, SigLIP, RPi measurement, and
-deployment canary require a later plan and separate approval.
+No replacement export or upload is needed. Retain the previously evaluated quad
+artifact and rollback evidence. The versioned closeout manifest binds the local
+pilot checkpoints/reports and records the intermediate-checkpoint retention
+limitation. Any later model change starts under a new contract.
 
 ## Completion gate
 
-Phase 4 is complete only when:
+Phase 4 is complete because:
 
 - a clean immutable training contract and durable artifact manifest exist;
-- local preflight and cloud resume/checkpoint paths pass;
-- the full run ends under the approved budget or a predefined stop condition;
+- local preflight and deterministic resume/checkpoint paths pass; cloud training
+  was not entered after the local stop condition fired;
+- the bounded runs ended under the predefined false-proposal stop condition;
 - the chosen checkpoint passes the frozen proposal-selection policy, or the
   baseline is explicitly retained after a valid failure;
-- full validation and AI-led visual audit are reviewed by the owner;
-- export parity passes and both selected and rollback artifacts are recoverable.
+- the retained incumbent's prior validation, visual audit, and export parity
+  remain authoritative; no rejected candidate is presented as production-ready;
+- the incumbent remains recoverable and all new evidence hashes are recorded.

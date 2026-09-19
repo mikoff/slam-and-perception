@@ -843,11 +843,11 @@ each remain explicit owner launch gates.
 
 ### Phase 4 — Retraining, Evaluation, and Release
 
-The active proposal-only execution contract is
+The proposal-only execution contract is
 `docs/correction_phase_4_execution_plan.md`. It supersedes downstream SigLIP,
 physical-RPi, architecture-search, and production-rollout tasks in the generic
-outline below. Phase 4 starts with its step 4.0 commit/evidence boundary and uses
-plan-execute-verify cycles with owner approval before cloud pilot and full run.
+outline below. Phase 4 used plan-execute-verify cycles and is now closed with the
+original quad EMA retained; see `docs/correction_phase_4_closeout.md`.
 
 #### 4.1 Freeze the training contract
 
@@ -1024,6 +1024,15 @@ The retraining program is complete only when:
 - checkpoint restoration and export parity are verified;
 - the owner has reviewed the AI-led balanced visual-audit summary;
 - the previous artifact remains recoverable for rollback.
+
+Implementation closeout (2026-09-19): complete through the baseline-retention
+path. A matched 2,000-step HBB pilot failed proposal-object-fraction and
+unmatched gates. A matched quad pilot improved AR but failed unmatched at 2,000
+steps; its supervised continuation to 5,000 further improved AR while worsening
+unmatched and proposal object fraction. Bounded suppression sweeps could not
+recover all gates simultaneously. No 20,000-step, cloud, replacement-export, or
+deployment run is authorized. The original Phase 2 quad EMA remains incumbent;
+future ranking/background-loss changes require a new versioned contract.
 
 ### Recommended Execution Order and Human Effort
 

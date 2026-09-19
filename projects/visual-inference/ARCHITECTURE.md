@@ -21,8 +21,8 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   geometry-specific NMS remain outside the exported network.
 - Both geometry adapters consume one sampled affine/photometric policy; validation
   is letterbox-only and effective bounds/exclusions are recorded in run metadata.
-- Phase 4 uses FP16 `[B=128, 3, 384, 384]` on one Packet RTX 4090; reduced local
-  batches are preflight evidence only and do not alter the frozen contract.
+- Phase 4 local pilots use FP16 `[B=16, 3, 384, 384]` with accumulation 8;
+  no Packet or full 20,000-step run was launched.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - A weights-only warm start resets optimizer, scheduler, and EMA; full resume
@@ -55,10 +55,10 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   no-candidate fallback remains per-object.
 - Shared proposal-evaluation helpers prepare models, masks, ego regions, and
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
-- HBB loss is per-image/state; frozen utility gates drive selection. The
-  tested candidates failed; v2 permits baseline retention after evidence commit.
-- Quad P3–P5 is incumbent and HBB P3–P5 the Phase 4 challenger. Matched local
-  pilots equalize batch, sample budget, seed, schedule, and production data.
+- Frozen utility gates reject HBB 2k and quad 2k/5k; the original quad P3–P5
+  EMA remains incumbent. The unchanged 20,000-step recipe must not continue.
+- Future ranking/background-loss work requires a new contract and immutable
+  step-named artifacts; it is not a Phase 4 resume.
 
 # Local Constraints & Gotchas
 
@@ -76,5 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad use 16 × 8. Both preserve 2,000 successful steps, 256k
-  samples, and 500-step saves.
+- Local HBB and quad used 16 × 8. Quad stopped at 5k after frozen unmatched and
+  object-fraction gates worsened despite increasing AR.

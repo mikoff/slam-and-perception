@@ -70,12 +70,13 @@ Do not interpret it as replacing the implemented original project Phase 2.
    deliverables complete but the Phase 4 entry gate no-go: no tested candidate
    improves the frozen objective. The owner accepted this null result through a
    conditional v2 gate; commit and artifact-reference checks remain.
-15. Follow the supervised [Phase 4 execution plan](correction_phase_4_execution_plan.md):
-   commit/evidence boundary, frozen contract, local preflight, separately
-   approved cloud pilot/full run, selection, proposal audit, and packaging.
-16. Review fixed-budget recall, size/domain slices, missed objects, background
-   false proposals and duplicates; verify coordinate/export parity and package
-   reproducible checkpoint/config/data references. Stop for owner review.
+15. The supervised [Phase 4 execution plan](correction_phase_4_execution_plan.md)
+   is complete through a valid baseline-retention stop. Matched HBB 2k and quad
+   2k/5k local runs improved recall but failed protected proposal-quality gates;
+   no cloud/full run or replacement package was authorized.
+16. The [Phase 4 closeout](correction_phase_4_closeout.md) retains the original
+   quad EMA artifact and binds all new evidence hashes. A future ranking or
+   background-loss correction requires a new contract and matched short pilot.
 
 The production proposal budget is K=100. Acceptable recall, false-proposal, and
 duplicate limits must be agreed before model selection. No SigLIP model is
