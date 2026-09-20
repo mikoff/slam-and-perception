@@ -234,13 +234,16 @@ def test_quad_continuation_preserves_recipe_and_binds_stage(
         schedule=replace(
             pilot.schedule,
             optimizer_step_skip_policy="bounded",
-            max_optimizer_step_skips=2,
+            max_optimizer_step_skips=4,
         ),
         output_dir=PROJECT_ROOT / "artifacts/phase4/local_quad_p3_seed42_step10000_v1",
     )
     assert contract["configuration"]["sha256"] == _sha256(QUAD_CONTINUATION_CONFIG_PATH)
     assert contract["resume"]["source_global_step"] == 5_000
     assert contract["optimization"]["target_global_step"] == 10_000
+    assert contract["optimization"]["maximum_optimizer_step_skips"] == (
+        continuation.schedule.max_optimizer_step_skips
+    )
     assert contract["decision"]["step15000_launch"].startswith("requires_all_gates")
 
 
@@ -319,7 +322,7 @@ def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(
         schedule=replace(
             config.schedule,
             optimizer_step_skip_policy="bounded",
-            max_optimizer_step_skips=2,
+            max_optimizer_step_skips=4,
         ),
         output_dir=output,
     )

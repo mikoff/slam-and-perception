@@ -68,7 +68,7 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   replacing an existing S3 prefix or local staged directory.
 - Production images are local symlinks and exceed archive scratch space; use the
   runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
-- Phase 4 HBB aborts on AMP skips; staged quad recovery permits at most two
+- Phase 4 HBB aborts on AMP skips; staged quad recovery permits at most four
   logged skips, and advances scheduler/EMA/global step only on successful updates.
 - Packet provisioning requires its registered SSH key and explicit owner cost check.
 - `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects

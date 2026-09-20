@@ -1,5 +1,5 @@
 schema_version: proposal-phase4-quad-continuation-contract.v1
-status: recovery_approved_not_relaunched
+status: final_recovery_approved_not_relaunched
 
 scope:
   geometry: quad
@@ -24,7 +24,7 @@ dataset:
 
 configuration:
   path: configs/correction_phase4_quad_p3_local_rtx3060_step10000_v1.yaml
-  sha256: 361beb0130e97f16db43c3b1c24472a34dd82af621e519969bdf2fc5efd6cabc
+  sha256: 848925649046ee548d50380273639f8d7b0eddba48a7ad4bee3aa0db7d291813
   must_match_step5000_recipe: true
 
 initialization:
@@ -40,6 +40,9 @@ resume:
   source_commit: 90dbceb0070c0a0bcc52b6a260f5d2b3954422b4
   interrupted_stage_artifact: artifacts/phase4/local_quad_p3_seed42_step10000_v1/last.pt
   interrupted_stage_step_range: [5001, 9999]
+  latest_durable_global_step: 9000
+  latest_durable_artifact_sha256: df2357c7d291b60d9ff51fc9703bed3534a5d8883887366a8e74eec1cbc999f6
+  persisted_optimizer_step_skips: 2
   allowed_config_overrides:
     - schedule.optimizer_step_skip_policy
     - schedule.max_optimizer_step_skips
@@ -62,7 +65,7 @@ optimization:
   effective_batch: 128
   checkpoint_every_optimizer_steps: 500
   optimizer_step_skip_policy: bounded
-  maximum_optimizer_step_skips: 2
+  maximum_optimizer_step_skips: 4
   output_dir: artifacts/phase4/local_quad_p3_seed42_step10000_v1
   initial_output_must_be_absent: true
 
