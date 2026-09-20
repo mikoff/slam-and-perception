@@ -38,6 +38,9 @@ def _args() -> argparse.Namespace:
     parser.add_argument("--hbb-checkpoint", type=Path, required=True)
     parser.add_argument("--old-quad-checkpoint", type=Path, required=True)
     parser.add_argument("--quad-checkpoint", type=Path, required=True)
+    parser.add_argument("--quad-label", default="quad_candidate")
+    parser.add_argument("--quad-production-nms", type=float, default=0.80)
+    parser.add_argument("--quad-production-score", type=float, default=0.20)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--validation-images", type=int, default=800)
     parser.add_argument("--workers", type=int, default=0)
@@ -205,6 +208,12 @@ def main() -> None:
         )
     if not 0 <= args.common_nms <= 1:
         raise ValueError("common NMS threshold must be in [0, 1]")
+    if not 0 <= args.quad_production_nms <= 1:
+        raise ValueError("quad production NMS threshold must be in [0, 1]")
+    if not 0 <= args.quad_production_score <= 1:
+        raise ValueError("quad production score threshold must be in [0, 1]")
+    if args.quad_label in {"old_quad", "hbb_2000"}:
+        raise ValueError("quad label conflicts with a fixed comparison label")
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA diversity audit requested but no CUDA is visible")
@@ -236,7 +245,13 @@ def main() -> None:
     models = {}
     for label, kind, checkpoint, production_nms, production_score in (
         ("old_quad", "quad", args.old_quad_checkpoint, 0.80, 0.20),
-        ("quad_5000", "quad", args.quad_checkpoint, 0.80, 0.20),
+        (
+            args.quad_label,
+            "quad",
+            args.quad_checkpoint,
+            args.quad_production_nms,
+            args.quad_production_score,
+        ),
         ("hbb_2000", "hbb", args.hbb_checkpoint, 0.70, 0.30),
     ):
         models[label] = _evaluate_model(
