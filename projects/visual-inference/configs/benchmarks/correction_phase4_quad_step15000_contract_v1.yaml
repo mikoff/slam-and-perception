@@ -1,0 +1,113 @@
+schema_version: proposal-phase4-quad-continuation-contract.v1
+status: prepared_not_launch_approved
+
+scope:
+  geometry: quad
+  pyramid_levels: [P3, P4, P5]
+  role: staged_experiment
+  production_incumbent_changes: false
+  siglip: deferred
+
+dataset:
+  id: phase3-production-bg-policy-v2-2026-08-29
+  manifest_sha256: c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c
+  contract_sha256: 0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a
+  train_manifest_sha256: dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457
+  validation_manifest_sha256: 68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf
+  validation_subset_sha256: e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806
+
+configuration:
+  path: configs/correction_phase4_quad_p3_local_rtx3060_step15000_v1.yaml
+  sha256: b6f060a13d49ddbca59c164cd09e2fea6da719e5c314f9df92ec67e385550218
+  must_match_step10000_recipe: true
+
+initialization:
+  required: false
+
+resume:
+  mode: exact_full_state
+  artifact: artifacts/phase4/local_quad_p3_seed42_step10000_v1/last.pt
+  artifact_sha256: bb438343f4898be4109365769f2ff0ea6f4052d5c24a2eb983268f4f7720812c
+  source_run_contract: artifacts/phase4/local_quad_p3_seed42_step10000_v1/run_contract.json
+  source_run_contract_sha256: fb01cf464abf5b62719f7ed1ef4f2a3fce33136623c48771ddbef401d4eb6857
+  source_global_step: 10000
+  source_epoch: 10
+  source_batch_in_epoch: 16
+  source_epoch_complete: false
+  source_commit: 3b87ca92684f02c72fb69343ac689f9dc9f2c3cf
+  source_optimizer_step_skips: 2
+  interrupted_stage_artifact: artifacts/phase4/local_quad_p3_seed42_step15000_v1/last.pt
+  interrupted_stage_step_range: [10001, 14999]
+  allowed_config_overrides:
+    - schedule.optimizer_step_skip_policy
+    - schedule.max_optimizer_step_skips
+  preserve:
+    - model
+    - ema_model
+    - optimizer
+    - scheduler
+    - scaler
+    - sampler_position
+    - rng_state
+    - best_scores
+    - optimizer_step_skips
+
+optimization:
+  target_global_step: 15000
+  additional_successful_steps: 5000
+  scheduling_horizon_steps: 20000
+  microbatch: 16
+  accumulation_steps: 8
+  effective_batch: 128
+  checkpoint_every_optimizer_steps: 500
+  optimizer_step_skip_policy: bounded
+  maximum_optimizer_step_skips: 4
+  output_dir: artifacts/phase4/local_quad_p3_seed42_step15000_v1
+  initial_output_must_be_absent: true
+
+entry_evidence:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  selected_operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+    scope: phase4_candidate_evaluation
+  suppression_sweep:
+    path: artifacts/phase4/local_quad_p3_seed42_step10000_v1/suppression_sweep_step10000_ema.json
+    sha256: d05794cf92894496523f2e45dffde42b6751f25e715e0fa0d0506e4febf6a0f8
+  diversity_audit:
+    path: artifacts/phase4/local_quad_p3_seed42_step10000_v1/proposal_diversity_800_step10000_nms075_ema.json
+    sha256: ad3c89b9deb88ed1160b1ecc901cb35a5898c419375d5d99c120aa90497c9531
+  observed:
+    ar_100: 0.26135450545245836
+    recall_100_iou_075: 0.2309163956380333
+    duplicate_fraction: 0.08142080628114148
+    all_pair_iou_050_fraction: 0.02725965650543793
+    unmatched_pair_iou_075_fraction: 0.0
+    unmatched_iou_075_cluster_p95: 1.0
+    unmatched_iou_075_cluster_ge_20_image_fraction: 0.0
+  gates:
+    ar_100_minimum: 0.240
+    recall_100_iou_075_minimum: 0.205
+    duplicate_fraction_maximum: 0.090
+    all_pair_iou_050_fraction_maximum: 0.040
+    unmatched_pair_iou_075_fraction_maximum: 0.0075
+    unmatched_iou_075_cluster_p95_maximum: 8
+    unmatched_iou_075_cluster_ge_20_image_fraction_maximum: 0.0
+  result: all_gates_pass
+
+exit_evaluation:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+  required_reports:
+    - proposal_utility
+    - proposal_diversity
+  reuse_entry_gates: true
+
+decision:
+  step15000_launch: requires_separate_owner_approval
+  step20000_launch: requires_all_exit_gates_and_separate_owner_approval
+  promotion: requires_final_frozen_audit_and_separate_owner_approval

@@ -1,5 +1,5 @@
 schema_version: proposal-phase4-quad-continuation-contract.v1
-status: final_recovery_approved_not_relaunched
+status: completed_step15000_preparation_approved
 
 scope:
   geometry: quad
@@ -40,8 +40,8 @@ resume:
   source_commit: 90dbceb0070c0a0bcc52b6a260f5d2b3954422b4
   interrupted_stage_artifact: artifacts/phase4/local_quad_p3_seed42_step10000_v1/last.pt
   interrupted_stage_step_range: [5001, 9999]
-  latest_durable_global_step: 9000
-  latest_durable_artifact_sha256: df2357c7d291b60d9ff51fc9703bed3534a5d8883887366a8e74eec1cbc999f6
+  latest_durable_global_step: 10000
+  latest_durable_artifact_sha256: bb438343f4898be4109365769f2ff0ea6f4052d5c24a2eb983268f4f7720812c
   persisted_optimizer_step_skips: 2
   allowed_config_overrides:
     - schedule.optimizer_step_skip_policy
@@ -72,9 +72,19 @@ optimization:
 evaluation:
   checkpoint_state: ema_model
   frozen_images: 800
+  selected_operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+    scope: phase4_candidate_evaluation
   required_reports:
     - proposal_utility
     - proposal_diversity
+  suppression_sweep:
+    path: artifacts/phase4/local_quad_p3_seed42_step10000_v1/suppression_sweep_step10000_ema.json
+    sha256: d05794cf92894496523f2e45dffde42b6751f25e715e0fa0d0506e4febf6a0f8
+  diversity_audit:
+    path: artifacts/phase4/local_quad_p3_seed42_step10000_v1/proposal_diversity_800_step10000_nms075_ema.json
+    sha256: ad3c89b9deb88ed1160b1ecc901cb35a5898c419375d5d99c120aa90497c9531
   continuation_gates:
     ar_100_minimum: 0.240
     recall_100_iou_075_minimum: 0.205
@@ -87,9 +97,10 @@ evaluation:
     - proposal_object_fraction
     - unmatched_fraction
     - trusted_background_false_fraction
+  result: all_gates_pass
 
 decision:
-  step10000_launch: separate_owner_approval
-  step15000_launch: requires_all_gates_and_separate_owner_approval
+  step10000_launch: completed
+  step15000_launch: preparation_owner_approved_launch_not_approved
   step20000_launch: requires_all_gates_and_separate_owner_approval
   promotion: requires_final_frozen_audit_and_separate_owner_approval

@@ -55,13 +55,24 @@ PHASE4_QUAD_PILOT_CONFIG = (
 PHASE4_QUAD_PILOT_CONTRACT = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_quad_pilot_contract_v1.yaml"
 )
-PHASE4_QUAD_CONTINUATION_CONFIG = (
+PHASE4_QUAD_STEP10000_CONFIG = (
     PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step10000_v1.yaml"
 ).resolve()
-PHASE4_QUAD_CONTINUATION_CONTRACT = (
+PHASE4_QUAD_STEP10000_CONTRACT = (
     PROJECT_ROOT
     / "configs/benchmarks/correction_phase4_quad_continuation_contract_v1.yaml"
 )
+PHASE4_QUAD_STEP15000_CONFIG = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step15000_v1.yaml"
+).resolve()
+PHASE4_QUAD_STEP15000_CONTRACT = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_step15000_contract_v1.yaml"
+)
+PHASE4_QUAD_CONTINUATION_CONTRACTS = {
+    PHASE4_QUAD_STEP10000_CONFIG: PHASE4_QUAD_STEP10000_CONTRACT,
+    PHASE4_QUAD_STEP15000_CONFIG: PHASE4_QUAD_STEP15000_CONTRACT,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -249,11 +260,13 @@ def main() -> None:
             f"validation={identity['validation_manifest_sha256']} "
             f"indexes={identity['index_schema']}"
         )
-    elif args.config.resolve() == PHASE4_QUAD_CONTINUATION_CONFIG:
+    elif args.config.resolve() in PHASE4_QUAD_CONTINUATION_CONTRACTS:
         identity = verify_phase4_quad_continuation_inputs(
             config,
             config_path=args.config,
-            training_contract_path=PHASE4_QUAD_CONTINUATION_CONTRACT,
+            training_contract_path=PHASE4_QUAD_CONTINUATION_CONTRACTS[
+                args.config.resolve()
+            ],
             resume_path=args.resume,
             target_global_step=args.max_steps,
         )

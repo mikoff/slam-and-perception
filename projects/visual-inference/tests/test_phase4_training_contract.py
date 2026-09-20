@@ -35,6 +35,13 @@ QUAD_CONTINUATION_CONTRACT_PATH = (
     PROJECT_ROOT
     / "configs/benchmarks/correction_phase4_quad_continuation_contract_v1.yaml"
 )
+QUAD_STEP15000_CONFIG_PATH = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step15000_v1.yaml"
+)
+QUAD_STEP15000_CONTRACT_PATH = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_step15000_contract_v1.yaml"
+)
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
 )
@@ -244,7 +251,41 @@ def test_quad_continuation_preserves_recipe_and_binds_stage(
     assert contract["optimization"]["maximum_optimizer_step_skips"] == (
         continuation.schedule.max_optimizer_step_skips
     )
-    assert contract["decision"]["step15000_launch"].startswith("requires_all_gates")
+    assert contract["evaluation"]["result"] == "all_gates_pass"
+    assert contract["decision"]["step15000_launch"] == (
+        "preparation_owner_approved_launch_not_approved"
+    )
+
+
+def test_quad_step15000_preserves_recipe_and_binds_approved_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    step10000 = load_phase3_config(QUAD_CONTINUATION_CONFIG_PATH)
+    step15000 = load_phase3_config(QUAD_STEP15000_CONFIG_PATH)
+    contract = yaml.safe_load(QUAD_STEP15000_CONTRACT_PATH.read_text(encoding="utf-8"))
+
+    assert step15000 == replace(
+        step10000,
+        output_dir=PROJECT_ROOT / "artifacts/phase4/local_quad_p3_seed42_step15000_v1",
+    )
+    assert contract["configuration"]["sha256"] == _sha256(QUAD_STEP15000_CONFIG_PATH)
+    assert contract["resume"]["source_global_step"] == 10_000
+    assert contract["resume"]["source_optimizer_step_skips"] == 2
+    assert contract["optimization"]["target_global_step"] == 15_000
+    assert contract["optimization"]["additional_successful_steps"] == 5_000
+    assert contract["optimization"]["maximum_optimizer_step_skips"] == (
+        step15000.schedule.max_optimizer_step_skips
+    )
+    assert contract["entry_evidence"]["selected_operating_point"] == {
+        "nms_iou_threshold": 0.75,
+        "score_threshold": 0.20,
+        "scope": "phase4_candidate_evaluation",
+    }
+    assert contract["entry_evidence"]["result"] == "all_gates_pass"
+    assert contract["decision"]["step15000_launch"] == (
+        "requires_separate_owner_approval"
+    )
 
 
 def test_phase4_local_launch_accepts_exact_dataset_identity(
@@ -306,6 +347,61 @@ def test_phase4_quad_continuation_accepts_exact_resume_and_new_output(
 
     assert result["resume_sha256"] == _sha256(resume)
     assert result["resume_mode"] == "initial"
+
+
+def test_phase4_quad_continuation_rejects_changed_entry_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, contract_path, _, _ = _write_phase4_identity_fixture(tmp_path, monkeypatch)
+    config_path = tmp_path / "configs/continuation.yaml"
+    config_path.parent.mkdir()
+    config_path.write_text("continuation-config\n", encoding="utf-8")
+    resume = tmp_path / "resume.pt"
+    resume.write_bytes(b"step-10000-full-state")
+    output = tmp_path / "step15000"
+    config = replace(config, output_dir=output)
+    sweep = tmp_path / "sweep.json"
+    diversity = tmp_path / "diversity.json"
+    sweep.write_text("sweep\n", encoding="utf-8")
+    diversity.write_text("diversity\n", encoding="utf-8")
+    contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
+    contract.update(
+        {
+            "configuration": {"sha256": _sha256(config_path)},
+            "resume": {
+                "artifact": "resume.pt",
+                "artifact_sha256": _sha256(resume),
+                "interrupted_stage_artifact": "step15000/last.pt",
+                "interrupted_stage_step_range": [10_001, 14_999],
+            },
+            "optimization": {
+                "target_global_step": 15_000,
+                "output_dir": "step15000",
+                "initial_output_must_be_absent": True,
+            },
+            "entry_evidence": {
+                "suppression_sweep": {
+                    "path": "sweep.json",
+                    "sha256": _sha256(sweep),
+                },
+                "diversity_audit": {
+                    "path": "diversity.json",
+                    "sha256": _sha256(diversity),
+                },
+            },
+        }
+    )
+    contract_path.write_text(yaml.safe_dump(contract), encoding="utf-8")
+    diversity.write_text("changed\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="diversity_audit SHA-256 mismatch"):
+        verify_phase4_quad_continuation_inputs(
+            config,
+            config_path=config_path,
+            training_contract_path=contract_path,
+            resume_path=resume,
+            target_global_step=15_000,
+        )
 
 
 def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(

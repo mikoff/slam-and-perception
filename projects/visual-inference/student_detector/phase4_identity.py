@@ -192,7 +192,7 @@ def verify_phase4_quad_continuation_inputs(
     resume_path: Path | None,
     target_global_step: int | None,
 ) -> dict[str, str]:
-    """Verify the exact step-5k resume and isolated step-10k output boundary."""
+    """Verify an exact staged resume and its isolated output boundary."""
     identity = verify_phase4_launch_inputs(
         config,
         training_contract_path=training_contract_path,
@@ -208,6 +208,24 @@ def verify_phase4_quad_continuation_inputs(
     resume = _mapping(contract.get("resume"), "resume")
     optimization = _mapping(contract.get("optimization"), "optimization")
     project_root = config_path.resolve().parent.parent
+
+    entry_evidence = contract.get("entry_evidence")
+    if entry_evidence is not None:
+        evidence = _mapping(entry_evidence, "entry evidence")
+        for report_name in ("suppression_sweep", "diversity_audit"):
+            report = _mapping(evidence.get(report_name), report_name)
+            report_path = Path(str(report["path"]))
+            if not report_path.is_absolute():
+                report_path = project_root / report_path
+            if not report_path.is_file():
+                raise FileNotFoundError(
+                    f"Phase 4 {report_name} is missing: {report_path}"
+                )
+            _require_equal(
+                f"{report_name} SHA-256",
+                sha256_file(report_path),
+                report["sha256"],
+            )
 
     _require_equal(
         "continuation config SHA-256",
@@ -288,8 +306,8 @@ def verify_phase4_quad_continuation_inputs(
         resume_mode = "interrupted_stage"
     else:
         raise ValueError(
-            "Phase 4 continuation resume path must be the immutable step-5k "
-            f"source or the stage recovery checkpoint, found {actual_resume}"
+            "Phase 4 continuation resume path must be the immutable source "
+            f"artifact or the stage recovery checkpoint, found {actual_resume}"
         )
     return {
         **identity,

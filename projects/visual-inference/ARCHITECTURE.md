@@ -56,8 +56,8 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Shared proposal-evaluation helpers prepare models, masks, ego regions, and
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
 - Diversity audits cover `[N,4,2]` overlap clusters, spatial/scale diversity, and unmatched isolation.
-- The Phase 2 quad EMA stays incumbent; isolated full-state quad continuation reached 10k.
-- Its run contract hash-binds the parent; 15k/20k require all gates and owner approval.
+- The Phase 2 quad EMA stays incumbent; 10k passed all gates at candidate NMS 0.75.
+- Continuation contracts hash-bind parent checkpoints and gate reports; later stages need owner approval.
 - Future ranking/background-loss work needs a new contract and step-named artifacts; it is not a Phase 4 resume.
 
 # Local Constraints & Gotchas
@@ -76,5 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad use 16 × 8. The 10k quad candidate awaits an owner-approved
-  suppression decision; total unmatched remains diagnostic rather than a sole gate.
+- Local HBB and quad use 16 × 8. The isolated 10k→15k stage is prepared but
+  not launch-approved; total unmatched remains diagnostic rather than a sole gate.
