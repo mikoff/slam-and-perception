@@ -42,6 +42,13 @@ QUAD_STEP15000_CONTRACT_PATH = (
     PROJECT_ROOT
     / "configs/benchmarks/correction_phase4_quad_step15000_contract_v1.yaml"
 )
+QUAD_STEP20000_CONFIG_PATH = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step20000_v1.yaml"
+)
+QUAD_STEP20000_CONTRACT_PATH = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_step20000_contract_v1.yaml"
+)
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
 )
@@ -283,7 +290,43 @@ def test_quad_step15000_preserves_recipe_and_binds_approved_evidence(
         "scope": "phase4_candidate_evaluation",
     }
     assert contract["entry_evidence"]["result"] == "all_gates_pass"
-    assert contract["decision"]["step15000_launch"] == (
+    assert contract["status"] == "completed_and_audited"
+    assert contract["decision"]["step15000_launch"] == "owner_approved_completed"
+    assert contract["exit_evidence"]["result"] == "all_gates_pass"
+
+
+def test_quad_step20000_preserves_recipe_and_binds_audited_step15000(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    step15000 = load_phase3_config(QUAD_STEP15000_CONFIG_PATH)
+    step20000 = load_phase3_config(QUAD_STEP20000_CONFIG_PATH)
+    contract = yaml.safe_load(QUAD_STEP20000_CONTRACT_PATH.read_text(encoding="utf-8"))
+
+    assert step20000 == replace(
+        step15000,
+        output_dir=PROJECT_ROOT / "artifacts/phase4/local_quad_p3_seed42_step20000_v1",
+    )
+    assert contract["configuration"]["sha256"] == _sha256(QUAD_STEP20000_CONFIG_PATH)
+    assert contract["resume"]["source_global_step"] == 15_000
+    assert contract["resume"]["source_optimizer_step_skips"] == 4
+    assert contract["resume"]["source_run_contract_sha256"] == _sha256(
+        PROJECT_ROOT
+        / "artifacts/phase4/local_quad_p3_seed42_step15000_v1/run_contract.json"
+    )
+    assert contract["optimization"]["target_global_step"] == 20_000
+    assert contract["optimization"]["additional_successful_steps"] == 5_000
+    assert contract["optimization"]["remaining_optimizer_step_skips"] == 0
+    assert contract["optimization"]["maximum_optimizer_step_skips"] == (
+        step20000.schedule.max_optimizer_step_skips
+    )
+    assert contract["entry_evidence"]["proposal_utility"]["sha256"] == _sha256(
+        PROJECT_ROOT
+        / "artifacts/phase4/local_quad_p3_seed42_step15000_v1"
+        / "utility_step15000_ema_frozen_dataset.json"
+    )
+    assert contract["entry_evidence"]["result"] == "all_gates_pass"
+    assert contract["decision"]["step20000_launch"] == (
         "requires_separate_owner_approval"
     )
 

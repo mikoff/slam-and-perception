@@ -1,5 +1,5 @@
 schema_version: proposal-phase4-quad-continuation-contract.v1
-status: prepared_not_launch_approved
+status: completed_and_audited
 
 scope:
   geometry: quad
@@ -107,7 +107,19 @@ exit_evaluation:
     - proposal_diversity
   reuse_entry_gates: true
 
+exit_evidence:
+  proposal_utility:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/utility_step15000_ema_frozen_dataset.json
+    sha256: 3b12e0f4e33a1ffd1299ed05fa0d25a9cc1c710d361b8dddbd076097ae5da6a4
+  suppression_sweep:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/suppression_sweep_step15000_ema.json
+    sha256: 981c85eb6ab196282423b253e126f8e1d265a4dbdef8c95af9f67ce1fe82491a
+  diversity_audit:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/proposal_diversity_800_step15000_nms075_ema.json
+    sha256: 94b614de7041d66e076cbc69f4196c5f39ccc31b76bd6a60a1b8eadb57f0ce4d
+  result: all_gates_pass
+
 decision:
-  step15000_launch: requires_separate_owner_approval
+  step15000_launch: owner_approved_completed
   step20000_launch: requires_all_exit_gates_and_separate_owner_approval
   promotion: requires_final_frozen_audit_and_separate_owner_approval

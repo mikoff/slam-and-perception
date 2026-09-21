@@ -21,8 +21,8 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   geometry-specific NMS remain outside the exported network.
 - Both geometry adapters consume one sampled affine/photometric policy; validation
   is letterbox-only and effective bounds/exclusions are recorded in run metadata.
-- Phase 4 local pilots use FP16 `[B=16, 3, 384, 384]` with accumulation 8;
-  no Packet or full 20,000-step run was launched.
+- Phase 4 local runs use FP16 `[B=16, 3, 384, 384]` with accumulation 8;
+  the 20,000-step quad continuation is prepared but has not been launched.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - A weights-only warm start resets optimizer, scheduler, and EMA; full resume
@@ -56,7 +56,7 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Shared proposal-evaluation helpers prepare models, masks, ego regions, and
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
 - Diversity audits cover `[N,4,2]` overlap clusters, spatial/scale diversity, and unmatched isolation.
-- The Phase 2 quad EMA stays incumbent; 10k passed all gates at candidate NMS 0.75.
+- The Phase 2 quad EMA stays incumbent; 15k passed all gates at candidate NMS 0.75.
 - Continuation contracts hash-bind parent checkpoints and gate reports; later stages need owner approval.
 - Future ranking/background-loss work needs a new contract and step-named artifacts; it is not a Phase 4 resume.
 
@@ -76,5 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad use 16 × 8. The isolated 10k→15k stage is prepared but
-  not launch-approved; total unmatched remains diagnostic rather than a sole gate.
+- Local HBB and quad use 16 × 8. The isolated 15k→20k stage keeps the exhausted
+  four-skip ceiling; any new AMP skip aborts. Total unmatched remains diagnostic.

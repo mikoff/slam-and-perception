@@ -1,6 +1,6 @@
 # Phase 4 quad continuation to step 15,000
 
-Status: prepared, verified, and not launch-approved.
+Status: completed and audited.
 
 ## Contract
 
@@ -28,9 +28,7 @@ The training recipe retains its embedded NMS `0.70` for exact continuity. The
 frozen entry and exit decisions explicitly use candidate NMS `0.75`; suppression
 does not affect optimizer updates.
 
-## Prepared launch command
-
-Run only after separate owner approval and after committing the preparation:
+## Executed launch contract
 
 ```bash
 PHASE2_DATASET_ROOT=/media/sashamikoff/fb.com-mikoff/datasets/generated/phase3-production-bg-policy-v2-2026-08-29/output \
@@ -41,12 +39,20 @@ uv run python scripts/train_quad_proposals.py \
   --max-steps 15000 --device cuda
 ```
 
-The output directory must be absent on the initial launch. If interrupted after
-a durable checkpoint, resume only from
-`artifacts/phase4/local_quad_p3_seed42_step15000_v1/last.pt`.
+The run completed at step 15,000 with four cumulative AMP skips. Its EMA was
+evaluated on the same frozen 800-image cohort at NMS `0.75`, score `0.20`.
 
-## Exit decision
+## Exit result
 
-Evaluate the step-15k EMA on the same frozen 800-image cohort at NMS `0.75` and
-score `0.20`. Step 20k requires every existing continuation gate to pass and a
-separate owner decision. Production promotion remains out of scope.
+| Metric | Step 15k | Gate | Result |
+|---|---:|---:|---|
+| AR@100 | 0.26646 | >= 0.240 | pass |
+| Recall@100 IoU 0.75 | 0.23972 | >= 0.205 | pass |
+| Duplicate fraction | 0.08888 | <= 0.090 | pass |
+| All-pair IoU 0.50 fraction | 0.02830 | <= 0.040 | pass |
+| Unmatched-pair IoU 0.75 fraction | 0.00000 | <= 0.0075 | pass |
+| Unmatched IoU 0.75 cluster p95 | 1 | <= 8 | pass |
+
+All continuation gates passed. The duplicate gate has only 0.00112 absolute
+headroom, so the 15k→20k stage keeps the cumulative four-skip ceiling and must
+be audited before any production promotion.

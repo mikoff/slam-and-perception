@@ -69,9 +69,17 @@ PHASE4_QUAD_STEP15000_CONTRACT = (
     PROJECT_ROOT
     / "configs/benchmarks/correction_phase4_quad_step15000_contract_v1.yaml"
 )
+PHASE4_QUAD_STEP20000_CONFIG = (
+    PROJECT_ROOT / "configs/correction_phase4_quad_p3_local_rtx3060_step20000_v1.yaml"
+).resolve()
+PHASE4_QUAD_STEP20000_CONTRACT = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_step20000_contract_v1.yaml"
+)
 PHASE4_QUAD_CONTINUATION_CONTRACTS = {
     PHASE4_QUAD_STEP10000_CONFIG: PHASE4_QUAD_STEP10000_CONTRACT,
     PHASE4_QUAD_STEP15000_CONFIG: PHASE4_QUAD_STEP15000_CONTRACT,
+    PHASE4_QUAD_STEP20000_CONFIG: PHASE4_QUAD_STEP20000_CONTRACT,
 }
 
 

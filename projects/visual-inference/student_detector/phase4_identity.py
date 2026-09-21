@@ -209,10 +209,31 @@ def verify_phase4_quad_continuation_inputs(
     optimization = _mapping(contract.get("optimization"), "optimization")
     project_root = config_path.resolve().parent.parent
 
+    source_run_contract = resume.get("source_run_contract")
+    if source_run_contract is not None:
+        source_run_contract_path = Path(str(source_run_contract))
+        if not source_run_contract_path.is_absolute():
+            source_run_contract_path = project_root / source_run_contract_path
+        if not source_run_contract_path.is_file():
+            raise FileNotFoundError(
+                f"Phase 4 source run contract is missing: {source_run_contract_path}"
+            )
+        _require_equal(
+            "source run contract SHA-256",
+            sha256_file(source_run_contract_path),
+            resume["source_run_contract_sha256"],
+        )
+
     entry_evidence = contract.get("entry_evidence")
     if entry_evidence is not None:
         evidence = _mapping(entry_evidence, "entry evidence")
-        for report_name in ("suppression_sweep", "diversity_audit"):
+        for report_name in (
+            "proposal_utility",
+            "suppression_sweep",
+            "diversity_audit",
+        ):
+            if report_name not in evidence:
+                continue
             report = _mapping(evidence.get(report_name), report_name)
             report_path = Path(str(report["path"]))
             if not report_path.is_absolute():

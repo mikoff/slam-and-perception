@@ -1,0 +1,118 @@
+schema_version: proposal-phase4-quad-continuation-contract.v1
+status: prepared_not_launch_approved
+
+scope:
+  geometry: quad
+  pyramid_levels: [P3, P4, P5]
+  role: final_scheduled_continuation
+  production_incumbent_changes: false
+  siglip: deferred
+
+dataset:
+  id: phase3-production-bg-policy-v2-2026-08-29
+  manifest_sha256: c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c
+  contract_sha256: 0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a
+  train_manifest_sha256: dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457
+  validation_manifest_sha256: 68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf
+  validation_subset_sha256: e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806
+
+configuration:
+  path: configs/correction_phase4_quad_p3_local_rtx3060_step20000_v1.yaml
+  sha256: 9bded33bb9b02057410ef1acab2ca9dcaaa94ac84506848b92021650c87cd3c5
+  must_match_step15000_recipe: true
+
+initialization:
+  required: false
+
+resume:
+  mode: exact_full_state
+  artifact: artifacts/phase4/local_quad_p3_seed42_step15000_v1/last.pt
+  artifact_sha256: d6e06957ec79d811c26fa72ef35875abf3005463932fde3a64ec3489bfa48b40
+  source_run_contract: artifacts/phase4/local_quad_p3_seed42_step15000_v1/run_contract.json
+  source_run_contract_sha256: 85a16249e207dd7aaf0498a8470c44a9d5429c8c16ca0631fed7ebe8c7163ba8
+  source_global_step: 15000
+  source_epoch: 15
+  source_batch_in_epoch: 32
+  source_epoch_complete: false
+  source_commit: bfb99e0a1a6ae7e977041920c5fd1cd7bf767bcf
+  source_optimizer_step_skips: 4
+  interrupted_stage_artifact: artifacts/phase4/local_quad_p3_seed42_step20000_v1/last.pt
+  interrupted_stage_step_range: [15001, 19999]
+  allowed_config_overrides:
+    - schedule.optimizer_step_skip_policy
+    - schedule.max_optimizer_step_skips
+  preserve:
+    - model
+    - ema_model
+    - optimizer
+    - scheduler
+    - scaler
+    - sampler_position
+    - rng_state
+    - best_scores
+    - optimizer_step_skips
+
+optimization:
+  target_global_step: 20000
+  additional_successful_steps: 5000
+  scheduling_horizon_steps: 20000
+  microbatch: 16
+  accumulation_steps: 8
+  effective_batch: 128
+  checkpoint_every_optimizer_steps: 500
+  optimizer_step_skip_policy: bounded
+  maximum_optimizer_step_skips: 4
+  remaining_optimizer_step_skips: 0
+  output_dir: artifacts/phase4/local_quad_p3_seed42_step20000_v1
+  initial_output_must_be_absent: true
+
+entry_evidence:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  selected_operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+    scope: phase4_candidate_evaluation
+  proposal_utility:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/utility_step15000_ema_frozen_dataset.json
+    sha256: 3b12e0f4e33a1ffd1299ed05fa0d25a9cc1c710d361b8dddbd076097ae5da6a4
+  suppression_sweep:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/suppression_sweep_step15000_ema.json
+    sha256: 981c85eb6ab196282423b253e126f8e1d265a4dbdef8c95af9f67ce1fe82491a
+  diversity_audit:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/proposal_diversity_800_step15000_nms075_ema.json
+    sha256: 94b614de7041d66e076cbc69f4196c5f39ccc31b76bd6a60a1b8eadb57f0ce4d
+  observed:
+    ar_100: 0.26646259804859385
+    recall_100_iou_050: 0.526114405969007
+    recall_100_iou_075: 0.23971685479242394
+    duplicate_fraction: 0.08888018299232898
+    all_pair_iou_050_fraction: 0.028299331567805883
+    unmatched_pair_iou_075_fraction: 0.0
+    unmatched_iou_075_cluster_p95: 1.0
+    unmatched_iou_075_cluster_ge_20_image_fraction: 0.0
+  gates:
+    ar_100_minimum: 0.240
+    recall_100_iou_075_minimum: 0.205
+    duplicate_fraction_maximum: 0.090
+    all_pair_iou_050_fraction_maximum: 0.040
+    unmatched_pair_iou_075_fraction_maximum: 0.0075
+    unmatched_iou_075_cluster_p95_maximum: 8
+    unmatched_iou_075_cluster_ge_20_image_fraction_maximum: 0.0
+  result: all_gates_pass
+
+exit_evaluation:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+  required_reports:
+    - proposal_utility
+    - suppression_sweep
+    - proposal_diversity
+  reuse_entry_gates: true
+
+decision:
+  step20000_launch: requires_separate_owner_approval
+  promotion: requires_final_frozen_audit_and_separate_owner_approval
