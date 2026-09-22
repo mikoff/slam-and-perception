@@ -1,0 +1,93 @@
+{
+  "schema_version": "proposal-phase4-selection.v2",
+  "status": "complete_owner_approved",
+  "dataset": {
+    "id": "phase3-production-bg-policy-v2-2026-08-29",
+    "contract_sha256": "0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a",
+    "train_manifest_sha256": "dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457",
+    "validation_manifest_sha256": "68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf",
+    "frozen_800_subset_sha256": "e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806",
+    "full_validation_subset_sha256": "b47d0982991e6a51e0f46965983d0c134223a3b712a0c3e27a408fcf71d28ad3",
+    "full_validation_images": 32268,
+    "full_validation_ground_truth": 175977
+  },
+  "decision": {
+    "primary": "phase3_cloud_quad_ema",
+    "control": "phase4_current_quad_19995_ema",
+    "reason": "At bounded NMS 0.78 the fully trained cloud EMA keeps its full-validation localization advantage while reducing duplicate proposals to within 0.50 percentage points of the current control.",
+    "siglip_boundary": "Use the selected primary for downstream integration and retain the current model as the proposal-only control."
+  },
+  "models": {
+    "phase3_cloud_quad_ema": {
+      "checkpoint": "artifacts/phase3/checkpoints/best_ema.pt",
+      "checkpoint_sha256": "deee0ce3919ffdc0f6c68d675896efe55831327a3c22cd605fc8b71264f3c71f",
+      "checkpoint_state": "ema_model",
+      "epoch": 39,
+      "global_step": 83684,
+      "nms_iou_threshold": 0.78,
+      "score_threshold": 0.2,
+      "max_proposals": 100
+    },
+    "phase4_current_quad_19995_ema": {
+      "checkpoint": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/best_ema.pt",
+      "checkpoint_sha256": "c9b00311f8758072299ec6437a043091e902b818d8481bf71b8e4de239183c2b",
+      "checkpoint_state": "ema_model",
+      "global_step": 19995,
+      "nms_iou_threshold": 0.75,
+      "score_threshold": 0.2,
+      "max_proposals": 100
+    }
+  },
+  "full_validation_metrics": {
+    "phase3_cloud_quad_ema": {
+      "ar_100": 0.411212261,
+      "recall_100_iou_050": 0.656506248,
+      "recall_100_iou_075": 0.445222955,
+      "object_coverage": 0.800342446,
+      "proposal_object_fraction": 0.274071216,
+      "unmatched_fraction": 0.730265604,
+      "duplicate_fraction": 0.076652874,
+      "pairwise_iou_050_fraction": 0.031859992
+    },
+    "phase4_current_quad_19995_ema": {
+      "ar_100": 0.353795666,
+      "recall_100_iou_050": 0.631082471,
+      "recall_100_iou_075": 0.361081278,
+      "object_coverage": 0.812902945,
+      "proposal_object_fraction": 0.310508137,
+      "unmatched_fraction": 0.683491507,
+      "duplicate_fraction": 0.071644644,
+      "pairwise_iou_050_fraction": 0.025717054
+    }
+  },
+  "evidence": {
+    "cloud_full_validation": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/full_validation_phase3_cloud_nms078.json",
+      "sha256": "386f040a4c51ffd3cb39d533bcb00be0b175dfb0a0da41786a0ad3e37ac7118b"
+    },
+    "current_full_validation": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/full_validation_current20k_nms075.json",
+      "sha256": "01c646d6849616a9407f9876ccd50918c3e2fb0d3806a5ae6b3f279f93757cf4"
+    },
+    "cloud_bounded_suppression": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/suppression_sweep_phase3_cloud_ema_narrow_frozen800.json",
+      "sha256": "63eb72df3d187c7014d809d5306672027cc418644abc74bb9acd265983efe881"
+    },
+    "cloud_diversity": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/proposal_diversity_800_phase3_cloud_nms078_ema.json",
+      "sha256": "e596094b33530b1bb69d1580eaa0cce60779bbf694887df5918dc4be992d7d05"
+    },
+    "current_diversity": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/proposal_diversity_800_step19995_nms075_ema.json",
+      "sha256": "cfcb4a843c846df142376659eca50dfb82c86a8edfaeb124455c6ae7125e14cd"
+    },
+    "visual_audit_manifest": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/visual_audit_frozen_800_cloud_quad_vs_current/audit_manifest.json",
+      "sha256": "d71cef241e4ac04c66aff748c1419b6ef8f597b8c4618aea7743188203779c7a"
+    },
+    "dashboard": {
+      "path": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/quad_selection_frozen_800.html",
+      "sha256": "f0d86e4d028b708d02d57cfb4f04737ed75c3ebb5a7ec49c6311faea5f62ae33"
+    }
+  }
+}

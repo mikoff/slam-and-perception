@@ -1,6 +1,6 @@
 # Phase 4 step-20k recovery
 
-Status: prepared and verified; launch requires owner approval after commit.
+Status: interrupted intentionally at step 19,735 after the sixth AMP skip.
 
 ## Incident and recovery boundary
 
@@ -37,3 +37,7 @@ uv run python scripts/train_quad_proposals.py \
 The first recovery preflight binds the exact step-17k hash and state. Later
 durable checkpoints in the same output may resume without weakening the skip
 limit. Completion still requires the frozen 800-image audit.
+
+Recovery accepted the fifth skip at step 18,428 and advanced to 19,735. Its
+sixth cumulative skip exceeded this contract; recovery v2 starts from the
+durable step-19,500 checkpoint.

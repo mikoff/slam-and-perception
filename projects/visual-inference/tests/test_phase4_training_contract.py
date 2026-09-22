@@ -57,6 +57,14 @@ QUAD_STEP20000_RECOVERY_CONTRACT_PATH = (
     PROJECT_ROOT
     / "configs/benchmarks/correction_phase4_quad_step20000_recovery_contract_v1.yaml"
 )
+QUAD_STEP20000_RECOVERY_V2_CONFIG_PATH = (
+    PROJECT_ROOT
+    / "configs/correction_phase4_quad_p3_local_rtx3060_step20000_recovery_v2.yaml"
+)
+QUAD_STEP20000_RECOVERY_V2_CONTRACT_PATH = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_step20000_recovery_contract_v2.yaml"
+)
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
 )
@@ -360,6 +368,33 @@ def test_quad_step20000_recovery_changes_only_cumulative_skip_limit(
     assert contract["optimization"]["maximum_optimizer_step_skips"] == 5
     assert contract["optimization"]["remaining_optimizer_step_skips"] == 1
     assert contract["incident"]["observed_global_step"] == 17_319
+    assert contract["status"] == "interrupted_at_step19735_skip_limit"
+    assert contract["decision"]["recovery_launch"] == "owner_approved_interrupted"
+
+
+def test_quad_step20000_recovery_v2_changes_only_cumulative_skip_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    recovery_v1 = load_phase3_config(QUAD_STEP20000_RECOVERY_CONFIG_PATH)
+    recovery_v2 = load_phase3_config(QUAD_STEP20000_RECOVERY_V2_CONFIG_PATH)
+    contract = yaml.safe_load(
+        QUAD_STEP20000_RECOVERY_V2_CONTRACT_PATH.read_text(encoding="utf-8")
+    )
+
+    assert recovery_v2 == replace(
+        recovery_v1,
+        schedule=replace(recovery_v1.schedule, max_optimizer_step_skips=6),
+    )
+    assert contract["configuration"]["sha256"] == _sha256(
+        QUAD_STEP20000_RECOVERY_V2_CONFIG_PATH
+    )
+    assert contract["resume"]["recovery_entry"]["global_step"] == 19_500
+    assert contract["resume"]["recovery_entry"]["optimizer_step_skips"] == 5
+    assert contract["optimization"]["successful_steps_remaining_from_checkpoint"] == 500
+    assert contract["optimization"]["maximum_optimizer_step_skips"] == 6
+    assert contract["optimization"]["remaining_optimizer_step_skips"] == 1
+    assert contract["incident"]["observed_global_step"] == 19_735
     assert contract["decision"]["recovery_launch"] == (
         "requires_separate_owner_approval"
     )

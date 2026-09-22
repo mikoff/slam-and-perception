@@ -1,20 +1,23 @@
 # Correction Phase 4 closeout
 
-Status: complete with the existing quad EMA checkpoint retained. No full
-20,000-step run, new production checkpoint, or deployment package is approved.
+Status: complete. The fully trained Phase 3 cloud quad EMA is the selected
+proposal detector; the Phase 4 19,995-step EMA is retained as the control.
 
 ## Decision
 
-The local matched pilots reject both Phase 4 challengers under the frozen
-proposal-utility constraints. HBB improves recall and coverage but materially
-reduces proposal object fraction and increases unmatched proposals. Continued
-quad training improves AR and high-IoU recall, but the same two quality measures
-move farther from the incumbent. Suppression calibration cannot remove the quad
-regression without losing protected coverage and small-object recall.
+Use `artifacts/phase3/checkpoints/best_ema.pt` (SHA-256
+`deee0ce3919ffdc0f6c68d675896efe55831327a3c22cd605fc8b71264f3c71f`)
+with EMA weights, NMS `0.78`, score threshold `0.20`, and K=100.
 
-The production incumbent remains the Phase 2 quad P3–P5 EMA state in
-`artifacts/phase2/short_v1/quad_p3/last.pt`, SHA-256
-`cf4d1a7228fab007317b1a9d6f2c037ccc139fa16e1c223a7d2d3a44fc8c095d`.
+The current control is
+`artifacts/phase4/local_quad_p3_seed42_step20000_v1/best_ema.pt` (SHA-256
+`c9b00311f8758072299ec6437a043091e902b818d8481bf71b8e4de239183c2b`)
+with EMA weights, NMS `0.75`, score threshold `0.20`, and K=100.
+
+The machine-readable selection contract is
+`configs/benchmarks/correction_phase4_quad_selection_v2.json`. Historical
+training configs remain unchanged because their hashes describe the runs that
+created the checkpoints; selected inference policies live in this contract.
 
 ## Bound identities
 
@@ -22,74 +25,53 @@ The production incumbent remains the Phase 2 quad P3–P5 EMA state in
 |---|---|
 | Dataset | `phase3-production-bg-policy-v2-2026-08-29` |
 | Dataset contract | `0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a` |
-| Train manifest | `dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457` |
 | Validation manifest | `68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf` |
-| Frozen 800-image subset | `e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806` |
-| HBB source commit | `565140437edcd472142d81bd958a3d0a30a637ea` |
-| Quad source commit | `90dbceb0070c0a0bcc52b6a260f5d2b3954422b4` |
+| Frozen 800 subset | `e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806` |
+| Full validation subset | `b47d0982991e6a51e0f46965983d0c134223a3b712a0c3e27a408fcf71d28ad3` |
+| Full validation | 32,268 images; 175,977 ground-truth objects |
 
-Both runs recorded clean project Git state, schema-8 indexes, identical source
-mixtures, seed 42, effective batch 128, FP16 training, and EMA evaluation.
+## Full-validation decision
 
-## Frozen utility result
+| Metric | Cloud EMA, 0.78 | Current 20k EMA, 0.75 |
+|---|---:|---:|
+| AR@100 | **41.12%** | 35.38% |
+| Recall@100/0.50 | **65.65%** | 63.11% |
+| Recall@100/0.75 | **44.52%** | 36.11% |
+| Object coverage | 80.03% | **81.29%** |
+| Proposal object fraction | 27.41% | **31.05%** |
+| Unmatched proposals | 73.03% | **68.35%** |
+| Trusted-background false | 0.83% | **0.46%** |
+| Duplicates | 7.67% | **7.16%** |
+| Pairwise IoU >= 0.50 | 3.19% | **2.57%** |
+| Small recall@100/0.50 | **74.93%** | 70.11% |
+| Tiny recall@100/0.50 | **5.17%** | 2.75% |
+| Thin recall@100/0.50 | **20.51%** | 17.14% |
 
-All values use the approved geometry-specific suppression policy and identical
-800-image cohort. Percentages are aggregate unless the row names a slice.
+The cloud checkpoint wins AR on every source and improves aggregate AR@100 by
+5.74 percentage points and recall@0.75 by 8.41 points. NMS `0.78` reduces its
+legacy duplication problem to 7.67%, only 0.50 points above the current
+control. The current model remains cleaner and has slightly broader object
+coverage, so it is retained as the downstream control rather than discarded.
 
-| Metric | Quad incumbent | Quad 2k | Quad 5k | HBB 2k |
-|---|---:|---:|---:|---:|
-| AR@100 | 16.56% | 21.52% | **24.30%** | 22.89% |
-| Recall@100/0.50 | 41.02% | 47.20% | 50.09% | **51.27%** |
-| Recall@100/0.75 | 10.96% | 17.24% | **20.83%** | 17.70% |
-| Object coverage | 70.37% | 74.72% | 77.33% | **87.53%** |
-| Proposal object fraction | **53.05%** | 52.97% | 50.66% | 43.71% |
-| Unmatched proposals | **46.56%** | 53.74% | 57.11% | 58.98% |
-| Trusted-background false | 1.95% | 1.47% | **1.28%** | 1.80% |
-| Duplicates | 10.50% | 8.79% | 8.24% | **7.16%** |
-| Small recall@100/0.50 | 33.41% | 35.45% | 37.09% | **43.51%** |
-| Thin recall@100/0.50 | 7.94% | 13.70% | **15.39%** | 14.60% |
+## Evidence
 
-HBB fails proposal-object-fraction and unmatched gates against the quad
-incumbent. The 2k quad diagnostic fails unmatched by +7.17 pp. At 5k, AR gains
-another +2.78 pp over 2k, while object fraction falls 2.31 pp and unmatched
-rises 3.38 pp. Against the incumbent, quad 5k fails object fraction by -2.39 pp
-and unmatched by +10.55 pp. This is a clear failure, not a warning-band result;
-seed 43 is not authorized.
+- Cloud full validation: `full_validation_phase3_cloud_nms078.json`, SHA-256
+  `386f040a4c51ffd3cb39d533bcb00be0b175dfb0a0da41786a0ad3e37ac7118b`.
+- Current full validation: `full_validation_current20k_nms075.json`, SHA-256
+  `01c646d6849616a9407f9876ccd50918c3e2fb0d3806a5ae6b3f279f93757cf4`.
+- Cloud bounded sweep: `suppression_sweep_phase3_cloud_ema_narrow_frozen800.json`,
+  SHA-256 `63eb72df3d187c7014d809d5306672027cc418644abc74bb9acd265983efe881`.
+- Corrected cluster audit: `proposal_diversity_800_phase3_cloud_nms078_ema.json`,
+  SHA-256 `e596094b33530b1bb69d1580eaa0cce60779bbf694887df5918dc4be992d7d05`.
+- Dashboard: `quad_selection_frozen_800.html`, SHA-256
+  `f0d86e4d028b708d02d57cfb4f04737ed75c3ebb5a7ec49c6311faea5f62ae33`.
+- Visual audit: `visual_audit_frozen_800_cloud_quad_vs_current/index.html`.
 
-## Suppression finding
+All evidence paths above are under
+`artifacts/phase4/local_quad_p3_seed42_step20000_v1/`.
 
-The bounded quad sweep covered NMS 0.70–0.85 and scores 0.20–0.40, followed by
-an evidence-guided NMS-0.80 score extension through 0.80. Scores through 0.40
-are effectively identical because the retained top 100 usually exceed 0.40.
-A 0.60 cutoff reduces unmatched to 47.68% but also lowers object coverage to
-68.27% and small recall to 29.89%. A 0.65 cutoff passes unmatched at 43.02%
-but retains only 61.97 proposals/image and further reduces protected recall.
-No tested operating point passes all incumbent-relative gates.
+## Phase boundary
 
-## Artifact evidence
-
-The machine-readable manifest is
-`configs/benchmarks/correction_phase4_closeout_v1.json`. Important report hashes:
-
-- HBB 2k utility: `d65337082682f7deccd30d88b16fcffb8388525f1ba428e0c935a068fda47360`;
-- quad 2k utility: `62f087fc72fea48070418e30cc17096e41cbbcb63cb1c67bd45013eb38c0ee3c`;
-- bounded suppression: `1eb985fff4f3d29d2dafe93875091bfa0fba656634d280c80edb44c91b4254da`;
-- high-score extension: `2d63f83851736dd97a358d7ebe5cd9587821c7bac66bacf4f0bc53207ac5675f`;
-- quad 5k utility: `b2444ab027192fbe638c7bae0fe986db79129d681c1b8a3ac6c9f913f0d816aa`.
-
-The step-2,000 quad `best_ema.pt` had SHA-256
-`381e88477b309aa7861b9b632d0158aae749776b30089117034c98a2cc1e4d90`
-when evaluated, but the in-place continuation replaced it with the step-5,000
-best EMA artifact. Its utility report remains valid and binds the original hash;
-the intermediate weights are not locally recoverable. Future staged experiments
-must use immutable step-named best checkpoints.
-
-## Closed and deferred work
-
-- Do not continue the unchanged recipe to 20,000 steps.
-- Do not promote or package either Phase 4 challenger.
-- Reuse the already evaluated/exported incumbent and its rollback evidence.
-- Any new ranking/background-loss correction requires a new versioned contract
-  and short matched pilot; it is not an automatic continuation of Phase 4.
-- SigLIP, semantic crop utility, INT8, physical RPi acceptance, and deployment
-  remain outside this proposal-only closeout.
+Proposal-model selection is closed. SigLIP integration should use the selected
+cloud checkpoint and keep the current 20k checkpoint as an A/B control. Further
+proposal training requires a new contract; it is not a continuation of Phase 4.

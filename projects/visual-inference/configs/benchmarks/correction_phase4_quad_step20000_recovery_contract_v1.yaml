@@ -1,5 +1,5 @@
 schema_version: proposal-phase4-quad-continuation-contract.v1
-status: prepared_not_launch_approved
+status: interrupted_at_step19735_skip_limit
 
 scope:
   geometry: quad
@@ -110,5 +110,5 @@ exit_evaluation:
   reuse_entry_gates: true
 
 decision:
-  recovery_launch: requires_separate_owner_approval
+  recovery_launch: owner_approved_interrupted
   promotion: requires_final_frozen_audit_and_separate_owner_approval

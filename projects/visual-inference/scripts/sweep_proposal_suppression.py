@@ -48,10 +48,21 @@ from student_detector.suppression import (
 def _args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--hbb-checkpoint", type=Path, required=True)
-    parser.add_argument("--quad-checkpoint", type=Path, required=True)
+    parser.add_argument("--hbb-checkpoint", type=Path)
+    parser.add_argument("--quad-checkpoint", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--validation-images", type=int, default=800)
+    parser.add_argument(
+        "--all-validation-images",
+        action="store_true",
+        help="Evaluate every validation record instead of a weighted subset",
+    )
+    parser.add_argument(
+        "--kind",
+        choices=("both", "hbb", "quad"),
+        default="both",
+        help="Geometry to evaluate (default: both)",
+    )
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -81,6 +92,19 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _select_validation_indices(
+    records: Any,
+    source_weights: dict[str, float],
+    validation_images: int,
+    *,
+    all_images: bool,
+) -> list[int]:
+    """Select the established weighted cohort or every manifest record."""
+    if all_images:
+        return list(range(len(records)))
+    return select_source_mixture_indices(records, source_weights, validation_images)
 
 
 def _candidate_tensors(
@@ -389,6 +413,15 @@ def main() -> None:
         )
     nms_thresholds = _thresholds(args.nms_thresholds, "NMS")
     score_thresholds = _thresholds(args.score_thresholds, "score")
+    kinds = ("hbb", "quad") if args.kind == "both" else (args.kind,)
+    checkpoints = {
+        "hbb": args.hbb_checkpoint,
+        "quad": args.quad_checkpoint,
+    }
+    missing = [kind for kind in kinds if checkpoints[kind] is None]
+    if missing:
+        names = ", ".join(f"--{kind}-checkpoint" for kind in missing)
+        raise ValueError(f"missing checkpoint argument(s): {names}")
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA sweep requested but no CUDA device is visible")
@@ -403,8 +436,11 @@ def main() -> None:
         training=False,
         force_index=False,
     )
-    selected = select_source_mixture_indices(
-        dataset.records, config.data.source_weights, args.validation_images
+    selected = _select_validation_indices(
+        dataset.records,
+        config.data.source_weights,
+        args.validation_images,
+        all_images=args.all_validation_images,
     )
     ego_by_image = load_ego_source_quads(
         config.data.index_dir / "quad_val.sqlite",
@@ -422,30 +458,23 @@ def main() -> None:
     )
     if device.type == "cuda":
         warmup_compiled_quad_iou(device)
-    hbb = _evaluate_kind(
-        kind="hbb",
-        checkpoint=args.hbb_checkpoint,
-        state=args.checkpoint_state,
-        loader=loader,
-        config=config,
-        device=device,
-        nms_thresholds=nms_thresholds,
-        score_thresholds=score_thresholds,
-        ego_by_image=ego_by_image,
-        log_interval=args.log_interval,
-    )
-    quad = _evaluate_kind(
-        kind="quad",
-        checkpoint=args.quad_checkpoint,
-        state=args.checkpoint_state,
-        loader=loader,
-        config=config,
-        device=device,
-        nms_thresholds=nms_thresholds,
-        score_thresholds=score_thresholds,
-        ego_by_image=ego_by_image,
-        log_interval=args.log_interval,
-    )
+    evaluations = {}
+    for kind in kinds:
+        checkpoint = checkpoints[kind]
+        if checkpoint is None:  # Guarded above; narrows the optional CLI type.
+            raise AssertionError("validated checkpoint is unexpectedly absent")
+        evaluations[kind] = _evaluate_kind(
+            kind=kind,
+            checkpoint=checkpoint,
+            state=args.checkpoint_state,
+            loader=loader,
+            config=config,
+            device=device,
+            nms_thresholds=nms_thresholds,
+            score_thresholds=score_thresholds,
+            ego_by_image=ego_by_image,
+            log_interval=args.log_interval,
+        )
     selected_identity = json.dumps(
         [
             (dataset.records[index].source_dataset, dataset.records[index].image_id)
@@ -462,6 +491,7 @@ def main() -> None:
         "config_sha256": _sha256(args.config),
         "validation_manifest_sha256": _sha256(annotations),
         "validation_subset_sha256": hashlib.sha256(selected_identity).hexdigest(),
+        "validation_scope": "all" if args.all_validation_images else "weighted_subset",
         "source_counts": dict(
             sorted(
                 Counter(
@@ -473,8 +503,7 @@ def main() -> None:
         "pre_nms_top_k": config.inference.pre_nms_top_k,
         "nms_thresholds": nms_thresholds,
         "score_thresholds": score_thresholds,
-        "hbb": hbb,
-        "quad": quad,
+        **evaluations,
     }
     output = args.output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)

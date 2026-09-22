@@ -1,7 +1,6 @@
 # Module Purpose & Boundaries
 
-This project owns the approved proposal-object contract and trains class-agnostic HBB and quad detectors. HBB supports dense P3–P5 and P2–P5 outputs; quad uses P3–P5.
-GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge provisions fresh hosts and registers attempt-specific SSH fleets.
+This project owns the proposal-object contract and trains class-agnostic HBB and quad detectors; GitHub Actions dispatches dstack cloud work through the Packet bridge.
 
 # Technical Contracts & Interfaces
 
@@ -22,7 +21,7 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Both geometry adapters consume one sampled affine/photometric policy; validation
   is letterbox-only and effective bounds/exclusions are recorded in run metadata.
 - Phase 4 local runs use FP16 `[B=16, 3, 384, 384]` with accumulation 8;
-  the 20k quad run is recovering from its intentional fifth-skip abort at 17,319.
+  the completed 20k schedule ended at 19,995 accepted updates after five AMP skips.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - A weights-only warm start resets optimizer, scheduler, and EMA; full resume
@@ -35,8 +34,7 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 
 - Console and JSONL use millisecond UTC; W&B metrics are namespaced.
 - SIGINT/SIGTERM checkpoints at safe batch boundaries for deterministic resume.
-- Source sampling uses cumulative residual quotas; intended/observed source and
-  domain counts are reduced across workers and logged per optimizer window/epoch.
+- Source sampling uses cumulative residual quotas; intended/observed source and domain counts are reduced across workers and logged per optimizer window/epoch.
 - A single bounded background uploader serializes S3 checkpoint writes and is
   flushed before tracker shutdown; local atomic writes precede remote upload.
 - Validation computes each image's polygon overlaps on the accelerator, then
@@ -55,8 +53,10 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
   no-candidate fallback remains per-object.
 - Shared proposal-evaluation helpers prepare models, masks, ego regions, and
   slice labels; scripts retain fixed-policy versus grid-specific aggregation.
+- Suppression audits support weighted/full-manifest modes; static dashboards and
+  portable/linked three-panel galleries bind utility, diversity, and overlays.
 - Diversity audits cover `[N,4,2]` overlap clusters, spatial/scale diversity, and unmatched isolation.
-- The Phase 2 quad EMA stays incumbent; 15k passed all gates at candidate NMS 0.75.
+- Phase 3 cloud EMA is primary at NMS 0.78/score 0.20; Phase 4 19,995-step EMA is the NMS-0.75 control.
 - Continuation contracts hash-bind parent checkpoints and gate reports; later stages need owner approval.
 - Future ranking/background-loss work needs a new contract and step-named artifacts; it is not a Phase 4 resume.
 
@@ -76,5 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad use 16 × 8. Step-20k recovery permits the known fifth AMP
-  skip and aborts on a sixth. Total unmatched remains diagnostic.
+- Local HBB and quad use 16 × 8. Step-20k recovery v2 permits the sixth AMP
+  skip and aborts on a seventh. Total unmatched remains diagnostic.
