@@ -49,6 +49,14 @@ QUAD_STEP20000_CONTRACT_PATH = (
     PROJECT_ROOT
     / "configs/benchmarks/correction_phase4_quad_step20000_contract_v1.yaml"
 )
+QUAD_STEP20000_RECOVERY_CONFIG_PATH = (
+    PROJECT_ROOT
+    / "configs/correction_phase4_quad_p3_local_rtx3060_step20000_recovery_v1.yaml"
+)
+QUAD_STEP20000_RECOVERY_CONTRACT_PATH = (
+    PROJECT_ROOT
+    / "configs/benchmarks/correction_phase4_quad_step20000_recovery_contract_v1.yaml"
+)
 CONTRACT_PATH = (
     PROJECT_ROOT / "configs/benchmarks/correction_phase4_training_contract_v1.yaml"
 )
@@ -326,7 +334,33 @@ def test_quad_step20000_preserves_recipe_and_binds_audited_step15000(
         / "utility_step15000_ema_frozen_dataset.json"
     )
     assert contract["entry_evidence"]["result"] == "all_gates_pass"
-    assert contract["decision"]["step20000_launch"] == (
+    assert contract["status"] == "interrupted_at_step17319_skip_limit"
+    assert contract["decision"]["step20000_launch"] == "owner_approved_interrupted"
+
+
+def test_quad_step20000_recovery_changes_only_cumulative_skip_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PHASE2_DATASET_ROOT", "/phase4/dataset")
+    step20000 = load_phase3_config(QUAD_STEP20000_CONFIG_PATH)
+    recovery = load_phase3_config(QUAD_STEP20000_RECOVERY_CONFIG_PATH)
+    contract = yaml.safe_load(
+        QUAD_STEP20000_RECOVERY_CONTRACT_PATH.read_text(encoding="utf-8")
+    )
+
+    assert recovery == replace(
+        step20000,
+        schedule=replace(step20000.schedule, max_optimizer_step_skips=5),
+    )
+    assert contract["configuration"]["sha256"] == _sha256(
+        QUAD_STEP20000_RECOVERY_CONFIG_PATH
+    )
+    assert contract["resume"]["recovery_entry"]["global_step"] == 17_000
+    assert contract["resume"]["recovery_entry"]["optimizer_step_skips"] == 4
+    assert contract["optimization"]["maximum_optimizer_step_skips"] == 5
+    assert contract["optimization"]["remaining_optimizer_step_skips"] == 1
+    assert contract["incident"]["observed_global_step"] == 17_319
+    assert contract["decision"]["recovery_launch"] == (
         "requires_separate_owner_approval"
     )
 
@@ -475,6 +509,11 @@ def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(
             "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
             "config": checkpoint_config,
             "global_step": 7_500,
+            "epoch": 7,
+            "batch_in_epoch": 4_000,
+            "epoch_complete": False,
+            "optimizer_step_skips": 2,
+            "scaler": {"scale": 16_384.0},
         },
         resume,
     )
@@ -487,6 +526,15 @@ def test_phase4_quad_continuation_accepts_own_interrupted_checkpoint(
                 "artifact_sha256": "unused-for-recovery",
                 "interrupted_stage_artifact": "step10000/last.pt",
                 "interrupted_stage_step_range": [5_001, 9_999],
+                "recovery_entry": {
+                    "artifact_sha256": _sha256(resume),
+                    "global_step": 7_500,
+                    "epoch": 7,
+                    "batch_in_epoch": 4_000,
+                    "epoch_complete": False,
+                    "optimizer_step_skips": 2,
+                    "scaler_scale": 16_384.0,
+                },
                 "allowed_config_overrides": [
                     "schedule.optimizer_step_skip_policy",
                     "schedule.max_optimizer_step_skips",

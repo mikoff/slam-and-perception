@@ -324,6 +324,36 @@ def verify_phase4_quad_continuation_inputs(
                 f"[{minimum_step}, {maximum_step}]: {global_step}"
             )
         resume_sha256 = sha256_file(interrupted_resume)
+        recovery_entry = resume.get("recovery_entry")
+        if recovery_entry is not None:
+            entry = _mapping(recovery_entry, "recovery entry")
+            entry_step = int(entry["global_step"])
+            if global_step < entry_step:
+                raise ValueError(
+                    "interrupted continuation precedes recovery entry: "
+                    f"expected at least {entry_step}, found {global_step}"
+                )
+            if global_step == entry_step:
+                _require_equal(
+                    "recovery entry SHA-256",
+                    resume_sha256,
+                    entry["artifact_sha256"],
+                )
+                for field in (
+                    "epoch",
+                    "batch_in_epoch",
+                    "epoch_complete",
+                    "optimizer_step_skips",
+                ):
+                    _require_equal(
+                        f"recovery entry {field}", checkpoint.get(field), entry[field]
+                    )
+                scaler = _mapping(checkpoint.get("scaler"), "checkpoint scaler")
+                _require_equal(
+                    "recovery entry scaler scale",
+                    float(scaler["scale"]),
+                    float(entry["scaler_scale"]),
+                )
         resume_mode = "interrupted_stage"
     else:
         raise ValueError(

@@ -1,0 +1,114 @@
+schema_version: proposal-phase4-quad-continuation-contract.v1
+status: prepared_not_launch_approved
+
+scope:
+  geometry: quad
+  pyramid_levels: [P3, P4, P5]
+  role: interrupted_stage_recovery
+  production_incumbent_changes: false
+  siglip: deferred
+
+dataset:
+  id: phase3-production-bg-policy-v2-2026-08-29
+  manifest_sha256: c8e3cb1f4dacbfb5ffa5b6599339404b29fe39a6434cd7320a1ed859e581e92c
+  contract_sha256: 0c41b8af31825feb6929067a4cb7128c36569af9c19cb6d14f5cf77dc3ec797a
+  train_manifest_sha256: dd3111cda227ae45777e605bfec95daf58ef7c7e6234501d3a4507efa6d81457
+  validation_manifest_sha256: 68f632d89c281923137d70e0914e706fee5d201dc7e83de51a992ec4163cecbf
+  validation_subset_sha256: e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806
+
+configuration:
+  path: configs/correction_phase4_quad_p3_local_rtx3060_step20000_recovery_v1.yaml
+  sha256: de22b4533b9f7d6bd29c1a2022afd9795bcfa3329b0ce1791193ce80a10667f1
+  must_match_step20000_recipe_except_max_optimizer_step_skips: true
+
+initialization:
+  required: false
+
+resume:
+  mode: exact_full_state_interrupted_stage
+  artifact: artifacts/phase4/local_quad_p3_seed42_step15000_v1/last.pt
+  artifact_sha256: d6e06957ec79d811c26fa72ef35875abf3005463932fde3a64ec3489bfa48b40
+  source_run_contract: artifacts/phase4/local_quad_p3_seed42_step20000_v1/run_contract.json
+  source_run_contract_sha256: a79a794ceaa7650ae0a42990e761d193962a1abe29eba28c8d541558622b8a8d
+  source_commit: b1cc55b1dad10ae92b4eb3ac83bed87ca3eec807
+  interrupted_stage_artifact: artifacts/phase4/local_quad_p3_seed42_step20000_v1/last.pt
+  interrupted_stage_step_range: [15001, 19999]
+  recovery_entry:
+    artifact_sha256: e314d53bf673e5220d8c1b1e159f6a207dfc31677dce6a50fd41ca37e7e7a526
+    global_step: 17000
+    epoch: 17
+    batch_in_epoch: 32
+    epoch_complete: false
+    optimizer_step_skips: 4
+    scaler_scale: 32768.0
+  allowed_config_overrides:
+    - schedule.optimizer_step_skip_policy
+    - schedule.max_optimizer_step_skips
+  preserve:
+    - model
+    - ema_model
+    - optimizer
+    - scheduler
+    - scaler
+    - sampler_position
+    - rng_state
+    - best_scores
+    - optimizer_step_skips
+
+optimization:
+  target_global_step: 20000
+  successful_steps_remaining_from_checkpoint: 3000
+  scheduling_horizon_steps: 20000
+  microbatch: 16
+  accumulation_steps: 8
+  effective_batch: 128
+  checkpoint_every_optimizer_steps: 500
+  optimizer_step_skip_policy: bounded
+  maximum_optimizer_step_skips: 5
+  remaining_optimizer_step_skips: 1
+  output_dir: artifacts/phase4/local_quad_p3_seed42_step20000_v1
+  initial_output_must_be_absent: false
+
+incident:
+  kind: amp_optimizer_step_skip_limit
+  observed_global_step: 17319
+  observed_batch_in_epoch: 2592
+  observed_skip_count: 5
+  observed_scaler_scale_after_skip: 16384.0
+  durable_checkpoint_global_step: 17000
+  diagnosis: expected_dynamic_loss_scaling_not_oom_or_memory_leak
+  recovery_behavior: replay_then_accept_fifth_skip_and_abort_on_sixth
+
+entry_evidence:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  selected_operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+    scope: phase4_candidate_evaluation
+  proposal_utility:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/utility_step15000_ema_frozen_dataset.json
+    sha256: 3b12e0f4e33a1ffd1299ed05fa0d25a9cc1c710d361b8dddbd076097ae5da6a4
+  suppression_sweep:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/suppression_sweep_step15000_ema.json
+    sha256: 981c85eb6ab196282423b253e126f8e1d265a4dbdef8c95af9f67ce1fe82491a
+  diversity_audit:
+    path: artifacts/phase4/local_quad_p3_seed42_step15000_v1/proposal_diversity_800_step15000_nms075_ema.json
+    sha256: 94b614de7041d66e076cbc69f4196c5f39ccc31b76bd6a60a1b8eadb57f0ce4d
+  result: all_gates_pass
+
+exit_evaluation:
+  checkpoint_state: ema_model
+  frozen_images: 800
+  operating_point:
+    nms_iou_threshold: 0.75
+    score_threshold: 0.20
+  required_reports:
+    - proposal_utility
+    - suppression_sweep
+    - proposal_diversity
+  reuse_entry_gates: true
+
+decision:
+  recovery_launch: requires_separate_owner_approval
+  promotion: requires_final_frozen_audit_and_separate_owner_approval

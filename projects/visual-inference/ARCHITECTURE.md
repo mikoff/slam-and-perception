@@ -22,7 +22,7 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Both geometry adapters consume one sampled affine/photometric policy; validation
   is letterbox-only and effective bounds/exclusions are recorded in run metadata.
 - Phase 4 local runs use FP16 `[B=16, 3, 384, 384]` with accumulation 8;
-  the 20,000-step quad continuation is prepared but has not been launched.
+  the 20k quad run is recovering from its intentional fifth-skip abort at 17,319.
 - Full `last.pt` checkpoints contain deterministic resume state. Best model
   checkpoints are weights-only and declare whether raw or EMA weights won.
 - A weights-only warm start resets optimizer, scheduler, and EMA; full resume
@@ -76,5 +76,5 @@ GitHub Actions dispatches cloud work; dstack owns cloud tasks. The Packet bridge
 - Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
   valid placements, targets a fresh attempt-specific fleet, and adopts no host.
 - GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad use 16 × 8. The isolated 15k→20k stage keeps the exhausted
-  four-skip ceiling; any new AMP skip aborts. Total unmatched remains diagnostic.
+- Local HBB and quad use 16 × 8. Step-20k recovery permits the known fifth AMP
+  skip and aborts on a sixth. Total unmatched remains diagnostic.

@@ -1,5 +1,5 @@
 schema_version: proposal-phase4-quad-continuation-contract.v1
-status: prepared_not_launch_approved
+status: interrupted_at_step17319_skip_limit
 
 scope:
   geometry: quad
@@ -113,6 +113,14 @@ exit_evaluation:
     - proposal_diversity
   reuse_entry_gates: true
 
+incident:
+  kind: amp_optimizer_step_skip_limit
+  observed_global_step: 17319
+  observed_skip_count: 5
+  maximum_optimizer_step_skips: 4
+  durable_checkpoint_global_step: 17000
+  result: intentional_policy_abort
+
 decision:
-  step20000_launch: requires_separate_owner_approval
+  step20000_launch: owner_approved_interrupted
   promotion: requires_final_frozen_audit_and_separate_owner_approval

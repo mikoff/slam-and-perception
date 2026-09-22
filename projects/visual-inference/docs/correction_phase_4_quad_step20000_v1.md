@@ -1,6 +1,6 @@
 # Phase 4 quad continuation to step 20,000
 
-Status: prepared and verified; launch requires owner approval after commit.
+Status: interrupted intentionally at step 17,319 after exceeding the AMP-skip cap.
 
 ## Contract
 
@@ -48,3 +48,7 @@ the interrupted stage.
 
 Audit the step-20k EMA on the frozen 800 images at NMS `0.75`, score `0.20`.
 Promotion requires every existing gate to pass and a separate owner decision.
+
+The initial run reached step 17,319, then its fifth cumulative AMP optimizer
+skip exceeded the four-skip boundary. This was not an OOM or memory leak. The
+latest durable checkpoint is step 17,000; recovery is specified separately.
