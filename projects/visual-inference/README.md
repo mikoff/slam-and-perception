@@ -5,6 +5,8 @@ This project develops an embedded open-vocabulary detector in phases.
 The current milestone stops at a retrained, evaluated proposal detector; SigLIP
 work is deferred. The [roadmap](docs/proposal_detector_roadmap.md) maps the original
 project phases to the correction/retraining work packages and defines the gates.
+The current code audit and checkpoint map are in
+[`docs/code_audit.md`](docs/code_audit.md).
 
 ## Phase 2 student detector
 
@@ -41,7 +43,7 @@ uv run python scripts/train_phase3.py --config configs/phase3.yaml
 
 For single-GPU automated training on Packet.ai via GitHub Actions, see:
 - [`docs/cloud_training_runbook.md`](docs/cloud_training_runbook.md) (Complete Step-by-Step Instructions)
-- [`docs/packet_cloud_training_plan.md`](docs/packet_cloud_training_plan.md) (Architecture Blueprint)
+- [`docs/cloud_training_runbook.md`](docs/cloud_training_runbook.md) (architecture and operational contract)
 
 ## Phase 1 dataset preparation
 

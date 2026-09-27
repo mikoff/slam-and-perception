@@ -61,7 +61,7 @@ changed code/data.
 ```bash
 uv sync --frozen --group cloud --inexact
 uv run --no-sync pytest -q tests
-uv run --no-sync python scripts/verify_phase2.py
+uv run --no-sync pytest -q tests/student_detector
 uv run --no-sync python scripts/audit_phase3_data.py --samples 300
 uv run --no-sync python scripts/train_quad_proposals.py --config configs/phase3_attnres.yaml
 ```

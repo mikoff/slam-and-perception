@@ -99,15 +99,9 @@ class QuadProposalDetector(nn.Module):
         return self.head(self.forward_features(images))
 
 
-QuadStudentDetector = QuadProposalDetector
-QuadDetector = QuadProposalDetector
-
-
 __all__ = [
     "DetectorOutput",
-    "QuadDetector",
     "QuadDetectorOutput",
     "QuadProposalDetector",
-    "QuadStudentDetector",
     "StudentDetector",
 ]

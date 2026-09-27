@@ -44,12 +44,6 @@ class QuadDetection:
         )
 
 
-def class_agnostic_polygon_nms(
-    quads: Tensor, scores: Tensor, iou_threshold: float
-) -> Tensor:
-    return polygon_nms(quads, scores, iou_threshold)
-
-
 def decode_dense_quad_output(
     output: QuadDetectorOutput,
     strides: tuple[int, int, int] = (8, 16, 32),
@@ -225,6 +219,3 @@ class QuadInferenceDecoder:
                 )
             )
         return detections
-
-
-InferenceQuadDecoder = QuadInferenceDecoder

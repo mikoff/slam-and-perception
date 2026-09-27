@@ -7,6 +7,11 @@ The architecture described below is the existing P3–P5 baseline, not a claim
 that the corrected-data P2 ablation or retraining has completed. The current
 milestone stops at evaluated proposal outputs; SigLIP remains future work.
 
+This document is retained as a historical HBB baseline reference. The former
+Phase-2 inspection and verification scripts were removed; use the current quad
+inspection checkpoints and stage map in [`code_audit.md`](code_audit.md), and
+run `pytest -q tests/student_detector` for the maintained detector checks.
+
 ## Objective
 
 The architecture's overall goal is to provide a small, efficient detector for an
@@ -434,23 +439,13 @@ Actual INT8 viability still requires a later PT2E/ExecuTorch conversion,
 calibration data, numerical comparison, backend delegation inspection, and
 on-device profiling.
 
-### 10.1 `.pt2` and Model Explorer output workaround
+### 10.1 Export and inspection status
 
-PyTorch 2.6 can export `DetectorOutput`, but `torch.export.save()` cannot serialize
-the custom named-tuple tree specification unless that type is registered through
-an internal pytree mechanism. We avoid coupling production code to that private
-registration API.
-
-For saved `.pt2` inspection artifacts only, `scripts/inspect_phase2.py` wraps the
-model in `ExportView`. It flattens the named output into the same nine tensors:
-three objectness, three box-distance, and three centerness tensors. This changes
-only the Python output container—not the operations, parameters, or tensor
-values—and makes the program serializable and loadable by
-[Model Explorer](https://github.com/google-ai-edge/model-explorer/wiki/4.-API-Guide).
-
-Once the model is lowered to ExecuTorch, its official
-[Model Explorer integration](https://docs.pytorch.org/executorch/stable/visualize.html)
-can additionally visualize quantize/dequantize clusters and backend partitions.
+The historical Phase-2 Model Explorer workflow used a helper that has been
+removed. The maintained inspection path is the quad checkpoint diagnostics in
+[model_inspection.md](model_inspection.md). Export and deployment visualization
+remain a future concern and should be added around the current quad output
+contract rather than the retired HBB-only output wrapper.
 
 ## 11. Inspection and profiling
 
@@ -461,38 +456,17 @@ Python binding, Matplotlib, TensorBoard, and Model Explorer. Install it with:
 uv sync --group dev --group inspection
 ```
 
-Common commands are:
-
-```bash
-# Hierarchical layer, parameter, and multiply-add summary
-uv run --group inspection python scripts/inspect_phase2.py summary
-
-# Static eager execution graph
-uv run --group inspection python scripts/inspect_phase2.py graph
-
-# Interactive torch.export operator graph
-uv run --group inspection python scripts/inspect_phase2.py model-explorer --launch
-
-# C3-C5 and P3-P5 activation heatmaps
-uv run --group inspection python scripts/inspect_phase2.py activations \
-  --image path/to/image.jpg --checkpoint path/to/checkpoint.pt
-
-# Parameter and activation histograms
-uv run --group inspection python scripts/inspect_phase2.py tensorboard
-```
-
-See the dedicated [model inspection guide](model_inspection.md) for interpretation
-and caveats. Random-weight activation maps validate plumbing but have no learned
-semantic meaning. With an ImageNet-pretrained backbone but an untrained FPN,
-C3-C5 are pretrained while P3-P5 are still random.
+The former Phase-2 inspection CLI is no longer maintained. For current
+inspection guidance, see the dedicated [quad model inspection guide](model_inspection.md),
+which uses the maintained diagnostic and validation scripts. Random-weight
+activation maps validate plumbing but have no learned semantic meaning.
 
 ## 12. Verification status
 
-Run the full Phase-2 checks from `projects/visual-inference`:
+Run the maintained detector checks from `projects/visual-inference`:
 
 ```bash
 uv run --group dev pytest -q tests/student_detector
-uv run python scripts/verify_phase2.py
 ```
 
 Current status:
@@ -550,8 +524,8 @@ Remaining architecture-level decisions are:
 | [`geometry.py`](../student_detector/geometry.py) | grid points, IoU, encode/decode |
 | [`assigner.py`](../student_detector/assigner.py) | ATSS and representability reporting |
 | [`decoder.py`](../student_detector/decoder.py) | scoring, top-K, clipping and class-agnostic NMS |
-| [`verify_phase2.py`](../scripts/verify_phase2.py) | completion-criteria smoke checks |
-| [`inspect_phase2.py`](../scripts/inspect_phase2.py) | summaries, graphs, activations and TensorBoard |
+| [`diagnose_quad_checkpoint.py`](../scripts/diagnose_quad_checkpoint.py) | raw/EMA quad geometry and proposal diagnostics |
+| [`visualize_quad_validation.py`](../scripts/visualize_quad_validation.py) | quad validation metrics and prediction overlays |
 
 ## 15. References
 
