@@ -1,0 +1,93 @@
+{
+  "schema_version": "phase4-0-experiment-contract.v1",
+  "status": "active_experiment_baseline",
+  "objective": "Deliver reproducible detector-plus-SigLIP baselines and per-class readiness gate for semantic distillation",
+  "detector": {
+    "primary": {
+      "name": "phase3_cloud_quad_ema",
+      "checkpoint": "artifacts/phase3/checkpoints/best_ema.pt",
+      "checkpoint_sha256": "deee0ce3919ffdc0f6c68d675896efe55831327a3c22cd605fc8b71264f3c71f",
+      "checkpoint_state": "ema_model",
+      "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
+      "neck_type": "lite",
+      "strides": [8, 16, 32],
+      "input_size": 384,
+      "pre_nms_top_k": 300,
+      "nms_iou_threshold": 0.78,
+      "score_threshold": 0.20,
+      "max_proposals": 100
+    },
+    "control": {
+      "name": "phase4_current_quad_19995_ema",
+      "checkpoint": "artifacts/phase4/local_quad_p3_seed42_step20000_v1/best_ema.pt",
+      "checkpoint_sha256": "c9b00311f8758072299ec6437a043091e902b818d8481bf71b8e4de239183c2b",
+      "checkpoint_state": "ema_model",
+      "architecture": "mobilenetv4_conv_medium_lite_fpn96_quad_dqco",
+      "neck_type": "lite",
+      "strides": [8, 16, 32],
+      "input_size": 384,
+      "pre_nms_top_k": 300,
+      "nms_iou_threshold": 0.75,
+      "score_threshold": 0.20,
+      "max_proposals": 100
+    }
+  },
+  "teacher": {
+    "model_name": "google/siglip-base-patch16-224",
+    "revision": "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
+    "embedding_dim": 768,
+    "input_size": [224, 224],
+    "logit_scale": 4.76497745513916,
+    "logit_bias": -12.932403564453125,
+    "default_prompts": [
+      "a photo of a {category}",
+      "a cropped image of a {category}",
+      "a {category} on the road",
+      "a {category} in a traffic scene"
+    ]
+  },
+  "dataset": {
+    "id": "phase3-production-bg-policy-v2-2026-08-29",
+    "frozen_800_subset_sha256": "e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806",
+    "source_weights": {
+      "coco_2017": 0.50,
+      "nuimages": 0.18,
+      "bdd100k_images_100k": 0.12,
+      "woodscape_rgb_fisheye": 0.20
+    }
+  },
+  "vocabulary": {
+    "base_classes": ["car", "pedestrian", "cyclist", "traffic_cone", "bus", "truck"],
+    "novel_classes": ["stroller", "dog", "debris", "wheelchair", "construction_barrier"],
+    "distractors": ["road_surface", "sky", "vegetation", "building_wall", "ego_platform_bodywork"],
+    "unsupported": ["empty_parking_bay"]
+  },
+  "crop_policies": {
+    "tight_source": {
+      "mode": "axis_aligned",
+      "context_margin": 0.0,
+      "use_original_resolution": true
+    },
+    "contextual_source": {
+      "mode": "axis_aligned",
+      "context_margin": 0.15,
+      "use_original_resolution": true
+    },
+    "contextual_resized": {
+      "mode": "axis_aligned",
+      "context_margin": 0.15,
+      "use_original_resolution": false
+    }
+  },
+  "readiness_criteria": {
+    "min_evidence_instances": 15,
+    "base_class": {
+      "min_teacher_top1_accuracy": 0.75,
+      "min_proposal_recall_iou050": 0.60
+    },
+    "novel_class": {
+      "min_teacher_top1_accuracy": 0.60,
+      "min_proposal_recall_iou050": 0.40
+    }
+  }
+}
