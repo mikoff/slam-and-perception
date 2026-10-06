@@ -1,6 +1,6 @@
 # Module Purpose & Boundaries
 
-This project owns class-agnostic proposal-object contracts, SAM-based open-world object discovery, dual-geometry (HBB and Quad) student detector training, Raspberry Pi 5 edge export, and SigLIP semantic distillation. GitHub Actions dispatches dstack cloud work through the Packet bridge.
+This project owns class-agnostic proposal-object contracts, SAM-based open-world object discovery, dual-geometry (HBB and Quad) student detector training, Raspberry Pi 5 edge export, and SigLIP semantic distillation.
 
 # Technical Contracts & Interfaces
 

@@ -220,3 +220,25 @@ The `docs/` folder contains extensive records of historical milestones.
    - Refactor `student_detector/` to use a single clean training script with Task-Aligned IoU loss and P2 feature stride.
 3. **Step 3: Retire Legacy Duplicates:**
    - Once the Phase 5 student detector is trained and verified on the 800-image cohort, retire the legacy ATSS assigners (`assigner.py`, `quad_assigner.py`) and legacy quad heads.
+
+---
+
+## Part 5: Execution Log — Phase 4 Purge & Clean Slate Achieved
+
+On 2026-10-06, the second wave of decluttering was executed to completely retire the flawed "correction_phase4" pipeline and clear the deck for Phase 5.0:
+
+1. **`configs/` Cleared Completely:**
+   - All `correction_phase4_*.yaml` configs, `phase3.yaml`, and benchmark contracts in `configs/benchmarks/` were moved to `docs/history/configs/`.
+   - `configs/` is now pristine (retaining only `.gitkeep`) ready for clean Phase 5 configuration.
+2. **`scripts/` Cleared Completely:**
+   - Deleted legacy training entrypoints (`train_quad_proposals.py`, `train_phase3.py`).
+   - Deleted obsolete diagnostics and viewers (`diagnose_quad_checkpoint.py`, `visualize_quad_validation.py`, `benchmark_deployment_candidate.py`).
+   - Deleted entire cloud training infrastructure (`scripts/cloud/` including `packet_bridge.py`, `dataset_staging.py`, `run_training.py`, etc., and `cloud-training.dstack.yml`).
+   - Archived the one-off Phase 4 audit runners (`run_phase4_0_teacher_baselines.py`, `build_phase4_0_visual_audit.py`) into `docs/history/scripts/`.
+   - `scripts/` now contains only `__init__.py`, ready for `scripts/run_sam_pilot_discovery.py`.
+3. **`tests/` Streamlined:**
+   - Pruned 9 obsolete test files that tested the retired scripts and configs (`test_phase4_training_contract.py`, `test_train_quad_initialization.py`, `test_train_hbb_initialization.py`, `test_cloud_entrypoint.py`, `test_dataset_staging.py`, `test_packet_bridge.py`, `test_checkpoint_transport.py`, `test_build_streamed_dataset_manifest.py`, `test_visualize_quad_validation.py`).
+   - Renamed `test_phase4_0_components.py` to `test_teacher_and_crop_components.py`.
+   - Test suite status: **127 passed in ~20s (100% green)**.
+   - Lint status: **Ruff 0 errors**.
+

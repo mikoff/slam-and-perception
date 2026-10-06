@@ -1,4 +1,4 @@
-"""Unit tests for Phase 4.0 ontology, crop extractor, SigLIP teacher, and semantic data."""
+"""Unit tests for ontology, crop extractor, SigLIP teacher, and semantic data components."""
 
 from __future__ import annotations
 
