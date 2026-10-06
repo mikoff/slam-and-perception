@@ -9,8 +9,7 @@ This directory serves as the structured architectural ledger for the visual infe
 | Stage | Document | Focus & Key Findings | Status |
 |---|---|---|---|
 | **Preliminary Studies** | [**`00_preliminary_studies_system_audit.md`**](file:///home/sashamikoff/git/skillup/projects/visual-inference/development_stages/00_preliminary_studies_system_audit.md) | Deep system audit identifying the mathematical root causes of proposal clustering (NMS 0.78, ATSS 18-anchor assignment, flat centerness target) and missed detections (taxonomy gap, 0.0 weak-negative weight, stride-8 small object ceiling). | **Completed** |
-| **Phase 5 Architecture** | [**`01_phase_5_sam_discovery_and_proposal_architecture.md`**](file:///home/sashamikoff/git/skillup/projects/visual-inference/development_stages/01_phase_5_sam_discovery_and_proposal_architecture.md) | Approved strategic roadmap: SAM-based unsupervised object discovery on the 800-image cohort, dual-geometry extraction (HBB + Quads), Task-Aligned Loss, P2 feature stride, and Raspberry Pi 5 deployment envelope. | **Approved / Active** |
-| **Decluttering Blueprint** | [**`02_codebase_decluttering_and_gotchas.md`**](file:///home/sashamikoff/git/skillup/projects/visual-inference/development_stages/02_codebase_decluttering_and_gotchas.md) | File disposition table categorizing every file for removal/retention, alongside 9 critical institutional gotchas and lessons learned. | **Approved / Active** |
+| **HBB vs Quads Architecture Audit** | [**`hbb_quads_tested_archs_and_approaches.md`**](file:///home/sashamikoff/git/skillup/projects/visual-inference/development_stages/hbb_quads_tested_archs_and_approaches.md) | Comprehensive audit comparing Baseline (ATSS), Recipe 1 (Decoupled Centerness & Part-Aware NMS), and Recipe 2 (Dual-Head TAL + GWD) across HBB and Quads. Empirically validates HBB superiority (+6.5% fisheye recall over Quads) and includes paper citations. | **Active & Authoritative** |
 
 ---
 

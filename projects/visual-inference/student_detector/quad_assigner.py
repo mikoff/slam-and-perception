@@ -38,15 +38,15 @@ class QuadAssigner:
     def __init__(
         self,
         *,
-        strides: tuple[int, int, int] = (8, 16, 32),
-        top_k: int = 9,
+        strides: tuple[int, ...] = (8, 16, 32),
+        top_k: int = 4,
         gamma: float = 2.0,
         scale_sigma: float = 0.75,
-        eligible_levels: int = 2,
+        eligible_levels: int = 1,
         scale_measure: str = "area",
     ) -> None:
-        if len(strides) != 3:
-            raise ValueError("the baseline quad assigner expects P3-P5")
+        if len(strides) not in (3, 4):
+            raise ValueError("the quad assigner expects 3 (P3-P5) or 4 (P2-P5) strides")
         if top_k < 1:
             raise ValueError("top_k must be positive")
         if gamma <= 0 or scale_sigma <= 0:
@@ -77,7 +77,15 @@ class QuadAssigner:
         centers = quad_centroid(quads)
         centered = quads - centers[:, None, :]
         covariance = centered.transpose(1, 2) @ centered / 4.0
-        _, axes = torch.linalg.eigh(covariance.to(torch.float32))
+        jitter = torch.diag(
+            torch.tensor([1e-4, 1.001e-4], device=quads.device, dtype=torch.float32)
+        )
+        cov_f32 = covariance.to(torch.float32) + jitter
+        try:
+            _, axes = torch.linalg.eigh(cov_f32)
+        except (torch._C._LinAlgError, RuntimeError):
+            _, axes = torch.linalg.eigh(cov_f32.cpu())
+            axes = axes.to(quads.device)
         projected = centered @ axes
         return (
             (projected.amax(dim=1) - projected.amin(dim=1)).amax(dim=1).clamp(min=1e-6)
@@ -87,7 +95,16 @@ class QuadAssigner:
         centers = quad_centroid(quads)
         centered = quads - centers[:, None, :]
         covariance = centered.transpose(1, 2) @ centered / 4.0
-        eigenvalues, eigenvectors = torch.linalg.eigh(covariance.to(torch.float32))
+        jitter = torch.diag(
+            torch.tensor([1e-4, 1.001e-4], device=quads.device, dtype=torch.float32)
+        )
+        cov_f32 = covariance.to(torch.float32) + jitter
+        try:
+            eigenvalues, eigenvectors = torch.linalg.eigh(cov_f32)
+        except (torch._C._LinAlgError, RuntimeError):
+            eigenvalues, eigenvectors = torch.linalg.eigh(cov_f32.cpu())
+            eigenvalues = eigenvalues.to(quads.device)
+            eigenvectors = eigenvectors.to(quads.device)
         major_indices = eigenvalues.argmax(dim=1)
         major = eigenvectors[
             torch.arange(quads.shape[0], device=quads.device), :, major_indices

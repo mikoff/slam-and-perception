@@ -21,14 +21,16 @@ class QuadTrainingTargets:
     trusted_background_mask: Tensor
     weak_background_mask: Tensor
     weak_negative_weight: float
-    valid_point_masks: tuple[Tensor, Tensor, Tensor]
+    valid_point_masks: tuple[Tensor, ...]
     valid_gt_count: Tensor
     fallback_count: Tensor
     unrepresentable_count: Tensor
     positive_counts_per_level: Tensor
     matched_gt_indices: Tensor
 
-    def to(self, device: torch.device, *, non_blocking: bool = False) -> "QuadTrainingTargets":
+    def to(
+        self, device: torch.device, *, non_blocking: bool = False
+    ) -> "QuadTrainingTargets":
         return QuadTrainingTargets(
             self.quality.to(device, non_blocking=non_blocking),
             self.corner_offsets.to(device, non_blocking=non_blocking),
@@ -36,7 +38,10 @@ class QuadTrainingTargets:
             self.trusted_background_mask.to(device, non_blocking=non_blocking),
             self.weak_background_mask.to(device, non_blocking=non_blocking),
             self.weak_negative_weight,
-            tuple(mask.to(device, non_blocking=non_blocking) for mask in self.valid_point_masks),  # type: ignore[arg-type]
+            tuple(
+                mask.to(device, non_blocking=non_blocking)
+                for mask in self.valid_point_masks
+            ),  # type: ignore[arg-type]
             self.valid_gt_count.to(device, non_blocking=non_blocking),
             self.fallback_count.to(device, non_blocking=non_blocking),
             self.unrepresentable_count.to(device, non_blocking=non_blocking),
@@ -96,7 +101,9 @@ def point_validity_from_pixel_mask(
 class QuadTargetBuilder:
     """Build fixed-shape quad targets outside the exported model graph."""
 
-    def __init__(self, assigner: QuadAssigner, *, weak_negative_weight: float = 0.0) -> None:
+    def __init__(
+        self, assigner: QuadAssigner, *, weak_negative_weight: float = 0.0
+    ) -> None:
         if not 0 <= weak_negative_weight <= 1:
             raise ValueError("weak_negative_weight must be in [0, 1]")
         self.assigner = assigner
@@ -119,11 +126,15 @@ class QuadTargetBuilder:
         valid_gt_count = torch.zeros((), device=device)
         fallback_count = torch.zeros((), device=device)
         unrepresentable_count = torch.zeros((), device=device)
-        positive_counts = torch.zeros(len(feature_shapes), dtype=torch.long, device=device)
+        positive_counts = torch.zeros(
+            len(feature_shapes), dtype=torch.long, device=device
+        )
 
         for sample in samples:
             quads = _sample_quads(sample, "quads", "boxes").to(device)
-            ignore_quads = _sample_quads(sample, "ignore_quads", "ignore_boxes").to(device)
+            ignore_quads = _sample_quads(sample, "ignore_quads", "ignore_boxes").to(
+                device
+            )
             valid_flat, valid_levels = point_validity_from_pixel_mask(
                 torch.as_tensor(sample.valid_mask, device=device),
                 feature_shapes,
@@ -136,7 +147,9 @@ class QuadTargetBuilder:
                 valid_flat,
             )
             if assignment.unrepresentable_gt_indices.numel():
-                ignore_quads = torch.cat((ignore_quads, quads[assignment.unrepresentable_gt_indices]))
+                ignore_quads = torch.cat(
+                    (ignore_quads, quads[assignment.unrepresentable_gt_indices])
+                )
             ignored = points_inside_quads(points, ignore_quads)
             trusted_quads = _sample_quads(
                 sample, "trusted_background_quads", "trusted_background_boxes"
@@ -156,7 +169,9 @@ class QuadTargetBuilder:
             positive_counts += assignment.positive_counts_per_level
 
         level_masks = tuple(
-            torch.stack([valid_levels_by_batch[index][level] for index in range(len(samples))])
+            torch.stack(
+                [valid_levels_by_batch[index][level] for index in range(len(samples))]
+            )
             for level in range(len(feature_shapes))
         )
         return QuadTrainingTargets(

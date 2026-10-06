@@ -419,29 +419,100 @@ def polygon_nms(
     iou_threshold: float,
     *,
     max_output: int | None = None,
-) -> Tensor:
+    nms_mode: str = "hard",
+    soft_sigma: float = 0.5,
+    part_scale_ratio: float = 0.4,
+    score_threshold: float = 0.05,
+    return_scores: bool = False,
+) -> Tensor | tuple[Tensor, Tensor]:
     """Exact class-agnostic NMS using one batched polygon-overlap matrix."""
     value = _quad_tensor(quads)
     if value.shape[0] != scores.shape[0]:
         raise ValueError("quads and scores must have equal length")
     if value.shape[0] == 0:
-        return torch.empty((0,), dtype=torch.long, device=value.device)
+        empty = torch.empty((0,), dtype=torch.long, device=value.device)
+        empty_scores = torch.empty((0,), dtype=scores.dtype, device=scores.device)
+        return (empty, empty_scores) if return_scores else empty
     valid = quad_validity(value)
-    overlaps = pairwise_quad_iou(value, value, minimum_iou=iou_threshold).detach().cpu()
     order = torch.argsort(scores.detach().cpu(), descending=True, stable=True)
     valid_cpu = valid.detach().cpu()
-    kept: list[int] = []
-    suppressed = torch.zeros(value.shape[0], dtype=torch.bool)
-    for index in order.tolist():
-        if not valid_cpu[index] or suppressed[index]:
+    scores_cpu = scores.detach().cpu()
+    num_quads = value.shape[0]
+
+    if nms_mode == "nms_free":
+        kept_free = [idx for idx in order.tolist() if valid_cpu[idx]]
+        if max_output is not None:
+            kept_free = kept_free[:max_output]
+        keep = torch.tensor(kept_free, dtype=torch.long, device=value.device)
+        return (keep, scores[keep]) if return_scores else keep
+
+    if nms_mode == "hard":
+        overlaps = pairwise_quad_iou(value, value, minimum_iou=iou_threshold).detach().cpu()
+        kept: list[int] = []
+        suppressed = torch.zeros(num_quads, dtype=torch.bool)
+        for index in order.tolist():
+            if not valid_cpu[index] or suppressed[index]:
+                continue
+            kept.append(index)
+            suppressed |= overlaps[index] > iou_threshold
+            # Scores are visited in descending order. Once the requested output
+            # budget is full, later candidates cannot enter that prefix.
+            if max_output is not None and len(kept) >= max_output:
+                break
+        keep = torch.tensor(kept, dtype=torch.long, device=value.device)
+        return (keep, scores[keep]) if return_scores else keep
+
+    overlaps = pairwise_quad_iou(value, value, minimum_iou=0.0).detach().cpu()
+    areas = quad_area(value).detach().cpu()
+    scale_ratios = torch.minimum(areas[:, None], areas[None, :]) / torch.maximum(
+        areas[:, None], areas[None, :]
+    ).clamp(min=1e-6)
+
+    kept_indices: list[int] = []
+    final_scores: list[float] = []
+    suppressed = torch.zeros(num_quads, dtype=torch.bool)
+    current_scores = scores_cpu.clone()
+
+    for idx in order.tolist():
+        if not valid_cpu[idx] or suppressed[idx] or current_scores[idx] < score_threshold:
             continue
-        kept.append(index)
-        suppressed |= overlaps[index] > iou_threshold
-        # Scores are visited in descending order. Once the requested output
-        # budget is full, later candidates cannot enter that prefix.
-        if max_output is not None and len(kept) >= max_output:
+        kept_indices.append(idx)
+        final_scores.append(float(current_scores[idx].item()))
+        if max_output is not None and len(kept_indices) >= max_output:
             break
-    return torch.tensor(kept, dtype=torch.long, device=value.device)
+
+        remaining = [
+            j for j in order.tolist() if j != idx and not suppressed[j] and valid_cpu[j]
+        ]
+        if not remaining:
+            continue
+        rem_tensor = torch.tensor(remaining, dtype=torch.long)
+        pair_ious = overlaps[idx, rem_tensor]
+        pair_ratios = scale_ratios[idx, rem_tensor]
+
+        if nms_mode == "part_aware":
+            to_suppress = (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
+            suppressed[rem_tensor[to_suppress]] = True
+        elif nms_mode == "soft":
+            decay = torch.exp(-(pair_ious**2) / soft_sigma)
+            current_scores[rem_tensor] *= decay
+            dropped = current_scores[rem_tensor] < score_threshold
+            suppressed[rem_tensor[dropped]] = True
+        elif nms_mode == "part_aware_soft":
+            decay = torch.where(
+                pair_ratios <= part_scale_ratio,
+                torch.ones_like(pair_ious),
+                torch.exp(-(pair_ious**2) / soft_sigma),
+            )
+            current_scores[rem_tensor] *= decay
+            dropped = current_scores[rem_tensor] < score_threshold
+            suppressed[rem_tensor[dropped]] = True
+        else:
+            raise ValueError(f"Unknown nms_mode: {nms_mode}")
+
+    keep = torch.tensor(kept_indices, dtype=torch.long, device=value.device)
+    kept_scores = torch.tensor(final_scores, dtype=scores.dtype, device=scores.device)
+    return (keep, kept_scores) if return_scores else keep
 
 
 def fit_quad_from_points(points: Tensor) -> Tensor:

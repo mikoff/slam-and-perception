@@ -1,32 +1,38 @@
 # Module Purpose & Boundaries
 
-This project owns class-agnostic proposal-object contracts, SAM-based open-world object discovery, dual-geometry (HBB and Quad) student detector training, Raspberry Pi 5 edge export, and SigLIP semantic distillation.
+This project owns class-agnostic proposal-object contracts, SAM-based open-world object discovery, MobileNetV4 edge student detector training (HBB and Quad geometries), and Raspberry Pi 5 edge export.
 
 # Technical Contracts & Interfaces
 
-- Input tensors are FP32 `[B, 3, H, W]`, with spatial dimensions divisible by 32 (default 384x384 or 512x512).
-- Feature strides are P2 (stride 4), P3 (stride 8), and P4 (stride 16) to resolve small-object representability.
-- Discovered pseudo-labels provide dual geometries per instance: `bbox` `[x1, y1, x2, y2]` and `quad` `[4, 2]` minimum-area oriented rectangles.
-- SigLIP teacher is pinned to `google/siglip-base-patch16-224` (revision `7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed`), producing unit-normalized `[N, 768]` embeddings.
-- Crop extraction uses axis-aligned source crops with 15% context margin (`contextual_source`) resized to `[224, 224]`.
-- Proposal ranking combines IoU-aligned quality and calibrated teacher similarity: `S_{ic} = q_i * sigmoid(exp(logit_scale) * (z_i @ w_c) + logit_bias)`.
-- Student detector heads use Task-Aligned Assignment (TAL) and Quality Focal Loss (QFL) predicting actual box IoU.
-- Accelerated deployment artifacts are exported INT8 PT2/ONNX graphs; post-processing decoders run outside the graph.
+- Input tensors: FP32 `[B, 3, H, W]`, default resolution 384x384 (divisible by 32).
+- Backbone: `MobileNetV4Backbone` (`mobilenetv4_conv_medium.e500_r256_in1k`) exposing C2 (48ch), C3 (80ch), C4 (160ch), and C5 (256ch).
+- Neck: `P2LiteFPN` outputs 4 pyramid levels `[B, 96, H / s, W / s]` for strides $s \in (4, 8, 16, 32)$.
+- Head Architectures:
+  - **HBB Student Detector (`StudentDetector`)**: `SharedDetectionHead` predicting objectness `[B, 1, H_l, W_l]`, FCOS-style distances $(l, t, r, b)$ `[B, 4, H_l, W_l]`, and centerness `[B, 1, H_l, W_l]`. Supports `dual_head=True` (primary 1-to-1 head + auxiliary 1-to-many TAL head).
+  - **Quad Detector (`QuadProposalDetector`)**: `SharedQuadProposalHead` predicting quality logit `[B, 1, H_l, W_l]` and 8 corner vertex offsets `[B, 8, H_l, W_l]`. Supports `dual_head=True` and learnable level scales.
+- Target Builders & Assigners:
+  - **Baseline (ATSS)**: `ATSSAssigner` and `QuadAssigner` with $k=4$, center prior radius 1.0.
+  - **Recipe 2 (TAL)**: `TaskAlignedAssigner` and `QuadTaskAlignedAssigner` with 1-to-1 greedy bipartite matching and auxiliary 1-to-many alignment ($t = s^\alpha \times \text{IoU}^\beta$).
+- Loss Formulations:
+  - **HBB (`ProposalLoss`)**: Quality Focal Loss on objectness + CIoU box loss + BCE centerness loss.
+  - **Quad (`QuadProposalLoss`)**: Quality Focal Loss + Corner L1 loss + Gaussian Wasserstein Distance (GWD) loss + corner validity loss.
+- Decoders & Suppression:
+  - `InferenceDecoder` and `QuadInferenceDecoder` support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$), `"part_aware_soft"`, and `"nms_free"`. Quad centerness is decoupled (`centerness_alpha = 0.0`).
 
 # Active Design Patterns & Decisions
 
-- Unsupervised discovery uses SAM Automatic Mask Generator (AMG) on the frozen 800-image cohort to capture unannotated natural/structural objects (trees, pillars, furniture).
-- Dual-geometry extraction derives both HBB and Quad representations simultaneously, postponing student architecture commitment without re-running SAM.
-- Hybrid supervision preserves verified human GT (nuImages, BDD100k, WoodScape) and merges non-overlapping SAM background instances (IoU <= 0.15 with human GT).
-- Part-vs-whole suppression enforces stability score >= 0.88, predicted IoU >= 0.85, and 85% containment suppression to prevent mask fracturing.
-- Production proposal budget for Raspberry Pi 5 is capped at K <= 10–15 regions via standard NMS at IoU 0.45–0.50 to eliminate redundant crops.
-- Category compatibility masks allow synonymous labels (e.g. `person` satisfies `pedestrian`) without forcing false negatives.
+- P2-stride feature pyramid ($s=4$) enables direct representation and localization of small objects down to 4–16 px across all pyramid levels.
+- Hybrid supervision combines confirmed human GT (6,452 thing instances) with SAM novel discoveries (25,728 instances with stability >= 0.88).
+- Suppressed internal subparts (28,354 instances) and non-object stuff (`road_surface`) are assigned to ignore regions rather than hard negatives.
+- Post-processing decoders (`InferenceDecoder` for HBB, `QuadInferenceDecoder` for Quads) apply NMS outside the model graph.
+- Anisotropic diagonal jitter (`1e-4 * I`) and LAPACK CPU fallback in eigensolvers prevent cuSOLVER `LinAlgError` on degenerate or isotropic quad boxes.
+- Mixed precision: FP16 autocast with `GradScaler` on CUDA, consuming ~1.7 GB VRAM at batch size 16.
 
 # Local Constraints & Gotchas
 
-- SigLIP ViT-B execution on RPi 5 CPU takes 100–180ms per crop; proposal stacking or budgets >15 crops severely choke per-frame latency.
-- Stride-8 (P3) models silently drop <16px objects as `unrepresentable`; student models must retain P2 (stride 4).
-- Without containment suppression, SAM segments vehicle sub-components (doors, wheels, lights) into duplicate competing instances.
-- Background quality loss must retain non-zero weak negative weight (0.15–0.20); zero negative weight causes score uncalibration.
-- Production images are local symlinks and exceed archive scratch space; streaming pipelines must be used.
-- Offline crop embeddings must bind image identity, geometry hash, and teacher revision in cache keys.
+- Stride-8 (P3) models drop small objects (<16px); student models must maintain P2 (stride 4).
+- PyTorch CUDA eigensolvers (`linalg.eigh`) fail to converge when symmetric 2x2 covariance matrices have repeated eigenvalues without jitter.
+- Suppressed SAM subparts must remain in ignore masks; treating them as background penalties penalizes detector predictions of whole objects.
+- `sample.original_size` is `(height, width)`. When calculating scale and unletterboxing, unpack as `orig_h, orig_w`.
+- Image files are read from dataset storage at `/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/`.
+- Training pipeline: `scripts/train_student_pilot.py` and visualizer `scripts/visualize_student_validation.py`.

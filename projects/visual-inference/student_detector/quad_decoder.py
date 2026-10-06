@@ -46,8 +46,8 @@ class QuadDetection:
 
 def decode_dense_quad_output(
     output: QuadDetectorOutput,
-    strides: tuple[int, int, int] = (8, 16, 32),
-    centerness_alpha: float = 0.3,
+    strides: tuple[int, ...] = (8, 16, 32),
+    centerness_alpha: float = 0.0,
 ) -> tuple[Tensor, Tensor]:
     """Decode all locations without ranking, validation, clipping, or NMS."""
     feature_shapes = tuple((item.shape[-2], item.shape[-1]) for item in output.quality)
@@ -95,26 +95,42 @@ class QuadInferenceDecoder:
     def __init__(
         self,
         *,
-        strides: tuple[int, int, int] = (8, 16, 32),
-        pre_nms_top_k: int = 300,
-        nms_iou_threshold: float = 0.9,
-        max_proposals: int = 100,
+        strides: tuple[int, ...] = (8, 16, 32),
+        pre_nms_top_k: int = 1000,
+        nms_iou_threshold: float = 0.50,
+        max_proposals: int = 300,
+        centerness_alpha: float = 0.0,
+        nms_mode: str = "hard",
+        soft_sigma: float = 0.5,
+        part_scale_ratio: float = 0.4,
+        score_threshold: float = 0.05,
     ) -> None:
         if pre_nms_top_k < max_proposals:
             raise ValueError("pre_nms_top_k must be at least max_proposals")
+        if nms_mode not in {"hard", "soft", "part_aware", "part_aware_soft", "nms_free"}:
+            raise ValueError(
+                "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
+            )
         self.strides = strides
         self.pre_nms_top_k = pre_nms_top_k
         self.nms_iou_threshold = nms_iou_threshold
         self.max_proposals = max_proposals
+        self.centerness_alpha = centerness_alpha
+        self.nms_mode = nms_mode
+        self.soft_sigma = soft_sigma
+        self.part_scale_ratio = part_scale_ratio
+        self.score_threshold = score_threshold
 
     def __call__(
         self,
         output: QuadDetectorOutput,
         image_size: tuple[int, int],
-        valid_point_masks: tuple[Tensor, Tensor, Tensor] | None = None,
+        valid_point_masks: tuple[Tensor, ...] | None = None,
     ) -> list[QuadDetection]:
         height, width = image_size
-        decoded_all, scores = decode_dense_quad_output(output, self.strides)
+        decoded_all, scores = decode_dense_quad_output(
+            output, self.strides, centerness_alpha=self.centerness_alpha
+        )
         point_levels = torch.cat(
             [
                 torch.full(
@@ -141,7 +157,7 @@ class QuadInferenceDecoder:
                 [mask.reshape(mask.shape[0], -1) for mask in valid_point_masks], dim=1
             )
             if masks.shape != scores.shape:
-                raise ValueError("valid_point_masks must match P3-P5 output shapes")
+                raise ValueError("valid_point_masks must match output shapes")
             scores = scores.masked_fill(
                 ~masks.to(device=scores.device, dtype=torch.bool), -torch.inf
             )
@@ -200,16 +216,21 @@ class QuadInferenceDecoder:
                 )
                 continue
             canonical = canonicalize_quads(decoded)
-            keep = polygon_nms(
+            keep, kept_scores = polygon_nms(
                 canonical,
                 selected_scores,
                 self.nms_iou_threshold,
                 max_output=self.max_proposals,
+                nms_mode=self.nms_mode,
+                soft_sigma=self.soft_sigma,
+                part_scale_ratio=self.part_scale_ratio,
+                score_threshold=self.score_threshold,
+                return_scores=True,
             )
             detections.append(
                 QuadDetection(
                     canonical[keep],
-                    selected_scores[keep],
+                    kept_scores,
                     canonical,
                     selected_scores,
                     candidate_count=count,

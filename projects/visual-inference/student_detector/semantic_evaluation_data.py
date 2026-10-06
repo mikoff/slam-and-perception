@@ -103,17 +103,33 @@ def load_semantic_image_records(
             return []
 
         selected_ids = [r[0] for r in image_rows]
-        placeholders = ",".join(["?"] * len(selected_ids))
-        ann_rows = connection.execute(
-            f"""
-            SELECT rowid, image_id, quad_json, x1, y1, x2, y2,
-                   ignore_region, category_name, geometry_tier
-            FROM annotations
-            WHERE image_id IN ({placeholders})
-            ORDER BY image_id, rowid
-            """,
-            selected_ids,
-        ).fetchall()
+        if image_ids is None:
+            ann_rows = connection.execute(
+                """
+                SELECT rowid, image_id, quad_json, x1, y1, x2, y2,
+                       ignore_region, category_name, geometry_tier
+                FROM annotations
+                ORDER BY image_id, rowid
+                """
+            ).fetchall()
+        else:
+            ann_rows = []
+            chunk_size = 500
+            for i in range(0, len(selected_ids), chunk_size):
+                chunk = selected_ids[i : i + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                ann_rows.extend(
+                    connection.execute(
+                        f"""
+                        SELECT rowid, image_id, quad_json, x1, y1, x2, y2,
+                               ignore_region, category_name, geometry_tier
+                        FROM annotations
+                        WHERE image_id IN ({placeholders})
+                        ORDER BY image_id, rowid
+                        """,
+                        chunk,
+                    ).fetchall()
+                )
 
     annotations_by_image: dict[int, list[SemanticGroundTruthRecord]] = defaultdict(list)
     image_source_map = {r[0]: str(r[4]) for r in image_rows}

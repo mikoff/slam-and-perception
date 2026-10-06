@@ -50,6 +50,7 @@ class QuadProposalSample:
     size_bins: tuple[str, ...] = ()
     aspect_bins: tuple[str, ...] = ()
     radial_bins: tuple[str, ...] = ()
+    stabilities: tuple[float, ...] = ()
 
 
 def _quad_slice_labels(quads: Tensor, size: int) -> tuple[tuple[str, ...], ...]:

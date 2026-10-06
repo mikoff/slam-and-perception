@@ -34,15 +34,20 @@ class QuadLossOutput:
 
 def flatten_quad_output(output: QuadDetectorOutput) -> tuple[Tensor, Tensor]:
     quality = torch.cat([item.flatten(start_dim=1) for item in output.quality], dim=1)
-    offsets = torch.cat([
-        item.permute(0, 2, 3, 1).reshape(item.shape[0], -1, 8)
-        for item in output.corner_offsets
-    ], dim=1)
+    offsets = torch.cat(
+        [
+            item.permute(0, 2, 3, 1).reshape(item.shape[0], -1, 8)
+            for item in output.corner_offsets
+        ],
+        dim=1,
+    )
     return quality, offsets
 
 
 def _quality_focal_loss(logits: Tensor, targets: Tensor, beta: float) -> Tensor:
-    cross_entropy = functional.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    cross_entropy = functional.binary_cross_entropy_with_logits(
+        logits, targets, reduction="none"
+    )
     return (targets - logits.sigmoid()).abs().pow(beta) * cross_entropy
 
 
@@ -52,16 +57,16 @@ class QuadProposalLoss(nn.Module):
     def __init__(
         self,
         *,
-        strides: tuple[int, int, int] = (8, 16, 32),
+        strides: tuple[int, ...] = (8, 16, 32),
         quality_weight: float = 1.0,
         corner_weight: float = 2.0,
         corner_smooth_l1_beta: float = 1.0,
         gwd_weight: float = 0.0,
         validity_weight: float = 0.05,
         quality_focal_beta: float = 2.0,
-        quality_target_mode: str = "centerness",
-        quality_blend: float = 0.0,
-        geometry_quality_target: str = "corner_proxy",
+        quality_target_mode: str = "blend",
+        quality_blend: float = 0.8,
+        geometry_quality_target: str = "exact_iou",
     ) -> None:
         super().__init__()
         if quality_target_mode not in {"centerness", "blend", "iou"}:
@@ -83,19 +88,25 @@ class QuadProposalLoss(nn.Module):
         self.quality_blend = quality_blend
         self.geometry_quality_target = geometry_quality_target
 
-    def _decoded_quads(self, offsets: Tensor, feature_shapes: tuple[tuple[int, int], ...]) -> Tensor:
+    def _decoded_quads(
+        self, offsets: Tensor, feature_shapes: tuple[tuple[int, int], ...]
+    ) -> Tensor:
         points, level_slices = make_grid_points(
             feature_shapes, self.strides, device=offsets.device, dtype=offsets.dtype
         )
         point_strides = offsets.new_empty(points.shape[0])
         for level_slice, stride in zip(level_slices, self.strides, strict=True):
             point_strides[level_slice] = stride
-        return torch.stack([
-            decode_quad_offsets(points, offsets[batch], point_strides[:, None])
-            for batch in range(offsets.shape[0])
-        ])
+        return torch.stack(
+            [
+                decode_quad_offsets(points, offsets[batch], point_strides[:, None])
+                for batch in range(offsets.shape[0])
+            ]
+        )
 
-    def _corner_loss(self, predicted: Tensor, target: Tensor, positive: Tensor) -> Tensor:
+    def _corner_loss(
+        self, predicted: Tensor, target: Tensor, positive: Tensor
+    ) -> Tensor:
         if not positive.any():
             return predicted.float().mean() * 0
         # Stride-normalized offsets preserve the same cyclic/reversed vertex
@@ -103,13 +114,19 @@ class QuadProposalLoss(nn.Module):
         # targets once, so generate all eight traversals directly here without
         # per-positive angle sorting (which is a major GPU training bottleneck).
         target_quads = target[positive].reshape(-1, 4, 2)
-        forward = torch.stack([torch.roll(target_quads, -index, dims=1) for index in range(4)], dim=1)
+        forward = torch.stack(
+            [torch.roll(target_quads, -index, dims=1) for index in range(4)], dim=1
+        )
         reverse = torch.flip(target_quads, dims=(1,))
-        backward = torch.stack([torch.roll(reverse, -index, dims=1) for index in range(4)], dim=1)
+        backward = torch.stack(
+            [torch.roll(reverse, -index, dims=1) for index in range(4)], dim=1
+        )
         traversals = torch.cat((forward, backward), dim=1).reshape(-1, 8, 8)
         errors = functional.smooth_l1_loss(
             predicted[positive].float().unsqueeze(1).expand(-1, 8, -1),
-            traversals.float(), reduction="none", beta=self.corner_smooth_l1_beta
+            traversals.float(),
+            reduction="none",
+            beta=self.corner_smooth_l1_beta,
         ).mean(dim=2)
         min_errors = errors.min(dim=1).values
 
@@ -119,11 +136,12 @@ class QuadProposalLoss(nn.Module):
         xmax = target_quads[..., 0].amax(dim=1)
         ymin = target_quads[..., 1].amin(dim=1)
         ymax = target_quads[..., 1].amax(dim=1)
-        gt_diag = torch.sqrt((xmax - xmin).square() + (ymax - ymin).square()).clamp(min=1.0)
+        gt_diag = torch.sqrt((xmax - xmin).square() + (ymax - ymin).square()).clamp(
+            min=1.0
+        )
         # Normalize weights so mean weight stays close to 1.0
         diag_weights = (gt_diag.median() / gt_diag).clamp(0.2, 5.0)
         return (min_errors * diag_weights).mean()
-
 
     def _validity_loss(self, quads: Tensor, positive: Tensor) -> Tensor:
         if not positive.any():
@@ -133,10 +151,9 @@ class QuadProposalLoss(nn.Module):
         edge_lengths = torch.linalg.vector_norm(edges, dim=2)
         edge_penalty = functional.relu(0.25 - edge_lengths).square().mean(dim=1)
         area_penalty = functional.relu(0.25 - quad_signed_area(selected).abs()).square()
-        turns = (
-            edges[..., 0] * torch.roll(edges[..., 1], -1, dims=1)
-            - edges[..., 1] * torch.roll(edges[..., 0], -1, dims=1)
-        )
+        turns = edges[..., 0] * torch.roll(edges[..., 1], -1, dims=1) - edges[
+            ..., 1
+        ] * torch.roll(edges[..., 0], -1, dims=1)
         clockwise = functional.relu(0.01 - turns).mean(dim=1)
         counter_clockwise = functional.relu(0.01 + turns).mean(dim=1)
         convexity_penalty = torch.minimum(clockwise, counter_clockwise)
@@ -210,7 +227,15 @@ class QuadProposalLoss(nn.Module):
         traversals = torch.cat((forward, backward), dim=1)
         centered = target - target.mean(dim=1, keepdim=True)
         covariance = centered.transpose(1, 2) @ centered / 4.0
-        _, eigenvectors = torch.linalg.eigh(covariance.to(torch.float32))
+        jitter = torch.diag(
+            torch.tensor([1e-4, 1.001e-4], device=target.device, dtype=torch.float32)
+        )
+        cov_f32 = covariance.to(torch.float32) + jitter
+        try:
+            _, eigenvectors = torch.linalg.eigh(cov_f32)
+        except (torch._C._LinAlgError, RuntimeError):
+            _, eigenvectors = torch.linalg.eigh(cov_f32.cpu())
+            eigenvectors = eigenvectors.to(target.device)
         # Columns are the minor and major principal axes. Project errors into
         # that local frame and normalize each direction independently so a
         # one-pixel error across a thin object is not hidden by its long axis.
@@ -223,17 +248,27 @@ class QuadProposalLoss(nn.Module):
         normalized = normalized_vertex_error.mean(dim=-1).amin(dim=1)
         return torch.exp(-2.0 * normalized).clamp(0, 1)
 
-    def forward(self, output: QuadDetectorOutput, targets: QuadTrainingTargets) -> QuadLossOutput:
+    def forward(
+        self, output: QuadDetectorOutput, targets: QuadTrainingTargets
+    ) -> QuadLossOutput:
         quality_logits, predicted_offsets = flatten_quad_output(output)
         positive = targets.positive_mask
         positive_count = positive.sum().to(dtype=quality_logits.dtype)
-        feature_shapes = tuple((item.shape[-2], item.shape[-1]) for item in output.quality)
+        feature_shapes = tuple(
+            (item.shape[-2], item.shape[-1]) for item in output.quality
+        )
         predicted_quads = self._decoded_quads(predicted_offsets, feature_shapes)
         target_quads = self._decoded_quads(targets.corner_offsets, feature_shapes)
-        corner = self._corner_loss(predicted_offsets.reshape(-1, 8), targets.corner_offsets.reshape(-1, 8), positive.reshape(-1))
+        corner = self._corner_loss(
+            predicted_offsets.reshape(-1, 8),
+            targets.corner_offsets.reshape(-1, 8),
+            positive.reshape(-1),
+        )
         # Validity thresholds are defined in stride-normalized coordinates so
         # the same shape receives the same penalty on every FPN level.
-        validity = self._validity_loss(predicted_offsets.reshape(-1, 4, 2), positive.reshape(-1))
+        validity = self._validity_loss(
+            predicted_offsets.reshape(-1, 4, 2), positive.reshape(-1)
+        )
         if self.gwd_weight > 0:
             gwd = self._gwd_loss(
                 predicted_offsets.reshape(-1, 4, 2),
@@ -245,12 +280,17 @@ class QuadProposalLoss(nn.Module):
 
         quality_target = targets.quality.reshape(-1).float()
         if self.quality_target_mode in {"blend", "iou"} and positive.any():
-            selected_pred = predicted_quads.reshape(-1, 4, 2)[positive.reshape(-1)].detach()
-            selected_target = target_quads.reshape(-1, 4, 2)[positive.reshape(-1)].detach()
+            selected_pred = predicted_quads.reshape(-1, 4, 2)[
+                positive.reshape(-1)
+            ].detach()
+            selected_target = target_quads.reshape(-1, 4, 2)[
+                positive.reshape(-1)
+            ].detach()
             # CUDA eigensolvers used by the proxy and reference polygon geometry
             # are float32-only; explicitly leave the surrounding AMP region.
-            with torch.no_grad(), torch.autocast(
-                device_type=selected_pred.device.type, enabled=False
+            with (
+                torch.no_grad(),
+                torch.autocast(device_type=selected_pred.device.type, enabled=False),
             ):
                 if self.geometry_quality_target == "exact_iou":
                     geometry_quality = aligned_quad_iou(
@@ -266,11 +306,14 @@ class QuadProposalLoss(nn.Module):
             else:
                 quality_target = quality_target.clone()
                 quality_target[positive.reshape(-1)] = (
-                    (1 - self.quality_blend) * quality_target[positive.reshape(-1)]
-                    + self.quality_blend * geometry_quality
-                )
+                    1 - self.quality_blend
+                ) * quality_target[
+                    positive.reshape(-1)
+                ] + self.quality_blend * geometry_quality
         per_location_quality = _quality_focal_loss(
-            quality_logits.reshape(-1), quality_target.to(quality_logits.dtype), self.quality_focal_beta
+            quality_logits.reshape(-1),
+            quality_target.to(quality_logits.dtype),
+            self.quality_focal_beta,
         )
         positive_quality = self._group_mean(per_location_quality, positive.reshape(-1))
         trusted_quality = self._group_mean(
@@ -300,5 +343,7 @@ class QuadProposalLoss(nn.Module):
             quality_trusted_background=trusted_quality,
             quality_weak_background=weak_quality,
             number_positive=positive_count.detach(),
-            quality_target_mean=quality_target[positive.reshape(-1)].mean() if positive.any() else quality_target.new_zeros(()),
+            quality_target_mean=quality_target[positive.reshape(-1)].mean()
+            if positive.any()
+            else quality_target.new_zeros(()),
         )

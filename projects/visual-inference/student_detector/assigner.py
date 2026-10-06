@@ -33,8 +33,8 @@ class ATSSAssigner:
         *,
         strides: tuple[int, ...] = (8, 16, 32),
         prior_sizes: tuple[int, ...] = (64, 128, 256),
-        top_k: int = 9,
-        center_radius: float | None = 1.5,
+        top_k: int = 4,
+        center_radius: float | None = 1.0,
     ) -> None:
         if len(strides) != len(prior_sizes):
             raise ValueError("strides and prior_sizes must have equal length")

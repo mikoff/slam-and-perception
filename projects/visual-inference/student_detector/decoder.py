@@ -24,18 +24,106 @@ class Detection:
     invalid_candidate_count: int = 0
 
 
-def class_agnostic_nms(boxes: Tensor, scores: Tensor, iou_threshold: float) -> Tensor:
-    """Use the compiled torchvision kernel outside the exported model graph."""
+def class_agnostic_nms(
+    boxes: Tensor,
+    scores: Tensor,
+    iou_threshold: float,
+    *,
+    nms_mode: str = "hard",
+    soft_sigma: float = 0.5,
+    part_scale_ratio: float = 0.4,
+    score_threshold: float = 0.05,
+    max_output: int | None = None,
+    return_scores: bool = False,
+) -> Tensor | tuple[Tensor, Tensor]:
+    """Class-agnostic NMS supporting hard NMS, Gaussian Soft-NMS, and part-aware suppression."""
     if boxes.numel() == 0:
-        return torch.empty((0,), dtype=torch.long, device=boxes.device)
-    order = torch.argsort(scores, descending=True, stable=True)
-    # NMS only needs a strict processing order. Unique synthetic priorities
-    # preserve stable score/index ordering even when model scores are equal.
-    priorities = torch.arange(
-        order.numel(), 0, -1, dtype=torch.float32, device=scores.device
-    )
-    kept_order = torchvision_nms(boxes[order].float(), priorities, iou_threshold)
-    return order[kept_order]
+        empty = torch.empty((0,), dtype=torch.long, device=boxes.device)
+        empty_scores = torch.empty((0,), dtype=scores.dtype, device=scores.device)
+        return (empty, empty_scores) if return_scores else empty
+
+    if nms_mode == "nms_free":
+        order = torch.argsort(scores, descending=True, stable=True)
+        if max_output is not None:
+            order = order[:max_output]
+        return (order, scores[order]) if return_scores else order
+
+    if nms_mode == "hard":
+        order = torch.argsort(scores, descending=True, stable=True)
+        # NMS only needs a strict processing order. Unique synthetic priorities
+        # preserve stable score/index ordering even when model scores are equal.
+        priorities = torch.arange(
+            order.numel(), 0, -1, dtype=torch.float32, device=scores.device
+        )
+        kept_order = torchvision_nms(boxes[order].float(), priorities, iou_threshold)
+        keep = order[kept_order]
+        if max_output is not None:
+            keep = keep[:max_output]
+        return (keep, scores[keep]) if return_scores else keep
+
+    boxes_f = boxes.float()
+    scores_f = scores.clone().float()
+    num_boxes = boxes.shape[0]
+
+    widths = (boxes_f[:, 2] - boxes_f[:, 0]).clamp(min=0)
+    heights = (boxes_f[:, 3] - boxes_f[:, 1]).clamp(min=0)
+    areas = widths * heights
+
+    order = torch.argsort(scores_f, descending=True, stable=True)
+    boxes_sorted = boxes_f[order]
+    areas_sorted = areas[order]
+
+    from torchvision.ops import box_iou as tv_box_iou
+
+    ious = tv_box_iou(boxes_sorted, boxes_sorted)
+    scale_ratios = torch.minimum(
+        areas_sorted[:, None], areas_sorted[None, :]
+    ) / torch.maximum(areas_sorted[:, None], areas_sorted[None, :]).clamp(min=1e-6)
+
+    kept_local: list[int] = []
+    final_scores: list[float] = []
+    suppressed = torch.zeros(num_boxes, dtype=torch.bool, device=boxes.device)
+    current_scores = scores_f[order].clone()
+
+    for i in range(num_boxes):
+        if suppressed[i] or current_scores[i] < score_threshold:
+            continue
+        kept_local.append(i)
+        final_scores.append(float(current_scores[i].item()))
+        if max_output is not None and len(kept_local) >= max_output:
+            break
+
+        remaining = torch.arange(i + 1, num_boxes, device=boxes.device)
+        active_remaining = remaining[~suppressed[remaining]]
+        if active_remaining.numel() == 0:
+            continue
+
+        pair_ious = ious[i, active_remaining]
+        pair_ratios = scale_ratios[i, active_remaining]
+
+        if nms_mode == "part_aware":
+            to_suppress = (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
+            suppressed[active_remaining[to_suppress]] = True
+        elif nms_mode == "soft":
+            decay = torch.exp(-(pair_ious**2) / soft_sigma)
+            current_scores[active_remaining] *= decay
+            dropped = current_scores[active_remaining] < score_threshold
+            suppressed[active_remaining[dropped]] = True
+        elif nms_mode == "part_aware_soft":
+            decay = torch.where(
+                pair_ratios <= part_scale_ratio,
+                torch.ones_like(pair_ious),
+                torch.exp(-(pair_ious**2) / soft_sigma),
+            )
+            current_scores[active_remaining] *= decay
+            dropped = current_scores[active_remaining] < score_threshold
+            suppressed[active_remaining[dropped]] = True
+        else:
+            raise ValueError(f"Unknown nms_mode: {nms_mode}")
+
+    keep = order[torch.tensor(kept_local, dtype=torch.long, device=boxes.device)]
+    kept_scores = torch.tensor(final_scores, dtype=scores.dtype, device=scores.device)
+    return (keep, kept_scores) if return_scores else keep
 
 
 class InferenceDecoder:
@@ -45,20 +133,32 @@ class InferenceDecoder:
         self,
         *,
         strides: tuple[int, ...] = (8, 16, 32),
-        top_k: int = 300,
-        nms_iou_threshold: float = 0.6,
-        max_detections: int = 100,
-        score_mode: str = "objectness_x_centerness",
+        top_k: int = 1000,
+        nms_iou_threshold: float = 0.50,
+        max_detections: int = 300,
+        score_mode: str = "objectness",
+        nms_mode: str = "hard",
+        soft_sigma: float = 0.5,
+        part_scale_ratio: float = 0.4,
+        score_threshold: float = 0.05,
     ) -> None:
         if score_mode not in {"objectness", "objectness_x_centerness"}:
             raise ValueError(
                 "score_mode must be 'objectness' or 'objectness_x_centerness'"
+            )
+        if nms_mode not in {"hard", "soft", "part_aware", "part_aware_soft", "nms_free"}:
+            raise ValueError(
+                "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
             )
         self.strides = strides
         self.top_k = top_k
         self.nms_iou_threshold = nms_iou_threshold
         self.max_detections = max_detections
         self.score_mode = score_mode
+        self.nms_mode = nms_mode
+        self.soft_sigma = soft_sigma
+        self.part_scale_ratio = part_scale_ratio
+        self.score_threshold = score_threshold
 
     def __call__(
         self,
@@ -170,13 +270,21 @@ class InferenceDecoder:
             selected_scores = selected_scores[valid]
             selected_levels = point_levels[selected_indices][valid]
             selected_locations = point_locations[selected_indices][valid]
-            keep = class_agnostic_nms(
-                selected_boxes, selected_scores, self.nms_iou_threshold
-            )[: self.max_detections]
+            keep, kept_scores = class_agnostic_nms(
+                selected_boxes,
+                selected_scores,
+                self.nms_iou_threshold,
+                nms_mode=self.nms_mode,
+                soft_sigma=self.soft_sigma,
+                part_scale_ratio=self.part_scale_ratio,
+                score_threshold=self.score_threshold,
+                max_output=self.max_detections,
+                return_scores=True,
+            )
             detections.append(
                 Detection(
                     selected_boxes[keep],
-                    selected_scores[keep],
+                    kept_scores,
                     selected_levels[keep],
                     selected_locations[keep],
                     selected_boxes,

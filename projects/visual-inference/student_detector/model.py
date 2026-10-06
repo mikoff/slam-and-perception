@@ -27,6 +27,9 @@ class StudentDetector(nn.Module):
         neck_type: str = "lite",
         strides: tuple[int, ...] = (8, 16, 32),
         head_seed: int | None = None,
+        dual_head: bool = False,
+        use_dfl: bool = False,
+        reg_max: int = 16,
     ) -> None:
         super().__init__()
         if backbone is None:
@@ -37,6 +40,7 @@ class StudentDetector(nn.Module):
             raise TypeError("backbone must expose an out_channels tuple")
 
         self.backbone = backbone
+        self.dual_head = dual_head
         if tuple(backbone.reductions) != strides:
             raise ValueError("backbone reductions must match detector strides")
         if strides == (4, 8, 16, 32) and neck_type == "lite":
@@ -52,17 +56,41 @@ class StudentDetector(nn.Module):
                 f"unsupported neck/stride combination: {neck_type}/{strides}"
             )
         if head_seed is None:
-            self.head = SharedDetectionHead(fpn_channels, strides=strides)
+            self.head = SharedDetectionHead(
+                fpn_channels, strides=strides, use_dfl=use_dfl, reg_max=reg_max
+            )
+            self.aux_head = (
+                SharedDetectionHead(
+                    fpn_channels, strides=strides, use_dfl=use_dfl, reg_max=reg_max
+                )
+                if dual_head
+                else None
+            )
         else:
             with torch.random.fork_rng():
                 torch.manual_seed(head_seed)
-                self.head = SharedDetectionHead(fpn_channels, strides=strides)
+                self.head = SharedDetectionHead(
+                    fpn_channels, strides=strides, use_dfl=use_dfl, reg_max=reg_max
+                )
+                self.aux_head = (
+                    SharedDetectionHead(
+                        fpn_channels, strides=strides, use_dfl=use_dfl, reg_max=reg_max
+                    )
+                    if dual_head
+                    else None
+                )
 
     def forward_features(self, images: Tensor) -> tuple[Tensor, ...]:
         return self.fpn(self.backbone(images))  # type: ignore[arg-type]
 
-    def forward(self, images: Tensor) -> DetectorOutput:
-        return self.head(self.forward_features(images))
+    def forward(
+        self, images: Tensor
+    ) -> DetectorOutput | tuple[DetectorOutput, DetectorOutput]:
+        features = self.forward_features(images)
+        primary = self.head(features)
+        if self.training and self.dual_head and self.aux_head is not None:
+            return primary, self.aux_head(features)
+        return primary
 
 
 class QuadProposalDetector(nn.Module):
@@ -75,28 +103,51 @@ class QuadProposalDetector(nn.Module):
         backbone: nn.Module | None = None,
         fpn_channels: int = 96,
         neck_type: str = "lite",
+        strides: tuple[int, ...] = (8, 16, 32),
+        dual_head: bool = False,
     ) -> None:
         super().__init__()
         if backbone is None:
-            backbone = MobileNetV4Backbone(pretrained=pretrained_backbone)
+            backbone = MobileNetV4Backbone(
+                pretrained=pretrained_backbone, desired_reductions=strides
+            )
         if not hasattr(backbone, "out_channels"):
             raise TypeError("backbone must expose an out_channels tuple")
         self.backbone = backbone
-        if neck_type == "attn_res":
+        self.dual_head = dual_head
+        if tuple(backbone.reductions) != strides:
+            raise ValueError("backbone reductions must match detector strides")
+        if strides == (4, 8, 16, 32) and neck_type == "lite":
+            self.fpn = P2LiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
+        elif neck_type == "attn_res":
+            if strides != (8, 16, 32):
+                raise ValueError("attn_res supports only P3-P5")
             self.fpn = AttnResLiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
-        elif neck_type == "lite":
+        elif neck_type == "lite" and strides == (8, 16, 32):
             self.fpn = LiteFPN(tuple(backbone.out_channels), fpn_channels)  # type: ignore[arg-type]
         else:
             raise ValueError(
-                f"Unknown neck_type: {neck_type}. Must be 'lite' or 'attn_res'"
+                f"unsupported neck/stride combination: {neck_type}/{strides}"
             )
-        self.head = SharedQuadProposalHead(fpn_channels)
+        self.head = SharedQuadProposalHead(fpn_channels, strides=strides)
+        self.aux_head = (
+            SharedQuadProposalHead(fpn_channels, strides=strides)
+            if dual_head
+            else None
+        )
+        self.strides = strides
 
-    def forward_features(self, images: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+    def forward_features(self, images: Tensor) -> tuple[Tensor, ...]:
         return self.fpn(self.backbone(images))  # type: ignore[arg-type]
 
-    def forward(self, images: Tensor) -> QuadDetectorOutput:
-        return self.head(self.forward_features(images))
+    def forward(
+        self, images: Tensor
+    ) -> QuadDetectorOutput | tuple[QuadDetectorOutput, QuadDetectorOutput]:
+        features = self.forward_features(images)
+        primary = self.head(features)
+        if self.training and self.dual_head and self.aux_head is not None:
+            return primary, self.aux_head(features)
+        return primary
 
 
 __all__ = [
