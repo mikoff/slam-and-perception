@@ -1,80 +1,32 @@
 # Module Purpose & Boundaries
 
-This project owns the proposal-object contract and trains class-agnostic HBB and quad detectors; GitHub Actions dispatches dstack cloud work through the Packet bridge.
+This project owns class-agnostic proposal-object contracts, SAM-based open-world object discovery, dual-geometry (HBB and Quad) student detector training, Raspberry Pi 5 edge export, and SigLIP semantic distillation. GitHub Actions dispatches dstack cloud work through the Packet bridge.
 
 # Technical Contracts & Interfaces
 
-- Input tensors are FP32 `[B, 3, H, W]`, with dimensions divisible by 32.
-- Accelerate owns device placement, FP16, accumulation, tracker dispatch, and
-  distributed synchronization; the training runtime owns checkpoint lifecycle.
-- `DATASET_ID` identifies an immutable S3 prefix with an archive-level hash manifest.
-- Production bundles use native tar/pigz/AWS streaming while hashing and
-  dereferencing symlinks; the manifest uploads only after archive verification.
-- Phase 4 launch fails before GPU setup unless the exact dataset/cloud-contract
-  hashes, schema-8 indexes, manifest bindings, and initialization hash match.
-- HBB/quad workers lazily reopen SQLite read-only per process and fetch one
-  image's annotations; shared epoch tensors propagate to persistent workers.
-- HBB/quad share `proposal-manifest.v2` and an immutable decoded K=100 record
-  with stable IDs, inverse-letterboxed geometry, and deterministic score ties.
-- FP32 deployment artifacts are flattened raw-output PT2 graphs; decoding and
-  geometry-specific NMS remain outside the exported network.
-- Both geometry adapters consume one sampled affine/photometric policy; validation
-  is letterbox-only and effective bounds/exclusions are recorded in run metadata.
-- Phase 4 local runs use FP16 `[B=16, 3, 384, 384]` with accumulation 8;
-  the completed 20k schedule ended at 19,995 accepted updates after five AMP skips.
-- Full `last.pt` checkpoints contain deterministic resume state. Best model
-  checkpoints are weights-only and declare whether raw or EMA weights won.
-- A weights-only warm start resets optimizer, scheduler, and EMA; full resume
-  restores all state and takes precedence when auto-resume finds a checkpoint.
-- Quality recipes starting at centerness use the staged curriculum; explicit
-  blend/geometry recipes stay fixed, including the mature-EMA min-8 warm start.
-- Run contracts bind source/data/config/project Git state; resumes require descendant source.
+- Input tensors are FP32 `[B, 3, H, W]`, with spatial dimensions divisible by 32 (default 384x384 or 512x512).
+- Feature strides are P2 (stride 4), P3 (stride 8), and P4 (stride 16) to resolve small-object representability.
+- Discovered pseudo-labels provide dual geometries per instance: `bbox` `[x1, y1, x2, y2]` and `quad` `[4, 2]` minimum-area oriented rectangles.
+- SigLIP teacher is pinned to `google/siglip-base-patch16-224` (revision `7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed`), producing unit-normalized `[N, 768]` embeddings.
+- Crop extraction uses axis-aligned source crops with 15% context margin (`contextual_source`) resized to `[224, 224]`.
+- Proposal ranking combines IoU-aligned quality and calibrated teacher similarity: `S_{ic} = q_i * sigmoid(exp(logit_scale) * (z_i @ w_c) + logit_bias)`.
+- Student detector heads use Task-Aligned Assignment (TAL) and Quality Focal Loss (QFL) predicting actual box IoU.
+- Accelerated deployment artifacts are exported INT8 PT2/ONNX graphs; post-processing decoders run outside the graph.
 
 # Active Design Patterns & Decisions
 
-- Console and JSONL use millisecond UTC; W&B metrics are namespaced.
-- SIGINT/SIGTERM checkpoints at safe batch boundaries for deterministic resume.
-- Source sampling uses cumulative residual quotas; intended/observed source and domain counts are reduced across workers and logged per optimizer window/epoch.
-- A single bounded background uploader serializes S3 checkpoint writes and is
-  flushed before tracker shutdown; local atomic writes precede remote upload.
-- Validation computes each image's polygon overlaps on the accelerator, then
-  folds them into counters, compact CPU diagnostics, and fixed-memory score
-  histograms. No validation-long proposal or ground-truth tensors are kept.
-- NMS audits promote FP16 outputs to FP32 geometry; interactive visualization
-  defaults to NMS 0.7/score 0.4, supports overrides and per-source sampling.
-- Quad raw and EMA states share one validation traversal; HBB also reports both
-  states, each with an independent streaming metric accumulator.
-- Production validates every five epochs and at completion. Frozen benchmark
-  recipes validate every epoch so their comparison contract is unchanged.
-- `batch_preflight` tests real benchmark samples in isolated FP16 subprocesses,
-  recommends the smallest batch within 95% of peak throughput with 15% VRAM
-  headroom, stops on the first OOM/error/timeout, and uploads its report to S3.
-- Assignment and positive offset construction are vectorized; only the rare
-  no-candidate fallback remains per-object.
-- Shared proposal-evaluation helpers prepare models, masks, ego regions, and
-  slice labels; scripts retain fixed-policy versus grid-specific aggregation.
-- Suppression audits support weighted/full-manifest modes; static dashboards and
-  portable/linked three-panel galleries bind utility, diversity, and overlays.
-- Diversity audits cover `[N,4,2]` overlap clusters, spatial/scale diversity, and unmatched isolation.
-- Phase 3 cloud EMA is primary at NMS 0.78/score 0.20; Phase 4 19,995-step EMA is the NMS-0.75 control.
-- Continuation contracts hash-bind parent checkpoints and gate reports; later stages need owner approval.
-- Future ranking/background-loss work needs a new contract and step-named artifacts; it is not a Phase 4 resume.
+- Unsupervised discovery uses SAM Automatic Mask Generator (AMG) on the frozen 800-image cohort to capture unannotated natural/structural objects (trees, pillars, furniture).
+- Dual-geometry extraction derives both HBB and Quad representations simultaneously, postponing student architecture commitment without re-running SAM.
+- Hybrid supervision preserves verified human GT (nuImages, BDD100k, WoodScape) and merges non-overlapping SAM background instances (IoU <= 0.15 with human GT).
+- Part-vs-whole suppression enforces stability score >= 0.88, predicted IoU >= 0.85, and 85% containment suppression to prevent mask fracturing.
+- Production proposal budget for Raspberry Pi 5 is capped at K <= 10–15 regions via standard NMS at IoU 0.45–0.50 to eliminate redundant crops.
+- Category compatibility masks allow synonymous labels (e.g. `person` satisfies `pedestrian`) without forcing false negatives.
 
 # Local Constraints & Gotchas
 
-- Validation score quantiles use 65,536-bin `[0,1]` histograms; memory is
-  independent of dataset size and absolute quantile error is below one bin.
-- A dataset ID is immutable. Publish changed bytes under a new ID instead of
-  replacing an existing S3 prefix or local staged directory.
-- Production images are local symlinks and exceed archive scratch space; use the
-  runbook's native tar/pigz/pv/AWS pipeline, never a local production archive.
-- Phase 4 HBB aborts on AMP skips; staged quad recovery permits at most four
-  logged skips, and advances scheduler/EMA/global step only on successful updates.
-- Packet provisioning requires its registered SSH key and explicit owner cost check.
-- `packet_host_bootstrap.sh` owns Packet host mutation; the Python bridge injects
-  keys/versions, sets Docker's 32G shm default, then verifies before dstack.
-- Task submissions bind run IDs, tags, commits, and GPU resources; Packet rotates
-  valid placements, targets a fresh attempt-specific fleet, and adopts no host.
-- GitHub verifies dataset reads and checkpoint-prefix write/read, not S3 settings.
-- Local HBB and quad use 16 × 8. Step-20k recovery v2 permits the sixth AMP
-  skip and aborts on a seventh. Total unmatched remains diagnostic.
+- SigLIP ViT-B execution on RPi 5 CPU takes 100–180ms per crop; proposal stacking or budgets >15 crops severely choke per-frame latency.
+- Stride-8 (P3) models silently drop <16px objects as `unrepresentable`; student models must retain P2 (stride 4).
+- Without containment suppression, SAM segments vehicle sub-components (doors, wheels, lights) into duplicate competing instances.
+- Background quality loss must retain non-zero weak negative weight (0.15–0.20); zero negative weight causes score uncalibration.
+- Production images are local symlinks and exceed archive scratch space; streaming pipelines must be used.
+- Offline crop embeddings must bind image identity, geometry hash, and teacher revision in cache keys.
