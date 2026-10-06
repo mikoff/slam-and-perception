@@ -97,3 +97,48 @@ def test_objectness_score_mode_ignores_dormant_centerness() -> None:
         output, (16, 16)
     )[0]
     assert objectness_result.boxes[0, 0] < product_result.boxes[0, 0]
+
+
+def test_nms_part_aware_preserves_distinct_subparts() -> None:
+    # Box 0: Parent object (whole building), area = 100 * 100 = 10000
+    # Box 1: Duplicate box of parent, area = 100 * 100 = 10000, IoU ~ 0.8
+    # Box 2: Sub-part (pillar/column inside building), area = 15 * 50 = 750, scale_ratio = 750 / 10000 = 0.075 <= 0.4
+    boxes = torch.tensor(
+        [
+            [0.0, 0.0, 100.0, 100.0],
+            [2.0, 2.0, 102.0, 102.0],
+            [10.0, 20.0, 25.0, 70.0],
+        ]
+    )
+    scores = torch.tensor([0.95, 0.85, 0.90])
+
+    # Hard NMS with low threshold would suppress overlapping pillar if IoU intersects
+    # Under part_aware, duplicate box 1 is suppressed, but sub-part 2 is preserved!
+    keep, kept_scores = class_agnostic_nms(
+        boxes,
+        scores,
+        iou_threshold=0.05,  # Deliberately strict to test scale containment
+        nms_mode="part_aware",
+        part_scale_ratio=0.4,
+        return_scores=True,
+    )
+    assert 0 in keep.tolist()
+    assert 1 not in keep.tolist()  # Duplicate suppressed
+    assert 2 in keep.tolist()  # Subpart preserved!
+
+
+def test_nms_soft_decays_duplicate_scores() -> None:
+    boxes = torch.tensor(
+        [
+            [0.0, 0.0, 10.0, 10.0],
+            [1.0, 1.0, 11.0, 11.0],
+        ]
+    )
+    scores = torch.tensor([0.9, 0.8])
+    keep, kept_scores = class_agnostic_nms(
+        boxes, scores, iou_threshold=0.5, nms_mode="soft", return_scores=True
+    )
+    assert keep.tolist() == [0, 1]
+    # Kept score for box 1 should be decayed
+    assert kept_scores[1] < 0.8
+

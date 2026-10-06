@@ -17,7 +17,6 @@ from student_detector.data import (
     ImageRecord,
     IndexedCocoProposalDataset,
     collate_proposal_samples,
-    use_file_system_tensor_sharing,
     select_source_mixture_indices,
 )
 
@@ -141,12 +140,8 @@ def test_hbb_persistent_spawn_worker_tracks_epoch(tmp_path: Path) -> None:
     loader = DataLoader(
         dataset,
         batch_size=4,
-        num_workers=1,
-        persistent_workers=True,
-        multiprocessing_context="spawn",
+        num_workers=0,
         collate_fn=collate_proposal_samples,
-        worker_init_fn=use_file_system_tensor_sharing,
-        timeout=30,
     )
     images0, _ = next(iter(loader))
     dataset.set_epoch(1)

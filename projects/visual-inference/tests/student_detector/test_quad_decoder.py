@@ -10,7 +10,7 @@ from student_detector.quad_evaluation import (
     QuadEvaluationImage,
     evaluate_quad_proposals,
 )
-from student_detector.quad_geometry import quad_from_bbox
+from student_detector.quad_geometry import polygon_nms, quad_from_bbox
 
 
 def test_quad_decoder_caps_and_suppresses_candidates() -> None:
@@ -139,3 +139,55 @@ def test_quad_evaluation_progress_identifies_weight_state(capsys) -> None:
     accumulator.update([image])
 
     assert "state=raw aggregated=1 images" in capsys.readouterr().out
+
+
+def test_quad_decoder_centerness_alpha_zero_default() -> None:
+    quality = (
+        torch.tensor([[[[2.0, -10.0], [-10.0, -10.0]]]]),
+        torch.full((1, 1, 1, 1), -10.0),
+        torch.full((1, 1, 1, 1), -10.0),
+    )
+    # Offsets in (B, 8, H, W): x0, y0, x1, y1, x2, y2, x3, y3
+    corners = torch.tensor([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5]).view(
+        1, 8, 1, 1
+    )
+    offsets_level0 = corners.repeat(1, 1, 2, 2)
+    offsets = (
+        offsets_level0,
+        torch.zeros((1, 8, 1, 1)),
+        torch.zeros((1, 8, 1, 1)),
+    )
+    output = QuadDetectorOutput(quality, offsets)
+    # Default centerness_alpha should be 0.0 (no post-hoc suppression of quality)
+    decoder = QuadInferenceDecoder(pre_nms_top_k=5, max_proposals=2)
+    assert decoder.centerness_alpha == 0.0
+    detections = decoder(output, (32, 32))
+    assert detections[0].scores.numel() > 0
+    # Top score should equal sigmoid(2.0) ~ 0.8808, untouched by AABB centerness
+    assert detections[0].scores[0].item() == pytest.approx(
+        torch.sigmoid(torch.tensor(2.0)).item(), abs=1e-4
+    )
+
+
+def test_polygon_nms_part_aware_preserves_subparts() -> None:
+    # Large quad (e.g. building facade)
+    large = quad_from_bbox([0.0, 0.0, 100.0, 100.0])
+    # Duplicate large quad
+    dup = quad_from_bbox([2.0, 2.0, 102.0, 102.0])
+    # Sub-part pillar inside
+    small = quad_from_bbox([10.0, 20.0, 25.0, 70.0])
+    quads = torch.stack([large, dup, small])
+    scores = torch.tensor([0.95, 0.85, 0.90])
+
+    keep, kept_scores = polygon_nms(
+        quads,
+        scores,
+        iou_threshold=0.05,
+        nms_mode="part_aware",
+        part_scale_ratio=0.4,
+        return_scores=True,
+    )
+    assert 0 in keep.tolist()
+    assert 1 not in keep.tolist()  # Duplicate suppressed
+    assert 2 in keep.tolist()  # Pillar preserved!
+
