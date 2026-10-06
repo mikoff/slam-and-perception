@@ -238,7 +238,7 @@ def train() -> None:
                 strides=strides,
                 top_k=1000,
                 nms_iou_threshold=0.50,
-                max_detections=300,
+                max_detections=100,
                 score_mode="objectness",
                 nms_mode="nms_free",
             )
@@ -256,7 +256,7 @@ def train() -> None:
                 strides=strides,
                 top_k=1000,
                 nms_iou_threshold=0.50,
-                max_detections=300,
+                max_detections=100,
                 score_mode="objectness",
             )
 
@@ -308,7 +308,7 @@ def train() -> None:
                 strides=strides,
                 pre_nms_top_k=1000,
                 nms_iou_threshold=0.50,
-                max_proposals=300,
+                max_proposals=100,
                 centerness_alpha=0.0,
                 nms_mode="nms_free",
             )
@@ -334,7 +334,7 @@ def train() -> None:
                 strides=strides,
                 pre_nms_top_k=1000,
                 nms_iou_threshold=0.50,
-                max_proposals=300,
+                max_proposals=100,
                 centerness_alpha=0.0,
             )
 

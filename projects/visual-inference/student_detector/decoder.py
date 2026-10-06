@@ -135,7 +135,7 @@ class InferenceDecoder:
         strides: tuple[int, ...] = (8, 16, 32),
         top_k: int = 1000,
         nms_iou_threshold: float = 0.50,
-        max_detections: int = 300,
+        max_detections: int = 100,
         score_mode: str = "objectness",
         nms_mode: str = "hard",
         soft_sigma: float = 0.5,

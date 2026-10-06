@@ -98,7 +98,7 @@ class QuadInferenceDecoder:
         strides: tuple[int, ...] = (8, 16, 32),
         pre_nms_top_k: int = 1000,
         nms_iou_threshold: float = 0.50,
-        max_proposals: int = 300,
+        max_proposals: int = 100,
         centerness_alpha: float = 0.0,
         nms_mode: str = "hard",
         soft_sigma: float = 0.5,
