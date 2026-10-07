@@ -145,6 +145,13 @@ def parse_args() -> argparse.Namespace:
         help="Exponent for centerness scoring in HBB decoder (default: 1.0).",
     )
     parser.add_argument(
+        "--nms-mode",
+        type=str,
+        default="part_aware",
+        choices=["part_aware", "nms_free", "hard", "part_aware_soft"],
+        help="Inference NMS mode for validation (default: part_aware).",
+    )
+    parser.add_argument(
         "--eval-only",
         action="store_true",
         help="Run evaluation only using --checkpoint and exit.",
@@ -267,14 +274,27 @@ def train() -> None:
             )
             target_builder = TargetBuilder(assigner)
             target_builder_aux = TargetBuilder(assigner_aux)
-            # Evaluate primary head in pure NMS-Free mode
+            # Evaluate primary head with selected NMS mode
             decoder = InferenceDecoder(
                 strides=strides,
                 top_k=1000,
                 nms_iou_threshold=0.50,
                 max_detections=100,
                 score_mode="objectness",
-                nms_mode="nms_free",
+                nms_mode=args.nms_mode,
+                part_scale_ratio=0.4,
+            )
+            decoder_free = (
+                InferenceDecoder(
+                    strides=strides,
+                    top_k=1000,
+                    nms_iou_threshold=0.50,
+                    max_detections=100,
+                    score_mode="objectness",
+                    nms_mode="nms_free",
+                )
+                if args.nms_mode != "nms_free"
+                else None
             )
         else:
             # P2 Baseline: Tightened ATSS (top_k=4, center_radius=1.0)
@@ -294,6 +314,7 @@ def train() -> None:
                 score_mode=args.score_mode,
                 centerness_alpha=args.centerness_alpha,
             )
+            decoder_free = None
 
         criterion = ProposalLoss(
             strides=strides,
@@ -338,14 +359,27 @@ def train() -> None:
                 geometry_quality_target="exact_iou",
                 gwd_weight=1.0,  # SOTA: Active Gaussian Wasserstein Distance
             )
-            # Evaluate primary head in pure NMS-Free mode
+            # Evaluate primary head with selected NMS mode
             decoder = QuadInferenceDecoder(
                 strides=strides,
                 pre_nms_top_k=1000,
                 nms_iou_threshold=0.50,
                 max_proposals=100,
                 centerness_alpha=0.0,
-                nms_mode="nms_free",
+                nms_mode=args.nms_mode,
+                part_scale_ratio=0.4,
+            )
+            decoder_free = (
+                QuadInferenceDecoder(
+                    strides=strides,
+                    pre_nms_top_k=1000,
+                    nms_iou_threshold=0.50,
+                    max_proposals=100,
+                    centerness_alpha=0.0,
+                    nms_mode="nms_free",
+                )
+                if args.nms_mode != "nms_free"
+                else None
             )
         else:
             # P2 Baseline: Tightened Quad ATSS (top_k=4, eligible_levels=1)
@@ -356,6 +390,7 @@ def train() -> None:
             )
             target_builder = QuadTargetBuilder(assigner, weak_negative_weight=0.15)
             target_builder_aux = None
+            decoder_free = None
             criterion = QuadProposalLoss(
                 strides=strides,
                 quality_weight=1.0,
@@ -592,6 +627,27 @@ def train() -> None:
                 rec_auto = val_metrics.get("recall/domain_automotive/100@0.50", 0.0)
                 rec_fish = val_metrics.get("recall/domain_fisheye/100@0.50", 0.0)
 
+            rec_free_50: float | None = None
+            if decoder_free is not None:
+                if args.geometry == "hbb":
+                    val_metrics_free = validate(
+                        model=model,
+                        loader=val_loader,
+                        target_builder=target_builder,
+                        decoder=decoder_free,
+                        device=device,
+                    )
+                    rec_free_50 = val_metrics_free.get("recall/100@50", 0.0)
+                else:
+                    val_metrics_free = validate_quad(
+                        model=model,
+                        loader=val_loader,
+                        target_builder=target_builder,
+                        decoder=decoder_free,
+                        device=device,
+                    )
+                    rec_free_50 = val_metrics_free.get("recall/100@0.50", 0.0)
+
             val_duration = time.time() - val_start_time
             print(
                 f"  -> Val ({val_duration:.1f}s) | "
@@ -600,6 +656,11 @@ def train() -> None:
                 f"Recall@10: {rec_10_50 * 100:.1f}% | "
                 f"AP/AR@50: {ap_50 * 100:.1f}%"
             )
+            if rec_free_50 is not None:
+                print(
+                    f"     [NMS-Free Companion] Recall@100@50: {rec_free_50 * 100:.1f}% | "
+                    f"({args.nms_mode}: {rec_100_50 * 100:.1f}%)"
+                )
             print(
                 f"     Size: Small={rec_small * 100:.1f}%, Med={rec_med * 100:.1f}%, Lrg={rec_lrg * 100:.1f}%"
             )
@@ -623,6 +684,8 @@ def train() -> None:
                     "recall_domain_fisheye": round(rec_fish, 4),
                 }
             )
+            if rec_free_50 is not None:
+                epoch_record["recall_100_50_nms_free"] = round(rec_free_50, 4)
 
             if rec_100_50 > best_recall_50:
                 best_recall_50 = rec_100_50

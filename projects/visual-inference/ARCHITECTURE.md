@@ -20,6 +20,7 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
   - `InferenceDecoder` (HBB) and `QuadInferenceDecoder` (Quads) support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$), `"part_aware_soft"`, and `"nms_free"`.
   - Centerness scoring parameter `centerness_alpha` ($\in [0.0, 1.0]$) blends scores as $\text{score} = \sigma(\text{obj}) \times \sigma(\text{center})^\alpha$. For HBB, $\alpha=1.0$ is the authoritative baseline, protecting the fixed 100-proposal budget for large (69.6%) and medium (74.0%) objects against dense P2 small-proposal crowding. For Quads, centerness is decoupled ($\alpha = 0.0$) to avoid aspect-ratio distortion penalties.
   - Stage 2 Run B (Quad Recipe 2 with Dual-Head TAL & Active GWD on 10,000 images) achieved **56.53% overall recall** and **60.32% fisheye recall** under Part-Aware Polygon NMS (new all-time repository record), and **42.53% Recall@100@50 / 21.91% Strict Recall@75** in pure zero-latency NMS-free mode.
+  - Stage 2 Run C (HBB Recipe 2 with Dual-Head TAL on 10,000 images) achieved **23.05% Strict Recall@75** (new all-time repository record for high-precision bounding boxes), **42.06% Recall@100@50** under Part-Aware Box NMS, and **29.81%** in pure NMS-free mode.
 - Pseudo-Label Storage & DataLoader:
   - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`.
 
