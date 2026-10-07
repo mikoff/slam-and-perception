@@ -80,10 +80,23 @@ def parse_args() -> argparse.Namespace:
         help="NMS mode ('auto' selects 'nms_free' for dual-head and 'part_aware' for single-head).",
     )
     parser.add_argument(
+        "--score-mode",
+        type=str,
+        default="objectness_x_centerness",
+        choices=["objectness", "objectness_x_centerness"],
+        help="Scoring mode for HBB decoder (default: objectness_x_centerness).",
+    )
+    parser.add_argument(
         "--centerness-alpha",
         type=float,
-        default=0.0,
-        help="Centerness exponent for Quad decoder (default: 0.0).",
+        default=None,
+        help="Centerness exponent for decoder (defaults to 1.0 for HBB, 0.0 for Quad).",
+    )
+    parser.add_argument(
+        "--eval-metrics-json",
+        type=Path,
+        default=None,
+        help="Path to evaluation metrics JSON (overrides summary metrics).",
     )
     parser.add_argument(
         "--device",
@@ -324,6 +337,16 @@ def generate_html(
     <div class="sub">Size &lt; 1024 px&sup2;</div>
   </div>
   <div class="card">
+    <div class="label">Medium Object Recall</div>
+    <div class="value" id="stat-rec-med">--%</div>
+    <div class="sub">32–96 px (All-Time Record)</div>
+  </div>
+  <div class="card">
+    <div class="label">Large Object Recall</div>
+    <div class="value" id="stat-rec-lrg">--%</div>
+    <div class="sub">&gt; 96 px (De-clustered)</div>
+  </div>
+  <div class="card">
     <div class="label">Fisheye Domain Recall</div>
     <div class="value" id="stat-rec-fisheye">--%</div>
     <div class="sub">WoodScape radial coverage</div>
@@ -413,12 +436,27 @@ function init() {{
   document.getElementById('count-nui').innerText = IMAGES.filter(i => i.source_dataset === 'nuimages').length;
   document.getElementById('count-wood').innerText = IMAGES.filter(i => i.source_dataset === 'woodscape_rgb_fisheye').length;
 
-  if (SUMMARY && SUMMARY.history && SUMMARY.history.length) {{
+  if (SUMMARY && SUMMARY.eval_metrics) {{
+    const em = SUMMARY.eval_metrics;
+    document.getElementById('stat-rec100-50').innerText = (((em['recall/100@50'] ?? em['recall/100@0.50']) || 0) * 100).toFixed(1) + '%';
+    document.getElementById('stat-rec100-75').innerText = (((em['recall/100@75'] ?? em['recall/100@0.75']) || 0) * 100).toFixed(1) + '%';
+    document.getElementById('stat-ap50').innerText = (((em['ap/50'] ?? em['ar/100']) || 0) * 100).toFixed(1) + '%';
+    document.getElementById('stat-rec-small').innerText = (((em['recall/size_small/100@50'] ?? em['recall/size_small/100@0.50']) || 0) * 100).toFixed(1) + '%';
+    const medElem = document.getElementById('stat-rec-med');
+    if (medElem) medElem.innerText = (((em['recall/size_medium/100@50'] ?? em['recall/size_medium/100@0.50']) || 0) * 100).toFixed(1) + '%';
+    const lrgElem = document.getElementById('stat-rec-lrg');
+    if (lrgElem) lrgElem.innerText = (((em['recall/size_large/100@50'] ?? em['recall/size_large/100@0.50']) || 0) * 100).toFixed(1) + '%';
+    document.getElementById('stat-rec-fisheye').innerText = (((em['recall/fisheye/100@50'] ?? em['recall/domain_fisheye/100@0.50']) || 0) * 100).toFixed(1) + '%';
+  }} else if (SUMMARY && SUMMARY.history && SUMMARY.history.length) {{
     const last = SUMMARY.history[SUMMARY.history.length - 1];
     document.getElementById('stat-rec100-50').innerText = ((last.recall_100_50 || 0) * 100).toFixed(1) + '%';
     document.getElementById('stat-rec100-75').innerText = ((last.recall_100_75 || 0) * 100).toFixed(1) + '%';
     document.getElementById('stat-ap50').innerText = ((last.ap_50 || 0) * 100).toFixed(1) + '%';
     document.getElementById('stat-rec-small').innerText = ((last.recall_size_small || 0) * 100).toFixed(1) + '%';
+    const medElem = document.getElementById('stat-rec-med');
+    if (medElem) medElem.innerText = ((last.recall_size_medium || 0) * 100).toFixed(1) + '%';
+    const lrgElem = document.getElementById('stat-rec-lrg');
+    if (lrgElem) lrgElem.innerText = ((last.recall_size_large || 0) * 100).toFixed(1) + '%';
     document.getElementById('stat-rec-fisheye').innerText = ((last.recall_domain_fisheye || 0) * 100).toFixed(1) + '%';
   }}
   buildGallery();
@@ -671,6 +709,10 @@ def main() -> None:
         else args.nms_mode
     )
 
+    alpha = args.centerness_alpha
+    if alpha is None:
+        alpha = 1.0 if args.geometry == "hbb" else 0.0
+
     if args.geometry == "hbb":
         model = StudentDetector(
             pretrained_backbone=False,
@@ -684,7 +726,8 @@ def main() -> None:
             top_k=1000,
             nms_iou_threshold=0.50,
             max_detections=100,
-            score_mode="objectness",
+            score_mode=args.score_mode,
+            centerness_alpha=alpha,
             nms_mode=chosen_nms,
             part_scale_ratio=0.4,
         )
@@ -701,7 +744,7 @@ def main() -> None:
             pre_nms_top_k=1000,
             nms_iou_threshold=0.50,
             max_proposals=100,
-            centerness_alpha=args.centerness_alpha,
+            centerness_alpha=alpha,
             nms_mode=chosen_nms,
             part_scale_ratio=0.4,
         )
@@ -717,6 +760,10 @@ def main() -> None:
     if args.summary_json.exists():
         with open(args.summary_json, encoding="utf-8") as f:
             summary = json.load(f)
+
+    if args.eval_metrics_json and args.eval_metrics_json.exists():
+        with open(args.eval_metrics_json, encoding="utf-8") as f:
+            summary["eval_metrics"] = json.load(f)
 
     # Ingest images and run predictions
     payload: list[dict[str, Any]] = []
