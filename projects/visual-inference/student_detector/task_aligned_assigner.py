@@ -216,11 +216,15 @@ class TaskAlignedAssigner:
 
         if self.assignment_mode == "one_to_one":
             matches = greedy_bipartite_matching(alignment_matrix)
-            for cand_i, gt_j in matches:
-                matched[cand_i] = valid_indices[gt_j]
-                cand_box = pred_b[cand_i : cand_i + 1]
-                target_box = boxes[gt_j : gt_j + 1]
-                centerness[cand_i] = aligned_iou(cand_box, target_box).squeeze(0)
+            if matches:
+                cand_idx = torch.tensor(
+                    [m[0] for m in matches], dtype=torch.long, device=gt_boxes.device
+                )
+                gt_idx = torch.tensor(
+                    [m[1] for m in matches], dtype=torch.long, device=gt_boxes.device
+                )
+                matched[cand_idx] = valid_indices[gt_idx]
+                centerness[cand_idx] = aligned_iou(pred_b[cand_idx], boxes[gt_idx])
         else:
             k = min(self.top_k, num_points)
             topk_vals, topk_indices = torch.topk(alignment_matrix, k, dim=0)
@@ -410,12 +414,17 @@ class QuadTaskAlignedAssigner:
 
         if self.assignment_mode == "one_to_one":
             matches = greedy_bipartite_matching(alignment_matrix)
-            for cand_i, gt_j in matches:
-                matched[cand_i] = gt_j
-                pair_iou = aligned_quad_iou(
-                    pred_q[cand_i : cand_i + 1], canonical[gt_j : gt_j + 1]
-                ).squeeze(0)
-                quality_targets[cand_i] = pair_iou
+            if matches:
+                cand_idx = torch.tensor(
+                    [m[0] for m in matches], dtype=torch.long, device=value.device
+                )
+                gt_idx = torch.tensor(
+                    [m[1] for m in matches], dtype=torch.long, device=value.device
+                )
+                matched[cand_idx] = gt_idx
+                quality_targets[cand_idx] = aligned_quad_iou(
+                    pred_q[cand_idx], canonical[gt_idx]
+                )
         else:
             k = min(self.top_k, num_points)
             topk_vals, topk_indices = torch.topk(alignment_matrix, k, dim=0)

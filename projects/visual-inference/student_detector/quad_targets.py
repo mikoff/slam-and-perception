@@ -83,10 +83,13 @@ def point_validity_from_pixel_mask(
     pixel_mask: Tensor,
     feature_shapes: Sequence[tuple[int, int]],
     strides: Sequence[int],
+    points: Tensor | None = None,
+    level_slices: Sequence[slice] | None = None,
 ) -> tuple[Tensor, tuple[Tensor, ...]]:
-    points, level_slices = make_grid_points(
-        feature_shapes, strides, device=pixel_mask.device, dtype=torch.float32
-    )
+    if points is None or level_slices is None:
+        points, level_slices = make_grid_points(
+            feature_shapes, strides, device=pixel_mask.device, dtype=torch.float32
+        )
     height, width = pixel_mask.shape[-2:]
     x = points[:, 0].floor().long().clamp(0, width - 1)
     y = points[:, 1].floor().long().clamp(0, height - 1)
@@ -108,6 +111,10 @@ class QuadTargetBuilder:
             raise ValueError("weak_negative_weight must be in [0, 1]")
         self.assigner = assigner
         self.weak_negative_weight = weak_negative_weight
+        self._grid_cache: dict[
+            tuple[tuple[tuple[int, int], ...], torch.device],
+            tuple[Tensor, Sequence[slice]],
+        ] = {}
 
     def __call__(
         self,
@@ -116,9 +123,12 @@ class QuadTargetBuilder:
         *,
         device: torch.device,
     ) -> QuadTrainingTargets:
-        points, _ = make_grid_points(
-            feature_shapes, self.assigner.strides, device=device, dtype=torch.float32
-        )
+        cache_key = (tuple(feature_shapes), device)
+        if cache_key not in self._grid_cache:
+            self._grid_cache[cache_key] = make_grid_points(
+                feature_shapes, self.assigner.strides, device=device, dtype=torch.float32
+            )
+        points, level_slices = self._grid_cache[cache_key]
         quality, corner_offsets, positive_masks = [], [], []
         matched_gt_indices = []
         trusted_background_masks, weak_background_masks = [], []
@@ -139,6 +149,8 @@ class QuadTargetBuilder:
                 torch.as_tensor(sample.valid_mask, device=device),
                 feature_shapes,
                 self.assigner.strides,
+                points=points,
+                level_slices=level_slices,
             )
             assignment = self.assigner.assign(
                 quads,

@@ -23,6 +23,12 @@ import torch
 from segment_anything import SamAutomaticMaskGenerator, sam_model_registry
 
 from student_detector.data import _integer_quotas
+from student_detector.discovery_storage import (
+    get_dataset_summary,
+    get_processed_image_ids,
+    init_discovery_db,
+    save_image_batch,
+)
 from student_detector.semantic_evaluation_data import (
     SemanticGroundTruthRecord,
     SemanticImageRecord,
@@ -37,6 +43,15 @@ DEFAULT_COHORT_WEIGHTS: dict[str, float] = {
 }
 
 TARGET_COHORT_SHA256: str = "e705233ada6e63cb58c259b610417a6226dd9cf158acc7737842ecc758e15806"
+
+STAGE2_COHORT_WEIGHTS: dict[str, float] = {
+    "coco_2017": 0.50,
+    "bdd100k_images_100k": 0.20,
+    "nuimages": 0.20,
+    "woodscape_rgb_fisheye": 0.10,
+}
+
+STAGE2_COHORT_SHA256: str = "2d35c2fdc1cc9559e735267947f017347eeaed7a79f7eb1254c1f953aeecaf44"
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,10 +72,28 @@ def parse_args() -> argparse.Namespace:
         help="Path to SAM ViT-B checkpoint",
     )
     parser.add_argument(
+        "--output-db",
+        type=Path,
+        default=Path("artifacts/pseudo_labels/sam_discovery.sqlite"),
+        help="Destination SQLite database for streaming discovered pseudo-labels",
+    )
+    parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("artifacts/phase1/pseudo_labels/sam_pilot_800.json"),
-        help="Destination JSON file for discovered pseudo-labels",
+        default=None,
+        help="Optional destination JSON file for discovered pseudo-labels",
+    )
+    parser.add_argument(
+        "--index-db",
+        type=Path,
+        default=None,
+        help="Path to source SQLite index (e.g. quad_train.sqlite or quad_val.sqlite)",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="train",
+        help="Split label assigned to processed images in SQLite ('train' or 'val')",
     )
     parser.add_argument(
         "--num-images",
@@ -171,17 +204,29 @@ def select_cohort_image_ids(
     dataset_root: Path,
     count: int = 800,
     source_weights: dict[str, float] | None = None,
+    index_path: Path | None = None,
 ) -> tuple[list[int], str]:
-    """Select the deterministic 800-image benchmark cohort IDs directly from SQLite.
+    """Select the deterministic benchmark cohort IDs directly from SQLite.
 
     /// @param dataset_root Root directory of the dataset.
     /// @param count Total number of cohort images.
     /// @param source_weights Domain proportions.
+    /// @param index_path Optional explicit index path.
     /// @return Tuple of (selected_image_ids, computed_subset_sha256).
     """
-    weights = source_weights or DEFAULT_COHORT_WEIGHTS
+    if index_path is not None:
+        db_path = index_path
+        weights = source_weights or (
+            STAGE2_COHORT_WEIGHTS if count > 800 else DEFAULT_COHORT_WEIGHTS
+        )
+    elif count > 800:
+        db_path = dataset_root / "indexes/quad_train.sqlite"
+        weights = source_weights or STAGE2_COHORT_WEIGHTS
+    else:
+        db_path = dataset_root / "indexes/quad_val.sqlite"
+        weights = source_weights or DEFAULT_COHORT_WEIGHTS
+
     quotas = _integer_quotas(weights, count)
-    db_path = dataset_root / "indexes/quad_val.sqlite"
 
     with sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True) as connection:
         rows = connection.execute(
@@ -667,17 +712,34 @@ def process_image_discovery(
 
 
 def main() -> None:
-    """Entry point for SAM discovery pilot."""
+    """Entry point for SAM discovery pipeline."""
     args = parse_args()
-    output_path = args.output_json.resolve()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    db_path = args.output_db.resolve() if args.output_db else None
+    json_path = args.output_json.resolve() if args.output_json else None
+    if json_path is not None:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path is not None:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1. Determine index path
+    if args.index_db is not None:
+        index_path = args.index_db.resolve()
+    elif args.num_images > 800:
+        index_path = args.dataset_root.resolve() / "indexes/quad_train.sqlite"
+    else:
+        index_path = args.dataset_root.resolve() / "indexes/quad_val.sqlite"
 
     print("==================================================================")
-    print("PHASE 1.0: SAM OBJECT DISCOVERY PILOT (800-IMAGE COHORT)")
+    print(f"SAM OBJECT DISCOVERY RUN ({args.num_images} IMAGES, SPLIT: {args.split.upper()})")
     print("==================================================================")
     print(f"Dataset root:       {args.dataset_root.resolve()}")
+    print(f"Index DB:           {index_path}")
     print(f"SAM checkpoint:     {args.checkpoint.resolve()}")
-    print(f"Output JSON:        {output_path}")
+    if db_path:
+        print(f"Output SQLite DB:   {db_path}")
+    if json_path:
+        print(f"Output JSON:        {json_path}")
     print(f"Compute device:     {args.device}")
     print(f"Points per side:    {args.points_per_side}")
     print(f"Pred IoU threshold: {args.pred_iou_thresh}")
@@ -686,28 +748,36 @@ def main() -> None:
     print(f"Containment thresh: {args.containment_thresh}")
     print("------------------------------------------------------------------")
 
-    # 1. Select the exact 800 benchmark cohort
+    # 2. Select benchmark cohort
     cohort_ids, cohort_sha = select_cohort_image_ids(
-        args.dataset_root, count=args.num_images
+        args.dataset_root, count=args.num_images, index_path=index_path
     )
-    print(f"Selected {len(cohort_ids)} cohort images directly from SQLite.")
+    print(f"Selected {len(cohort_ids)} cohort images directly from {index_path.name}.")
     print(f"Cohort SHA-256:     {cohort_sha}")
-    assert (
-        cohort_sha == TARGET_COHORT_SHA256
-    ), f"Cohort SHA mismatch! Expected {TARGET_COHORT_SHA256}, got {cohort_sha}"
-    print("Cohort validation:  PASSED (Exact match with benchmark contract)")
+    if args.num_images == 800 and index_path.name == "quad_val.sqlite":
+        assert (
+            cohort_sha == TARGET_COHORT_SHA256
+        ), f"Cohort SHA mismatch! Expected {TARGET_COHORT_SHA256}, got {cohort_sha}"
+        print("Cohort validation:  PASSED (Exact match with benchmark contract)")
+    elif args.num_images == 10000 and index_path.name == "quad_train.sqlite":
+        assert (
+            cohort_sha == STAGE2_COHORT_SHA256
+        ), f"Stage 2 SHA mismatch! Expected {STAGE2_COHORT_SHA256}, got {cohort_sha}"
+        print("Cohort validation:  PASSED (Exact match with Stage 2 contract)")
 
     if args.max_images is not None and args.max_images < len(cohort_ids):
         cohort_ids = cohort_ids[: args.max_images]
         print(f"Restricted to first {len(cohort_ids)} images by --max-images flag.")
 
-    # 2. Load semantic ground-truth records
+    # 3. Load semantic ground-truth records
     print("Loading semantic image records...")
     t0 = time.time()
-    records = load_semantic_image_records(args.dataset_root, image_ids=cohort_ids)
+    records = load_semantic_image_records(
+        args.dataset_root, image_ids=cohort_ids, index_path=index_path
+    )
     print(f"Loaded {len(records)} records in {time.time() - t0:.2f}s.")
 
-    # 3. Initialize SAM Model and Mask Generator on GPU
+    # 4. Initialize SAM Model and Mask Generator on GPU
     print(f"Loading SAM ViT-B model onto {args.device}...")
     t_model = time.time()
     sam = sam_model_registry["vit_b"](checkpoint=str(args.checkpoint.resolve()))
@@ -723,23 +793,32 @@ def main() -> None:
     )
     print(f"SAM loaded in {time.time() - t_model:.2f}s.")
 
-    # 4. Resume check
-    discovered_images: list[dict[str, Any]] = []
+    # 5. Initialize SQLite and resume tracking
+    sqlite_conn = None
     processed_ids: set[int] = set()
+    discovered_images: list[dict[str, Any]] = []
 
-    if output_path.exists():
+    if db_path is not None:
+        sqlite_conn = init_discovery_db(db_path)
+        processed_ids = get_processed_image_ids(db_path)
+        print(
+            f"Resuming from SQLite: Found {len(processed_ids)} already processed images in {db_path}."
+        )
+
+    if json_path is not None and json_path.exists():
         try:
-            existing_data = json.loads(output_path.read_text(encoding="utf-8"))
+            existing_data = json.loads(json_path.read_text(encoding="utf-8"))
             if isinstance(existing_data, dict) and "images" in existing_data:
                 discovered_images = existing_data["images"]
-                processed_ids = {img["image_id"] for img in discovered_images}
+                json_processed = {img["image_id"] for img in discovered_images}
+                processed_ids.update(json_processed)
                 print(
-                    f"Resuming: Loaded {len(discovered_images)} previously processed images from {output_path}."
+                    f"Resuming from JSON: Loaded {len(discovered_images)} images from {json_path}."
                 )
         except Exception as e:
-            print(f"Warning: Could not read existing output file: {e}. Starting fresh.")
+            print(f"Warning: Could not read existing output JSON: {e}.")
 
-    # 5. Process Images
+    # 6. Process Images
     total_images = len(records)
     print(f"Starting discovery run across {total_images} images...")
 
@@ -750,6 +829,9 @@ def main() -> None:
     total_human_gts = sum(
         img["metrics"]["human_gt_count"] for img in discovered_images
     )
+
+    batch_buffer: list[dict[str, Any]] = []
+    num_processed_this_run = 0
 
     for idx, rec in enumerate(records):
         if rec.image_id in processed_ids:
@@ -772,19 +854,22 @@ def main() -> None:
         )
         step_elapsed = time.time() - step_t0
 
+        res["split"] = args.split
         discovered_images.append(res)
+        batch_buffer.append(res)
         processed_ids.add(rec.image_id)
+        num_processed_this_run += 1
         total_novel_discovered += res["metrics"]["novel_discovered_count"]
         total_human_gts += res["metrics"]["human_gt_count"]
 
         # Progress reporting
-        num_done = len(discovered_images)
-        fps = num_done / max(time.time() - start_time, 1e-4)
+        num_done = len(processed_ids)
+        fps = num_processed_this_run / max(time.time() - start_time, 1e-4)
         eta_sec = (total_images - num_done) / max(fps, 1e-4)
 
         print(
-            f"[{num_done:03d}/{total_images:03d}] "
-            f"Img {rec.image_id:05d} ({rec.source_dataset[:8]}) | "
+            f"[{num_done:05d}/{total_images:05d}] "
+            f"Img {rec.image_id:06d} ({rec.source_dataset[:8]}) | "
             f"Raw: {res['metrics']['raw_sam_masks_count']:02d} -> "
             f"Kept: {res['metrics']['kept_sam_masks_count']:02d} "
             f"(Novel: {res['metrics']['novel_discovered_count']:02d}, "
@@ -794,48 +879,67 @@ def main() -> None:
             f"ETA: {eta_sec/60.0:.1f}m"
         )
 
-        # Durable checkpoint save
-        if (
-            num_done % args.save_interval == 0
-            or num_done == total_images
-        ):
-            payload = {
-                "schema_version": "phase1-sam-pilot-discovery.v1",
-                "cohort_sha256": cohort_sha,
-                "points_per_side": args.points_per_side,
-                "parameters": {
-                    "pred_iou_thresh": args.pred_iou_thresh,
-                    "stability_score_thresh": args.stability_score_thresh,
-                    "min_area": args.min_area,
-                    "containment_thresh": args.containment_thresh,
-                    "max_parent_child_ratio": args.max_parent_child_ratio,
-                    "max_backdrop_fraction": args.max_backdrop_fraction,
-                    "min_vertical_aspect": args.min_vertical_aspect,
-                    "min_horizontal_aspect": args.min_horizontal_aspect,
-                    "min_element_dim": args.min_element_dim,
-                    "gt_duplicate_iou_thresh": args.gt_duplicate_iou_thresh,
-                    "gt_novel_iou_thresh": args.gt_novel_iou_thresh,
-                },
-                "summary": {
-                    "total_images": len(discovered_images),
-                    "total_human_gt": total_human_gts,
-                    "total_novel_discovered": total_novel_discovered,
-                },
-                "images": discovered_images,
-            }
-            tmp_output = output_path.with_suffix(".tmp.json")
-            tmp_output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            tmp_output.replace(output_path)
-            print(f"--- Durable checkpoint saved: {num_done} images to {output_path} ---")
+        # Transactional SQLite commit
+        if len(batch_buffer) >= args.save_interval:
+            if sqlite_conn is not None:
+                save_image_batch(sqlite_conn, batch_buffer, default_split=args.split)
+                print(
+                    f"--- Transaction committed: {len(batch_buffer)} images to SQLite (Total: {num_done}) ---"
+                )
+            batch_buffer.clear()
+
+            if json_path is not None:
+                payload = {
+                    "schema_version": "sam-discovery.v2",
+                    "cohort_sha256": cohort_sha,
+                    "points_per_side": args.points_per_side,
+                    "summary": {
+                        "total_images": len(discovered_images),
+                        "total_human_gt": total_human_gts,
+                        "total_novel_discovered": total_novel_discovered,
+                    },
+                    "images": discovered_images,
+                }
+                tmp_json = json_path.with_suffix(".tmp.json")
+                tmp_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                tmp_json.replace(json_path)
+
+    # Final flush
+    if batch_buffer and sqlite_conn is not None:
+        save_image_batch(sqlite_conn, batch_buffer, default_split=args.split)
+        print(
+            f"--- Final transaction committed: {len(batch_buffer)} images to SQLite (Total: {len(processed_ids)}) ---"
+        )
+        batch_buffer.clear()
+
+    if json_path is not None and discovered_images:
+        payload = {
+            "schema_version": "sam-discovery.v2",
+            "cohort_sha256": cohort_sha,
+            "points_per_side": args.points_per_side,
+            "summary": {
+                "total_images": len(discovered_images),
+                "total_human_gt": total_human_gts,
+                "total_novel_discovered": total_novel_discovered,
+            },
+            "images": discovered_images,
+        }
+        tmp_json = json_path.with_suffix(".tmp.json")
+        tmp_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp_json.replace(json_path)
 
     total_time = time.time() - start_time
     print("==================================================================")
     print("DISCOVERY RUN COMPLETE!")
-    print(f"Processed:              {len(discovered_images)} images")
+    print(f"Total processed:        {len(processed_ids)} images")
+    print(f"Processed this run:     {num_processed_this_run} images")
     print(f"Total novel discovered: {total_novel_discovered} objects")
     print(f"Total human GTs:        {total_human_gts} annotations")
     print(f"Total run time:         {total_time:.2f}s ({total_time/60.0:.1f}m)")
-    print(f"Saved results to:       {output_path}")
+    if db_path:
+        print(f"Database saved to:      {db_path}")
+        summary = get_dataset_summary(db_path)
+        print(f"Final DB Summary:       {summary}")
     print("==================================================================")
 
 

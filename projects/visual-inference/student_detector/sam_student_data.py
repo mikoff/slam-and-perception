@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import random
+import sqlite3
 from typing import Any
 
 from PIL import Image
@@ -32,6 +33,12 @@ DEFAULT_PSEUDO_LABELS_PATH = (
     / "phase1"
     / "pseudo_labels"
     / "sam_pilot_800.json"
+)
+DEFAULT_PSEUDO_LABELS_DB = (
+    Path(__file__).resolve().parent.parent
+    / "artifacts"
+    / "pseudo_labels"
+    / "sam_discovery.sqlite"
 )
 DEFAULT_IMAGE_ROOT = Path(
     "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output"
@@ -84,6 +91,188 @@ def split_cohort_indices(
     return train_indices, val_indices
 
 
+def _load_pseudo_label_records(
+    pseudo_labels_path: Path,
+    split: str,
+    val_ratio: float,
+    split_seed: int,
+    min_stability: float,
+) -> tuple[list[dict[str, Any]], list[int], int, int, int, bool]:
+    """Load image records and dataset totals from SQLite or JSON pseudo-labels.
+
+    /// @param pseudo_labels_path Path to SQLite database or JSON file.
+    /// @param split One of 'train', 'val', or 'all'.
+    /// @param val_ratio Fraction of cohort reserved for validation.
+    /// @param split_seed Seed for deterministic stratified cohort splitting.
+    /// @param min_stability Minimum SAM mask stability score.
+    /// @return Tuple of (images, indices, total_gt, total_novel, total_suppressed, is_sqlite).
+    """
+    is_sqlite = pseudo_labels_path.suffix in (".sqlite", ".db")
+    if is_sqlite:
+        with sqlite3.connect(
+            f"file:{pseudo_labels_path}?mode=ro&immutable=1", uri=True
+        ) as conn:
+            cols = [
+                c[1] for c in conn.execute("PRAGMA table_info(images)").fetchall()
+            ]
+            if "split" in cols and split in ("train", "val"):
+                rows = conn.execute(
+                    """
+                    SELECT image_id, file_name, width, height, source_dataset
+                    FROM images
+                    WHERE split = ?
+                    ORDER BY image_id
+                    """,
+                    (split,),
+                ).fetchall()
+                images = [
+                    {
+                        "image_id": int(r[0]),
+                        "file_name": str(r[1]),
+                        "width": int(r[2]),
+                        "height": int(r[3]),
+                        "source_dataset": str(r[4]),
+                    }
+                    for r in rows
+                ]
+                indices = list(range(len(images)))
+            elif split == "all" or "split" not in cols:
+                rows = conn.execute(
+                    """
+                    SELECT image_id, file_name, width, height, source_dataset
+                    FROM images
+                    ORDER BY image_id
+                    """
+                ).fetchall()
+                all_images = [
+                    {
+                        "image_id": int(r[0]),
+                        "file_name": str(r[1]),
+                        "width": int(r[2]),
+                        "height": int(r[3]),
+                        "source_dataset": str(r[4]),
+                    }
+                    for r in rows
+                ]
+                if split == "all":
+                    images = all_images
+                    indices = list(range(len(images)))
+                else:
+                    train_idx, val_idx = split_cohort_indices(
+                        all_images, val_ratio=val_ratio, seed=split_seed
+                    )
+                    indices = train_idx if split == "train" else val_idx
+                    images = [all_images[i] for i in indices]
+            else:
+                raise ValueError(
+                    f"Unknown split: {split}. Must be 'train', 'val', or 'all'"
+                )
+
+            total_gt = conn.execute(
+                "SELECT COUNT(*) FROM annotations WHERE source = 'human_gt' AND is_positive = 1"
+            ).fetchone()[0]
+            total_novel = conn.execute(
+                """
+                SELECT COUNT(*) FROM annotations
+                WHERE source = 'sam_discovered' AND is_positive = 1
+                  AND (stability_score IS NULL OR stability_score >= ?)
+                """,
+                (min_stability,),
+            ).fetchone()[0]
+            total_suppressed = conn.execute(
+                "SELECT COUNT(*) FROM annotations WHERE is_suppressed = 1"
+            ).fetchone()[0]
+    else:
+        with open(pseudo_labels_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        all_images = data["images"]
+        train_indices, val_indices = split_cohort_indices(
+            all_images, val_ratio=val_ratio, seed=split_seed
+        )
+
+        if split == "train":
+            indices = train_indices
+        elif split == "val":
+            indices = val_indices
+        elif split == "all":
+            indices = list(range(len(all_images)))
+        else:
+            raise ValueError(
+                f"Unknown split: {split}. Must be 'train', 'val', or 'all'"
+            )
+
+        images = [all_images[idx] for idx in indices]
+        total_gt = 0
+        total_novel = 0
+        total_suppressed = 0
+        for img in images:
+            for ann in img.get("annotations", []):
+                if ann.get("is_positive") and not ann.get("is_suppressed"):
+                    if ann.get("source") == "human_gt":
+                        total_gt += 1
+                    elif ann.get("source") == "sam_discovered":
+                        if (
+                            ann.get("sam_stability_score") or 1.0
+                        ) >= min_stability:
+                            total_novel += 1
+                elif ann.get("is_suppressed"):
+                    total_suppressed += 1
+
+    return images, indices, total_gt, total_novel, total_suppressed, is_sqlite
+
+
+def _fetch_record_annotations(
+    record: dict[str, Any],
+    is_sqlite: bool,
+    sqlite_conn: sqlite3.Connection | None,
+    pseudo_labels_path: Path,
+) -> tuple[list[dict[str, Any]], sqlite3.Connection | None]:
+    """Fetch annotations for an image record from SQLite or in-memory JSON dict.
+
+    /// @param record Image dictionary.
+    /// @param is_sqlite Boolean flag indicating whether storage is SQLite.
+    /// @param sqlite_conn Existing connection or None.
+    /// @param pseudo_labels_path Path to SQLite database.
+    /// @return Tuple of (annotations_list, sqlite_conn).
+    """
+    if not is_sqlite:
+        return record.get("annotations", []), sqlite_conn
+
+    if sqlite_conn is None:
+        sqlite_conn = sqlite3.connect(
+            f"file:{pseudo_labels_path}?mode=ro&immutable=1",
+            uri=True,
+            check_same_thread=False,
+        )
+
+    img_id = record["image_id"]
+    rows = sqlite_conn.execute(
+        """
+        SELECT bbox_x1, bbox_y1, bbox_x2, bbox_y2, quad_json,
+               source, is_positive, is_suppressed, stability_score
+        FROM annotations
+        WHERE image_id = ?
+        """,
+        (img_id,),
+    ).fetchall()
+
+    annotations: list[dict[str, Any]] = []
+    for r in rows:
+        quad = json.loads(r[4]) if r[4] else None
+        annotations.append(
+            {
+                "bbox": [float(r[0]), float(r[1]), float(r[2]), float(r[3])],
+                "quad": quad,
+                "source": str(r[5]),
+                "is_positive": bool(r[6]),
+                "is_suppressed": bool(r[7]),
+                "sam_stability_score": float(r[8]) if r[8] is not None else None,
+            }
+        )
+    return annotations, sqlite_conn
+
+
 class SAMStudentDataset(Dataset[QuadProposalSample]):
     """PyTorch Dataset loading SAM discovery pseudo-labels and human GT for student training."""
 
@@ -101,7 +290,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
     ) -> None:
         """Initialize the SAM pseudo-label dataset.
 
-        @param pseudo_labels_path Path to the sam_pilot_800.json pseudo-label file.
+        @param pseudo_labels_path Path to the sam_pilot_800.json pseudo-label file or SQLite db.
         @param image_root Directory containing the output images.
         @param split One of 'train', 'val', or 'all'.
         @param val_ratio Fraction of images allocated to validation split.
@@ -119,35 +308,27 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         self.min_stability = min_stability
         self.seed = seed
         self._epoch = torch.zeros(1, dtype=torch.long)
+        self._connection: sqlite3.Connection | None = None
 
         if not self.pseudo_labels_path.exists():
             raise FileNotFoundError(
                 f"Pseudo-labels file not found: {self.pseudo_labels_path}"
             )
 
-        with open(self.pseudo_labels_path, encoding="utf-8") as f:
-            data = json.load(f)
-
-        all_images = data["images"]
-        train_indices, val_indices = split_cohort_indices(
-            all_images, val_ratio=val_ratio, seed=split_seed
+        (
+            self.images,
+            self.indices,
+            self.total_gt,
+            self.total_novel,
+            self.total_suppressed,
+            self._is_sqlite,
+        ) = _load_pseudo_label_records(
+            self.pseudo_labels_path,
+            split=split,
+            val_ratio=val_ratio,
+            split_seed=split_seed,
+            min_stability=min_stability,
         )
-
-        if split == "train":
-            selected_indices = train_indices
-        elif split == "val":
-            selected_indices = val_indices
-        elif split == "all":
-            selected_indices = list(range(len(all_images)))
-        else:
-            raise ValueError(
-                f"Unknown split: {split}. Must be 'train', 'val', or 'all'"
-            )
-
-        self.images: list[dict[str, Any]] = [
-            all_images[idx] for idx in selected_indices
-        ]
-        self.indices = selected_indices
 
         if augmentation is None:
             augmentation = AugmentationConfig()
@@ -159,23 +340,6 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
             training=(split == "train"),
             regular_min_side=16.0,
         )
-
-        # Index and aggregate statistics
-        self.total_gt = 0
-        self.total_novel = 0
-        self.total_suppressed = 0
-        for img in self.images:
-            for ann in img.get("annotations", []):
-                if ann.get("is_positive") and not ann.get("is_suppressed"):
-                    if ann.get("source") == "human_gt":
-                        self.total_gt += 1
-                    elif ann.get("source") == "sam_discovered":
-                        if (
-                            ann.get("sam_stability_score") or 1.0
-                        ) >= self.min_stability:
-                            self.total_novel += 1
-                elif ann.get("is_suppressed"):
-                    self.total_suppressed += 1
 
     def __len__(self) -> int:
         return len(self.images)
@@ -192,7 +356,11 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         ignore_quads: list[list[list[float]]] = []
         stabilities: list[float] = []
 
-        for ann in record.get("annotations", []):
+        anns, self._connection = _fetch_record_annotations(
+            record, self._is_sqlite, self._connection, self.pseudo_labels_path
+        )
+
+        for ann in anns:
             quad = ann.get("quad")
             if not quad or len(quad) != 4:
                 continue
@@ -296,34 +464,27 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         self.seed = seed
         self._epoch = torch.zeros(1, dtype=torch.long)
 
+        self._connection: sqlite3.Connection | None = None
+
         if not self.pseudo_labels_path.exists():
             raise FileNotFoundError(
                 f"Pseudo-labels file not found: {self.pseudo_labels_path}"
             )
 
-        with open(self.pseudo_labels_path, encoding="utf-8") as f:
-            data = json.load(f)
-
-        all_images = data["images"]
-        train_indices, val_indices = split_cohort_indices(
-            all_images, val_ratio=val_ratio, seed=split_seed
+        (
+            self.images,
+            self.indices,
+            self.total_gt,
+            self.total_novel,
+            self.total_suppressed,
+            self._is_sqlite,
+        ) = _load_pseudo_label_records(
+            self.pseudo_labels_path,
+            split=split,
+            val_ratio=val_ratio,
+            split_seed=split_seed,
+            min_stability=min_stability,
         )
-
-        if split == "train":
-            selected_indices = train_indices
-        elif split == "val":
-            selected_indices = val_indices
-        elif split == "all":
-            selected_indices = list(range(len(all_images)))
-        else:
-            raise ValueError(
-                f"Unknown split: {split}. Must be 'train', 'val', or 'all'"
-            )
-
-        self.images: list[dict[str, Any]] = [
-            all_images[idx] for idx in selected_indices
-        ]
-        self.indices = selected_indices
 
         if augmentation is None:
             augmentation = AugmentationConfig()
@@ -336,23 +497,6 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
             tiny_area=tiny_area,
             tiny_min_side=tiny_min_side,
         )
-
-        # Index and aggregate statistics
-        self.total_gt = 0
-        self.total_novel = 0
-        self.total_suppressed = 0
-        for img in self.images:
-            for ann in img.get("annotations", []):
-                if ann.get("is_positive") and not ann.get("is_suppressed"):
-                    if ann.get("source") == "human_gt":
-                        self.total_gt += 1
-                    elif ann.get("source") == "sam_discovered":
-                        if (
-                            ann.get("sam_stability_score") or 1.0
-                        ) >= self.min_stability:
-                            self.total_novel += 1
-                elif ann.get("is_suppressed"):
-                    self.total_suppressed += 1
 
     def __len__(self) -> int:
         return len(self.images)
@@ -368,7 +512,11 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         positive_boxes: list[list[float]] = []
         ignore_boxes: list[list[float]] = []
 
-        for ann in record.get("annotations", []):
+        anns, self._connection = _fetch_record_annotations(
+            record, self._is_sqlite, self._connection, self.pseudo_labels_path
+        )
+
+        for ann in anns:
             bbox = ann.get("bbox")
             if not bbox or len(bbox) != 4:
                 continue
@@ -421,6 +569,7 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
 
 __all__ = [
     "DEFAULT_IMAGE_ROOT",
+    "DEFAULT_PSEUDO_LABELS_DB",
     "DEFAULT_PSEUDO_LABELS_PATH",
     "SAMStudentDataset",
     "SAMStudentHBBDataset",

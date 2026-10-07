@@ -60,7 +60,13 @@ def parse_args() -> argparse.Namespace:
         "--pseudo-labels",
         type=Path,
         default=DEFAULT_PSEUDO_LABELS_PATH,
-        help="Path to pseudo-labels JSON.",
+        help="Path to pseudo-labels JSON or SQLite.",
+    )
+    parser.add_argument(
+        "--val-pseudo-labels",
+        type=Path,
+        default=None,
+        help="Optional path to validation pseudo-labels (defaults to --pseudo-labels with split='val').",
     )
     parser.add_argument(
         "--image-root",
@@ -150,6 +156,7 @@ def train() -> None:
     strides = (4, 8, 16, 32)
 
     # 1. Datasets and Loaders
+    val_pseudo_labels = args.val_pseudo_labels or args.pseudo_labels
     if args.geometry == "hbb":
         train_dataset = SAMStudentHBBDataset(
             pseudo_labels_path=args.pseudo_labels,
@@ -160,7 +167,7 @@ def train() -> None:
             min_stability=args.min_stability,
         )
         val_dataset = SAMStudentHBBDataset(
-            pseudo_labels_path=args.pseudo_labels,
+            pseudo_labels_path=val_pseudo_labels,
             image_root=args.image_root,
             split="val",
             val_ratio=0.20,
@@ -178,7 +185,7 @@ def train() -> None:
             min_stability=args.min_stability,
         )
         val_dataset = SAMStudentDataset(
-            pseudo_labels_path=args.pseudo_labels,
+            pseudo_labels_path=val_pseudo_labels,
             image_root=args.image_root,
             split="val",
             val_ratio=0.20,

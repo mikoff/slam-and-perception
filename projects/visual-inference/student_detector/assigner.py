@@ -141,57 +141,62 @@ class ATSSAssigner:
             dim=2
         )
 
-        for gt_index in range(boxes.shape[0]):
-            candidate_parts: list[Tensor] = []
-            for level_slice in level_slices:
-                level_valid = valid_point_mask[level_slice]
-                count = min(self.top_k, int(level_valid.sum().item()))
-                if count == 0:
-                    continue
-                level_distances = squared_distances[level_slice, gt_index].masked_fill(
-                    ~level_valid, torch.inf
-                )
-                relative = torch.topk(level_distances, k=count, largest=False).indices
-                candidate_parts.append(relative + int(level_slice.start or 0))
-            if not candidate_parts:
-                continue
-            candidates = torch.cat(candidate_parts)
-            candidate_masks[candidates, gt_index] = True
-            candidate_ious = prior_ious[candidates, gt_index]
-            threshold = candidate_ious.mean() + candidate_ious.std(unbiased=False)
-            candidate_points = points[candidates]
-            distances = encode_ltrb(
-                candidate_points,
-                boxes[gt_index].unsqueeze(0).expand(candidates.shape[0], -1),
+        # Vectorized candidate selection across all ground-truth boxes simultaneously
+        candidate_parts: list[Tensor] = []
+        for level_slice in level_slices:
+            level_valid = valid_point_mask[level_slice]
+            level_dist = squared_distances[level_slice].masked_fill(
+                ~level_valid[:, None], torch.inf
             )
-            inside = distances.min(dim=1).values >= 0
-            in_center = torch.ones_like(inside)
+            count = min(self.top_k, level_slice.stop - level_slice.start)
+            if count == 0:
+                continue
+            relative = torch.topk(level_dist, k=count, dim=0, largest=False).indices
+            candidate_parts.append(relative + int(level_slice.start or 0))
+
+        if candidate_parts:
+            all_candidates = torch.cat(candidate_parts, dim=0)  # [total_k, num_gt]
+            candidate_masks.scatter_(0, all_candidates, True)
+
+            cand_ious = torch.gather(prior_ious, 0, all_candidates)
+            threshold = cand_ious.mean(dim=0, keepdim=True) + cand_ious.std(
+                dim=0, unbiased=False, keepdim=True
+            )
+
+            cand_points = points[all_candidates]
+            inside = (
+                (cand_points[..., 0] >= boxes[None, :, 0])
+                & (cand_points[..., 0] <= boxes[None, :, 2])
+                & (cand_points[..., 1] >= boxes[None, :, 1])
+                & (cand_points[..., 1] <= boxes[None, :, 3])
+            )
             if self.center_radius is not None:
-                radius = self.center_radius * point_strides[candidates]
+                cand_strides = point_strides[all_candidates]
+                radius = self.center_radius * cand_strides
                 center_left = torch.maximum(
-                    boxes[gt_index, 0].expand_as(radius),
-                    gt_centers[gt_index, 0] - radius,
+                    boxes[None, :, 0], gt_centers[None, :, 0] - radius
                 )
                 center_top = torch.maximum(
-                    boxes[gt_index, 1].expand_as(radius),
-                    gt_centers[gt_index, 1] - radius,
+                    boxes[None, :, 1], gt_centers[None, :, 1] - radius
                 )
                 center_right = torch.minimum(
-                    boxes[gt_index, 2].expand_as(radius),
-                    gt_centers[gt_index, 0] + radius,
+                    boxes[None, :, 2], gt_centers[None, :, 0] + radius
                 )
                 center_bottom = torch.minimum(
-                    boxes[gt_index, 3].expand_as(radius),
-                    gt_centers[gt_index, 1] + radius,
+                    boxes[None, :, 3], gt_centers[None, :, 1] + radius
                 )
                 in_center = (
-                    (candidate_points[:, 0] >= center_left)
-                    & (candidate_points[:, 0] <= center_right)
-                    & (candidate_points[:, 1] >= center_top)
-                    & (candidate_points[:, 1] <= center_bottom)
+                    (cand_points[..., 0] >= center_left)
+                    & (cand_points[..., 0] <= center_right)
+                    & (cand_points[..., 1] >= center_top)
+                    & (cand_points[..., 1] <= center_bottom)
                 )
-            positives = candidates[(candidate_ious >= threshold) & inside & in_center]
-            candidate_quality[positives, gt_index] = prior_ious[positives, gt_index]
+            else:
+                in_center = torch.ones_like(inside)
+
+            positives = (cand_ious >= threshold) & inside & in_center
+            cand_qual_vals = torch.where(positives, cand_ious, -1.0)
+            candidate_quality.scatter_(0, all_candidates, cand_qual_vals)
 
         best_quality, best_local_gt = candidate_quality.max(dim=1)
         normally_positive = best_quality >= 0
@@ -199,9 +204,11 @@ class ATSSAssigner:
 
         unrepresentable: list[Tensor] = []
         fallbacks: list[Tensor] = []
-        for local_gt, original_gt in enumerate(valid_indices):
-            if torch.any(matched == original_gt):
-                continue
+        matched_gts = matched[normally_positive].unique()
+        unmatched_local = torch.where(~torch.isin(valid_indices, matched_gts))[0]
+
+        for local_gt in unmatched_local:
+            original_gt = valid_indices[local_gt]
             all_distances = encode_ltrb(
                 points, boxes[local_gt].unsqueeze(0).expand(num_points, -1)
             )
@@ -210,11 +217,11 @@ class ATSSAssigner:
                 & valid_point_mask
                 & (matched < 0)
             )
-            if not torch.any(free_inside):
+            if not free_inside.any():
                 unrepresentable.append(original_gt)
                 continue
             preferred = free_inside & candidate_masks[:, local_gt]
-            pool = preferred if torch.any(preferred) else free_inside
+            pool = preferred if preferred.any() else free_inside
             quality = prior_ious[:, local_gt].masked_fill(~pool, -1.0)
             best_iou = quality.max()
             tied = pool & torch.isclose(quality, best_iou)

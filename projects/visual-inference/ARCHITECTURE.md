@@ -18,6 +18,8 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
   - **Quad (`QuadProposalLoss`)**: Quality Focal Loss + Corner L1 loss + Gaussian Wasserstein Distance (GWD) loss + corner validity loss.
 - Decoders & Suppression:
   - `InferenceDecoder` and `QuadInferenceDecoder` support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$), `"part_aware_soft"`, and `"nms_free"`. Quad centerness is decoupled (`centerness_alpha = 0.0`).
+- Pseudo-Label Storage & DataLoader:
+  - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`.
 
 # Active Design Patterns & Decisions
 
