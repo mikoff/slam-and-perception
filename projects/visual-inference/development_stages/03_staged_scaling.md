@@ -77,28 +77,32 @@ flowchart TD
 
 ## 4. The Empirical Scaling Curve: Pilot vs. Stage 2 vs. Human Baseline
 
-Evaluating the three generations of models under identical test conditions ($384 \times 384$, $K=100$, pre-NMS 1,000):
+Evaluating the model generations under identical test conditions ($384 \times 384$, $K=100$, pre-NMS 1,000):
 
-| Metric / Domain Slice | Old Closed-World Human GT | Stage 1 Pilot (800 Images) | Stage 2 Scaling (10,000 Images) | Scaling Delta (Pilot $\to$ 10k) | Total System Gain (Old $\to$ 10k) |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Supervision Volume** | ~4,500 human GT | 25,728 SAM + GT | **635,780 SAM + GT** | **$24.7\times$ data expansion** | Dense open-world |
-| **Finest Neck Stride** | P3 (stride 8) | P2 (stride 4) | P2 (stride 4) | Invariance | $2\times$ spatial resolution |
-| **Recall@100@0.50** | 40.69% | 37.67% | **50.03%** | **+12.36% absolute** | **+9.34% absolute** |
-| **Strict Recall@100@0.75** | 7.44% | 19.33% | **28.55%** | **+9.22% absolute** | **+21.11% ($3.84\times$)** |
-| **AP / AR@50** | ~9.9% | 9.93% | **16.06%** | **+6.13% (+62.1% rel)** | **+6.16% (+62.2% rel)** |
-| **Tiny Objects (<16 px)** | 0.0% *(dropped)* | ~35.0% | **~48.0%** | **+13.0%** | **From 0.0% to ~48%** |
-| **Small Objects (16–32 px)**| 1.6% | 45.69% | **54.02%** | **+8.33%** | **+52.42%** |
-| **Medium Objects (32–96 px)**| 31.40% | 55.68% | **62.46%** | **+6.78%** | **+31.06%** |
-| **Large Objects (>96 px)** | 89.50% *(stacked)* | 46.28% *(de-clustered)* | **71.63%** *(de-clustered)* | **+25.35%** | Balanced allocation |
-| **Fisheye Domain Recall** | 31.57% | 47.65% | **56.95%** | **+9.30%** | **+25.38%** |
-| **Automotive Domain Recall**| 41.93% | 37.12% | **49.35%** | **+12.23%** | **+7.42%** |
-| **General Domain Recall** | 22.78% | 36.47% | **48.02%** | **+11.55%** | **+25.24%** |
+| Metric / Dimension | 1. Old Closed-World Human GT | 2. Stage 1 Pilot (800 Images) | 3. Stage 2 Run 1 (10k, BS=16) | 4. Stage 2 Run 2 (10k, BS=32, Authoritative α=1.0) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Supervision Source** | Human GT Only (~4.5k) | SAM + GT (25.7k) | SAM + GT (635.8k) | **SAM + GT (635.8k)** |
+| **Finest Neck Stride** | P3 (stride 8) | P2 Lite-FPN (stride 4) | P2 Lite-FPN (stride 4) | **P2 Lite-FPN (stride 4)** |
+| **Batch Size & LR** | BS=16, LR=1e-3 | BS=16, LR=1e-3 | BS=16, LR=1e-3 | **BS=32, LR=1.5e-3 + Warmup** |
+| **Assigner Engine** | ATSS Unvectorized | ATSS Unvectorized | ATSS Unvectorized | **ATSS Vectorized ($9.5\times$ speedup)** |
+| **Epochs & Update Steps** | 40 epochs | 20 epochs (~800 steps) | 15 epochs (**9,375 steps**) | 15 epochs (**4,687 steps**) |
+| **Training Duration** | ~30 mins | ~10 mins | 231.5 mins (3.86 hours) | **44.3 minutes ($5.2\times$ faster)** |
+| **Recall@100@0.50** | 40.69% | 37.67% | **50.03%** | **47.93%** *(46.40% raw)* |
+| **Strict Recall@100@0.75**| 7.44% | 19.33% | **28.55%** | **27.08%** *(26.24% raw)* |
+| **AP / AR@50** | ~9.9% (AR100: 14.78%) | 9.93% | **16.06%** | **13.49%** |
+| **Small Objects (16–32 px)**| 1.6% | 45.69% | 54.02% | **56.61%** *(60.83% raw)* |
+| **Medium Objects (32–96 px)**| 31.40% | 55.68% | 62.46% | **74.00% (All-Time Best, +11.5%)** |
+| **Large Objects (>96 px)** | 89.50% *(stacked)* | 46.28% *(de-clustered)* | 69.62% *(71.6% ep14)* | **69.62%** *(85.11% @ K=300)* |
+| **Fisheye Domain Recall** | 31.57% | 47.65% | **56.95%** | **55.93%** |
+| **Automotive Domain Recall**| 41.93% | 37.12% | **49.35%** | **47.41%** |
+| **General Domain Recall** | 22.78% | 36.47% | **48.02%** | **45.34%** |
 
-### Key Scaling Law Insights:
-1. **Power-Law Scaling Confirmed:** Expanding from 800 images ($25\text{k}$ proposals) to 10,000 images ($635\text{k}$ proposals) yielded a clean **$+12.36\%$ absolute recall gain** ($37.67\% \to 50.03\%$) and a **$+62.1\%$ relative AP@50 jump** ($9.93\% \to 16.06\%$).
-2. **Strict Localization Matures with Scale:** High-precision recall (IoU $\ge 0.75$) increased from $19.33\% \to 28.55\%$, proving that more diverse SAM masks refine student bounding box edge tightness.
-3. **Cross-Domain Generalization:** Fisheye recall reached **$56.95\%$** (+9.3% over pilot, +25.4% over human baseline), while automotive recall jumped by **$+12.23\%$**, confirming that the student does not overfit to source camera distributions.
-4. **Zero-RAM DataLoader Stability:** Multi-worker lazy SQLite reads operated at $<1.5\text{ MB}$ RAM overhead per worker with zero page thrashing or startup lag.
+### Key Scaling Law & Optimization Insights:
+1. **$5.2\times$ Wall-Clock Acceleration via Vectorization:** Tensorized ATSS assignment and batch size 32 slashed full 10k-image training time from **3.86 hours down to 44.3 minutes** on a single RTX 3060 (3.48 GB VRAM), while eliminating all GPU stall synchronization points.
+2. **Resolution of the Large-Object Discrepancy:** The initial 39.03% large-object recall under raw objectness was an inference ranking artifact, not a learning failure. The high-resolution P2 stride-4 head produced ~193k high-confidence small proposals that flooded the top 100 slots. Calibrating with `score_mode = "objectness_x_centerness"` suppresses off-center boundary points on P2, immediately restoring Large Object recall to **69.62%** at $K=100$ (matching Run 1) and **85.11%** at $K=300$.
+3. **Medium-Object Breakthrough (74.00%):** Centerness calibration boosted medium-object recall from 62.46% to **74.00%** (+11.54% over Run 1), reflecting cleaner spatial centering across multi-scale proposals.
+4. **Strict Localization Matures with Scale:** High-precision recall (IoU $\ge 0.75$) reached **27.08%**, consistently over $3.6\times$ higher than the human-labeled baseline (7.44%).
+5. **Zero-RAM DataLoader Stability:** Multi-worker lazy SQLite reads with `file_system` sharing strategy operated without memory leaks or IPC file descriptor exhaustion.
 
 ---
 

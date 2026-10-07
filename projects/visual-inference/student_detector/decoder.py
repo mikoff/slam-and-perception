@@ -140,12 +140,15 @@ class InferenceDecoder:
         nms_mode: str = "hard",
         soft_sigma: float = 0.5,
         part_scale_ratio: float = 0.4,
+        centerness_alpha: float = 1.0,
         score_threshold: float = 0.05,
     ) -> None:
         if score_mode not in {"objectness", "objectness_x_centerness"}:
             raise ValueError(
                 "score_mode must be 'objectness' or 'objectness_x_centerness'"
             )
+        if not (0.0 <= centerness_alpha <= 1.0):
+            raise ValueError("centerness_alpha must be in [0.0, 1.0]")
         if nms_mode not in {"hard", "soft", "part_aware", "part_aware_soft", "nms_free"}:
             raise ValueError(
                 "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
@@ -155,6 +158,7 @@ class InferenceDecoder:
         self.nms_iou_threshold = nms_iou_threshold
         self.max_detections = max_detections
         self.score_mode = score_mode
+        self.centerness_alpha = centerness_alpha
         self.nms_mode = nms_mode
         self.soft_sigma = soft_sigma
         self.part_scale_ratio = part_scale_ratio
@@ -176,16 +180,30 @@ class InferenceDecoder:
             device=output.objectness[0].device,
             dtype=output.box_distances[0].dtype,
         )
-        if self.score_mode == "objectness":
+        if self.score_mode == "objectness" or self.centerness_alpha == 0.0:
             scores = torch.cat(
                 [torch.sigmoid(obj).flatten(start_dim=1) for obj in output.objectness],
+                dim=1,
+            )
+        elif self.centerness_alpha == 1.0:
+            scores = torch.cat(
+                [
+                    torch.sigmoid(obj).flatten(start_dim=1)
+                    * torch.sigmoid(center).flatten(start_dim=1)
+                    for obj, center in zip(
+                        output.objectness, output.centerness, strict=True
+                    )
+                ],
                 dim=1,
             )
         else:
             scores = torch.cat(
                 [
                     torch.sigmoid(obj).flatten(start_dim=1)
-                    * torch.sigmoid(center).flatten(start_dim=1)
+                    * (
+                        torch.sigmoid(center).flatten(start_dim=1)
+                        ** self.centerness_alpha
+                    )
                     for obj, center in zip(
                         output.objectness, output.centerness, strict=True
                     )

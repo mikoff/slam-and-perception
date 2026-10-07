@@ -112,6 +112,7 @@ class InferenceConfig:
     nms_iou_threshold: float = 0.9
     max_proposals: int = 100
     score_mode: str = "objectness"
+    centerness_alpha: float = 1.0
 
 
 @dataclass(frozen=True)

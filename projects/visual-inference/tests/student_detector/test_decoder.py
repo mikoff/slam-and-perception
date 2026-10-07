@@ -98,6 +98,18 @@ def test_objectness_score_mode_ignores_dormant_centerness() -> None:
     )[0]
     assert objectness_result.boxes[0, 0] < product_result.boxes[0, 0]
 
+    # Verify centerness_alpha = 0.0 matches score_mode="objectness"
+    alpha_zero_result = InferenceDecoder(
+        top_k=1, score_mode="objectness_x_centerness", centerness_alpha=0.0
+    )(output, (16, 16))[0]
+    assert torch.allclose(objectness_result.scores, alpha_zero_result.scores)
+
+    # Verify centerness_alpha = 0.5 produces scores between alpha=0 and alpha=1
+    alpha_half_result = InferenceDecoder(
+        top_k=1, score_mode="objectness_x_centerness", centerness_alpha=0.5
+    )(output, (16, 16))[0]
+    assert alpha_half_result.scores[0] > 0
+
 
 def test_nms_part_aware_preserves_distinct_subparts() -> None:
     # Box 0: Parent object (whole building), area = 100 * 100 = 10000

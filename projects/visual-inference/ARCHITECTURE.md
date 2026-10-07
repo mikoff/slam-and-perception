@@ -17,7 +17,8 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
   - **HBB (`ProposalLoss`)**: Quality Focal Loss on objectness + CIoU box loss + BCE centerness loss.
   - **Quad (`QuadProposalLoss`)**: Quality Focal Loss + Corner L1 loss + Gaussian Wasserstein Distance (GWD) loss + corner validity loss.
 - Decoders & Suppression:
-  - `InferenceDecoder` and `QuadInferenceDecoder` support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$), `"part_aware_soft"`, and `"nms_free"`. Quad centerness is decoupled (`centerness_alpha = 0.0`).
+  - `InferenceDecoder` (HBB) and `QuadInferenceDecoder` (Quads) support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$), `"part_aware_soft"`, and `"nms_free"`.
+  - Centerness scoring parameter `centerness_alpha` ($\in [0.0, 1.0]$) blends scores as $\text{score} = \sigma(\text{obj}) \times \sigma(\text{center})^\alpha$. For HBB, $\alpha=1.0$ is the authoritative baseline, protecting the fixed 100-proposal budget for large (69.6%) and medium (74.0%) objects against dense P2 small-proposal crowding. For Quads, centerness is decoupled ($\alpha = 0.0$) to avoid aspect-ratio distortion penalties.
 - Pseudo-Label Storage & DataLoader:
   - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`.
 
@@ -28,7 +29,9 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 - Suppressed internal subparts (28,354 instances) and non-object stuff (`road_surface`) are assigned to ignore regions rather than hard negatives.
 - Post-processing decoders (`InferenceDecoder` for HBB, `QuadInferenceDecoder` for Quads) apply NMS outside the model graph.
 - Anisotropic diagonal jitter (`1e-4 * I`) and LAPACK CPU fallback in eigensolvers prevent cuSOLVER `LinAlgError` on degenerate or isotropic quad boxes.
-- Mixed precision: FP16 autocast with `GradScaler` on CUDA, consuming ~1.7 GB VRAM at batch size 16.
+- Mixed precision: FP16 autocast with `GradScaler` on CUDA, consuming ~3.48 GB VRAM at batch size 32.
+- Vectorized Target Building: `ATSSAssigner`, `TargetBuilder`, `TaskAlignedAssigner`, and `QuadTaskAlignedAssigner` are fully tensorized, avoiding CPU-GPU sync stalls ($9.5\times$ TargetBuilder acceleration).
+- Multi-worker multiprocessing: Uses `torch.multiprocessing.set_sharing_strategy("file_system")` to prevent Linux IPC file descriptor exhaustion with SQLite multi-worker DataLoaders.
 
 # Local Constraints & Gotchas
 

@@ -13,6 +13,9 @@ from typing import Any
 import torch
 from torch.utils.data import DataLoader
 
+if hasattr(torch.multiprocessing, "set_sharing_strategy"):
+    torch.multiprocessing.set_sharing_strategy("file_system")
+
 from student_detector.assigner import ATSSAssigner
 from student_detector.decoder import InferenceDecoder
 from student_detector.losses import ProposalLoss
@@ -83,14 +86,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=16,
-        help="Batch size (default: 16).",
+        default=32,
+        help="Batch size (default: 32).",
     )
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-3,
-        help="Peak learning rate for AdamW (default: 1e-3).",
+        default=1.5e-3,
+        help="Peak learning rate for AdamW (default: 1.5e-3).",
     )
     parser.add_argument(
         "--weight-decay",
@@ -127,6 +130,30 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Epoch interval for validation (default: 1).",
+    )
+    parser.add_argument(
+        "--score-mode",
+        type=str,
+        default="objectness_x_centerness",
+        choices=["objectness", "objectness_x_centerness"],
+        help="Scoring mode for HBB decoder (default: objectness_x_centerness).",
+    )
+    parser.add_argument(
+        "--centerness-alpha",
+        type=float,
+        default=1.0,
+        help="Exponent for centerness scoring in HBB decoder (default: 1.0).",
+    )
+    parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="Run evaluation only using --checkpoint and exit.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Path to checkpoint file for evaluation.",
     )
     parser.add_argument(
         "--device",
@@ -264,7 +291,8 @@ def train() -> None:
                 top_k=1000,
                 nms_iou_threshold=0.50,
                 max_detections=100,
-                score_mode="objectness",
+                score_mode=args.score_mode,
+                centerness_alpha=args.centerness_alpha,
             )
 
         criterion = ProposalLoss(
@@ -345,6 +373,40 @@ def train() -> None:
                 centerness_alpha=0.0,
             )
 
+    if args.eval_only:
+        ckpt_path = args.checkpoint
+        if ckpt_path is None:
+            suffix = "_recipe2" if args.recipe == "recipe2" else ""
+            ckpt_path = checkpoints_dir / f"mobilenetv4_p2_{args.geometry}{suffix}_best.pt"
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+        print(f"\n[Eval-Only] Loading checkpoint: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        model.eval()
+        if args.geometry == "hbb":
+            metrics = validate(
+                model=model,
+                loader=val_loader,
+                target_builder=target_builder,
+                decoder=decoder,
+                device=device,
+            )
+        else:
+            metrics = validate_quad(
+                model=model,
+                loader=val_loader,
+                target_builder=target_builder,
+                decoder=decoder,
+                device=device,
+            )
+        print("\n================ EVALUATION METRICS ================")
+        for k, v in sorted(metrics.items()):
+            if isinstance(v, float):
+                print(f"  {k:35s}: {v * 100:6.2f}%")
+        print("====================================================\n")
+        return
+
     # Differential learning rate: 0.2x for pretrained backbone, 1.0x for neck & head
     opt_params = [
         {"params": model.backbone.parameters(), "lr": args.lr * 0.2},
@@ -359,8 +421,17 @@ def train() -> None:
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-5
+    warmup_epochs = 1
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.2, end_factor=1.0, total_iters=warmup_epochs
+    )
+    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=max(args.epochs - warmup_epochs, 1), eta_min=1e-5
+    )
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, cosine_scheduler],
+        milestones=[warmup_epochs],
     )
     scaler = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 

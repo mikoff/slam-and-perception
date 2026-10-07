@@ -98,6 +98,7 @@ class _HbbTask:
             nms_iou_threshold=config.inference.nms_iou_threshold,
             max_detections=config.inference.max_proposals,
             score_mode=config.inference.score_mode,
+            centerness_alpha=getattr(config.inference, "centerness_alpha", 1.0),
         )
         self.validation_states = ("raw", "ema") if use_ema_for_validation else ("raw",)
         self.level_names = tuple(
