@@ -185,6 +185,11 @@ def main() -> None:
     )
     parser.add_argument("--samples-per-cohort", type=int, default=2)
     parser.add_argument("--conf-threshold", type=float, default=0.20)
+    parser.add_argument(
+        "--wrap-to-bbox",
+        action="store_true",
+        help="Wrap predicted quads into axis-aligned horizontal bounding boxes (HBB).",
+    )
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
 
@@ -309,17 +314,27 @@ def main() -> None:
                         q_unscaled = q.clone()
                         q_unscaled[:, 0] = ((q_unscaled[:, 0] - off_x) / scale).clamp(0, orig_w)
                         q_unscaled[:, 1] = ((q_unscaled[:, 1] - off_y) / scale).clamp(0, orig_h)
-                        predictions.append({
-                            "box": q_unscaled.tolist(),
-                            "score": score_val,
-                        })
+                        if args.wrap_to_bbox:
+                            x1 = float(q_unscaled[:, 0].min())
+                            y1 = float(q_unscaled[:, 1].min())
+                            x2 = float(q_unscaled[:, 0].max())
+                            y2 = float(q_unscaled[:, 1].max())
+                            predictions.append({
+                                "box": [x1, y1, x2, y2],
+                                "score": score_val,
+                            })
+                        else:
+                            predictions.append({
+                                "box": q_unscaled.tolist(),
+                                "score": score_val,
+                            })
 
             predictions.sort(key=lambda x: x["score"], reverse=True)
             predictions = predictions[:30]
 
             gt_boxes = []
             sam_novel = []
-            geom_key = "bbox" if args.geometry == "hbb" else "quad"
+            geom_key = "bbox" if (args.geometry == "hbb" or args.wrap_to_bbox) else "quad"
             for ann in rec.get("annotations", []):
                 item = ann.get(geom_key)
                 if not item or ann.get("is_suppressed") or not ann.get("is_positive"):
