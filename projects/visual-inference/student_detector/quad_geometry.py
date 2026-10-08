@@ -422,6 +422,7 @@ def polygon_nms(
     nms_mode: str = "hard",
     soft_sigma: float = 0.5,
     part_scale_ratio: float = 0.4,
+    part_max_iou: float = 0.65,
     score_threshold: float = 0.05,
     return_scores: bool = False,
 ) -> Tensor | tuple[Tensor, Tensor]:
@@ -447,7 +448,9 @@ def polygon_nms(
         return (keep, scores[keep]) if return_scores else keep
 
     if nms_mode == "hard":
-        overlaps = pairwise_quad_iou(value, value, minimum_iou=iou_threshold).detach().cpu()
+        overlaps = (
+            pairwise_quad_iou(value, value, minimum_iou=iou_threshold).detach().cpu()
+        )
         kept: list[int] = []
         suppressed = torch.zeros(num_quads, dtype=torch.bool)
         for index in order.tolist():
@@ -474,7 +477,11 @@ def polygon_nms(
     current_scores = scores_cpu.clone()
 
     for idx in order.tolist():
-        if not valid_cpu[idx] or suppressed[idx] or current_scores[idx] < score_threshold:
+        if (
+            not valid_cpu[idx]
+            or suppressed[idx]
+            or current_scores[idx] < score_threshold
+        ):
             continue
         kept_indices.append(idx)
         final_scores.append(float(current_scores[idx].item()))
@@ -491,7 +498,7 @@ def polygon_nms(
         pair_ratios = scale_ratios[idx, rem_tensor]
 
         if nms_mode == "part_aware":
-            to_suppress = (pair_ious > 0.65) | (
+            to_suppress = (pair_ious > part_max_iou) | (
                 (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
             )
             suppressed[rem_tensor[to_suppress]] = True
@@ -502,7 +509,7 @@ def polygon_nms(
             suppressed[rem_tensor[dropped]] = True
         elif nms_mode == "part_aware_soft":
             decay = torch.where(
-                (pair_ratios <= part_scale_ratio) & (pair_ious <= 0.65),
+                (pair_ratios <= part_scale_ratio) & (pair_ious <= part_max_iou),
                 torch.ones_like(pair_ious),
                 torch.exp(-(pair_ious**2) / soft_sigma),
             )

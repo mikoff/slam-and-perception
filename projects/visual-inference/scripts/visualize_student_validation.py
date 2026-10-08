@@ -92,6 +92,12 @@ def parse_args() -> argparse.Namespace:
         help="Part-aware NMS scale ratio threshold (default: 0.4).",
     )
     parser.add_argument(
+        "--part-max-iou",
+        type=float,
+        default=0.65,
+        help="Part-aware NMS maximum duplicate IoU threshold (default: 0.65).",
+    )
+    parser.add_argument(
         "--score-mode",
         type=str,
         default="objectness_x_centerness",
@@ -743,6 +749,7 @@ def main() -> None:
             centerness_alpha=alpha,
             nms_mode=chosen_nms,
             part_scale_ratio=args.part_scale_ratio,
+            part_max_iou=args.part_max_iou,
         )
     else:
         model = QuadProposalDetector(
@@ -760,6 +767,7 @@ def main() -> None:
             centerness_alpha=alpha,
             nms_mode=chosen_nms,
             part_scale_ratio=args.part_scale_ratio,
+            part_max_iou=args.part_max_iou,
         )
 
     model.load_state_dict(checkpoint_data["model_state_dict"])

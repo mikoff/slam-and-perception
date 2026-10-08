@@ -154,3 +154,35 @@ def test_nms_soft_decays_duplicate_scores() -> None:
     # Kept score for box 1 should be decayed
     assert kept_scores[1] < 0.8
 
+
+def test_nms_part_aware_configurable_part_max_iou() -> None:
+    # Box 0: [0, 0, 10, 10], area = 100
+    # Box 1: [0, 3, 10, 10], area = 70. Intersection = 70, Union = 100 -> IoU = 0.70
+    boxes = torch.tensor(
+        [
+            [0.0, 0.0, 10.0, 10.0],
+            [0.0, 3.0, 10.0, 10.0],
+        ]
+    )
+    scores = torch.tensor([0.9, 0.8])
+
+    # When iou_threshold=0.75, standard part check (IoU > 0.75) won't trigger.
+    # With default part_max_iou=0.65, IoU 0.70 > 0.65 suppresses box 1.
+    keep_default = class_agnostic_nms(
+        boxes,
+        scores,
+        iou_threshold=0.75,
+        nms_mode="part_aware",
+        part_max_iou=0.65,
+    )
+    assert keep_default.tolist() == [0]
+
+    # With higher configured part_max_iou=0.80, IoU 0.70 <= 0.80 preserves box 1.
+    keep_relaxed = class_agnostic_nms(
+        boxes,
+        scores,
+        iou_threshold=0.75,
+        nms_mode="part_aware",
+        part_max_iou=0.80,
+    )
+    assert keep_relaxed.tolist() == [0, 1]

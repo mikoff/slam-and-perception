@@ -103,11 +103,18 @@ class QuadInferenceDecoder:
         nms_mode: str = "hard",
         soft_sigma: float = 0.5,
         part_scale_ratio: float = 0.4,
+        part_max_iou: float = 0.65,
         score_threshold: float = 0.05,
     ) -> None:
         if pre_nms_top_k < max_proposals:
             raise ValueError("pre_nms_top_k must be at least max_proposals")
-        if nms_mode not in {"hard", "soft", "part_aware", "part_aware_soft", "nms_free"}:
+        if nms_mode not in {
+            "hard",
+            "soft",
+            "part_aware",
+            "part_aware_soft",
+            "nms_free",
+        }:
             raise ValueError(
                 "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
             )
@@ -119,6 +126,7 @@ class QuadInferenceDecoder:
         self.nms_mode = nms_mode
         self.soft_sigma = soft_sigma
         self.part_scale_ratio = part_scale_ratio
+        self.part_max_iou = part_max_iou
         self.score_threshold = score_threshold
 
     def __call__(
@@ -224,6 +232,7 @@ class QuadInferenceDecoder:
                 nms_mode=self.nms_mode,
                 soft_sigma=self.soft_sigma,
                 part_scale_ratio=self.part_scale_ratio,
+                part_max_iou=self.part_max_iou,
                 score_threshold=self.score_threshold,
                 return_scores=True,
             )

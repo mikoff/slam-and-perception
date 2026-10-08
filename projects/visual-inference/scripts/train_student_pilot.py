@@ -152,6 +152,18 @@ def parse_args() -> argparse.Namespace:
         help="Inference NMS mode for validation (default: part_aware).",
     )
     parser.add_argument(
+        "--part-scale-ratio",
+        type=float,
+        default=0.4,
+        help="Part-aware NMS scale ratio threshold (default: 0.4).",
+    )
+    parser.add_argument(
+        "--part-max-iou",
+        type=float,
+        default=0.65,
+        help="Part-aware NMS maximum duplicate IoU threshold (default: 0.65).",
+    )
+    parser.add_argument(
         "--eval-only",
         action="store_true",
         help="Run evaluation only using --checkpoint and exit.",
@@ -273,9 +285,7 @@ def train() -> None:
                 top_k=4,
                 assignment_mode="one_to_many",
             )
-            target_builder = TargetBuilder(
-                assigner, default_background_weight=0.20
-            )
+            target_builder = TargetBuilder(assigner, default_background_weight=0.20)
             target_builder_aux = TargetBuilder(
                 assigner_aux, default_background_weight=0.20
             )
@@ -288,7 +298,8 @@ def train() -> None:
                 score_mode=args.score_mode,
                 centerness_alpha=args.centerness_alpha,
                 nms_mode=args.nms_mode,
-                part_scale_ratio=0.4,
+                part_scale_ratio=args.part_scale_ratio,
+                part_max_iou=args.part_max_iou,
             )
             decoder_free = (
                 InferenceDecoder(
@@ -311,9 +322,7 @@ def train() -> None:
                 top_k=4,
                 center_radius=1.0,
             )
-            target_builder = TargetBuilder(
-                assigner, default_background_weight=0.20
-            )
+            target_builder = TargetBuilder(assigner, default_background_weight=0.20)
             target_builder_aux = None
             decoder = InferenceDecoder(
                 strides=strides,
@@ -323,7 +332,8 @@ def train() -> None:
                 score_mode=args.score_mode,
                 centerness_alpha=args.centerness_alpha,
                 nms_mode=args.nms_mode,
-                part_scale_ratio=0.4,
+                part_scale_ratio=args.part_scale_ratio,
+                part_max_iou=args.part_max_iou,
             )
             decoder_free = None
 
@@ -379,7 +389,8 @@ def train() -> None:
                 max_proposals=100,
                 centerness_alpha=0.0,
                 nms_mode=args.nms_mode,
-                part_scale_ratio=0.4,
+                part_scale_ratio=args.part_scale_ratio,
+                part_max_iou=args.part_max_iou,
             )
             decoder_free = (
                 QuadInferenceDecoder(
@@ -418,13 +429,18 @@ def train() -> None:
                 nms_iou_threshold=0.45,
                 max_proposals=100,
                 centerness_alpha=0.0,
+                nms_mode=args.nms_mode,
+                part_scale_ratio=args.part_scale_ratio,
+                part_max_iou=args.part_max_iou,
             )
 
     if args.eval_only:
         ckpt_path = args.checkpoint
         if ckpt_path is None:
             suffix = "_recipe2" if args.recipe == "recipe2" else ""
-            ckpt_path = checkpoints_dir / f"mobilenetv4_p2_{args.geometry}{suffix}_best.pt"
+            ckpt_path = (
+                checkpoints_dir / f"mobilenetv4_p2_{args.geometry}{suffix}_best.pt"
+            )
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         print(f"\n[Eval-Only] Loading checkpoint: {ckpt_path}")
@@ -510,7 +526,8 @@ def train() -> None:
                     output_primary, output_aux = model(images)
                     if args.geometry == "hbb":
                         feature_shapes = tuple(
-                            (t.shape[-2], t.shape[-1]) for t in output_primary.objectness
+                            (t.shape[-2], t.shape[-1])
+                            for t in output_primary.objectness
                         )
                         targets_pri = target_builder(
                             samples,
@@ -724,7 +741,9 @@ def train() -> None:
             if rec_100_50 > best_recall_50:
                 best_recall_50 = rec_100_50
                 suffix = "_recipe2" if args.recipe == "recipe2" else ""
-                best_path = checkpoints_dir / f"mobilenetv4_p2_{args.geometry}{suffix}_best.pt"
+                best_path = (
+                    checkpoints_dir / f"mobilenetv4_p2_{args.geometry}{suffix}_best.pt"
+                )
                 torch.save(
                     {
                         "epoch": epoch,
@@ -786,7 +805,9 @@ def train() -> None:
 
     # Also keep general training_summary.json updated if baseline HBB
     if args.geometry == "hbb" and args.recipe == "p2_baseline":
-        with open(args.output_dir / "training_summary.json", "w", encoding="utf-8") as f:
+        with open(
+            args.output_dir / "training_summary.json", "w", encoding="utf-8"
+        ) as f:
             json.dump(summary, f, indent=2)
 
     print(f"Summary saved to: {summary_path}")

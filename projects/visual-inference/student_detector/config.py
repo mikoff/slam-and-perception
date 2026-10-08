@@ -111,6 +111,9 @@ class InferenceConfig:
     max_proposals: int = 100
     score_mode: str = "objectness"
     centerness_alpha: float = 0.0
+    nms_mode: str = "part_aware"
+    part_scale_ratio: float = 0.4
+    part_max_iou: float = 0.65
 
 
 @dataclass(frozen=True)

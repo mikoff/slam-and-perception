@@ -32,6 +32,7 @@ def class_agnostic_nms(
     nms_mode: str = "hard",
     soft_sigma: float = 0.5,
     part_scale_ratio: float = 0.4,
+    part_max_iou: float = 0.65,
     score_threshold: float = 0.05,
     max_output: int | None = None,
     return_scores: bool = False,
@@ -102,7 +103,7 @@ def class_agnostic_nms(
         pair_ratios = scale_ratios[i, active_remaining]
 
         if nms_mode == "part_aware":
-            to_suppress = (pair_ious > 0.65) | (
+            to_suppress = (pair_ious > part_max_iou) | (
                 (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
             )
             suppressed[active_remaining[to_suppress]] = True
@@ -113,7 +114,7 @@ def class_agnostic_nms(
             suppressed[active_remaining[dropped]] = True
         elif nms_mode == "part_aware_soft":
             decay = torch.where(
-                (pair_ratios <= part_scale_ratio) & (pair_ious <= 0.65),
+                (pair_ratios <= part_scale_ratio) & (pair_ious <= part_max_iou),
                 torch.ones_like(pair_ious),
                 torch.exp(-(pair_ious**2) / soft_sigma),
             )
@@ -142,6 +143,7 @@ class InferenceDecoder:
         nms_mode: str = "hard",
         soft_sigma: float = 0.5,
         part_scale_ratio: float = 0.4,
+        part_max_iou: float = 0.65,
         centerness_alpha: float = 1.0,
         score_threshold: float = 0.05,
     ) -> None:
@@ -151,7 +153,13 @@ class InferenceDecoder:
             )
         if not (0.0 <= centerness_alpha <= 1.0):
             raise ValueError("centerness_alpha must be in [0.0, 1.0]")
-        if nms_mode not in {"hard", "soft", "part_aware", "part_aware_soft", "nms_free"}:
+        if nms_mode not in {
+            "hard",
+            "soft",
+            "part_aware",
+            "part_aware_soft",
+            "nms_free",
+        }:
             raise ValueError(
                 "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
             )
@@ -164,6 +172,7 @@ class InferenceDecoder:
         self.nms_mode = nms_mode
         self.soft_sigma = soft_sigma
         self.part_scale_ratio = part_scale_ratio
+        self.part_max_iou = part_max_iou
         self.score_threshold = score_threshold
 
     def __call__(
@@ -297,6 +306,7 @@ class InferenceDecoder:
                 nms_mode=self.nms_mode,
                 soft_sigma=self.soft_sigma,
                 part_scale_ratio=self.part_scale_ratio,
+                part_max_iou=self.part_max_iou,
                 score_threshold=self.score_threshold,
                 max_output=self.max_detections,
                 return_scores=True,

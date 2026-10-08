@@ -191,3 +191,31 @@ def test_polygon_nms_part_aware_preserves_subparts() -> None:
     assert 1 not in keep.tolist()  # Duplicate suppressed
     assert 2 in keep.tolist()  # Pillar preserved!
 
+
+def test_polygon_nms_part_aware_configurable_part_max_iou() -> None:
+    # Quad 0: [0, 0, 10, 10], area = 100
+    # Quad 1: [0, 3, 10, 10], area = 70. IoU = 0.70
+    q0 = quad_from_bbox([0.0, 0.0, 10.0, 10.0])
+    q1 = quad_from_bbox([0.0, 3.0, 10.0, 10.0])
+    quads = torch.stack([q0, q1])
+    scores = torch.tensor([0.9, 0.8])
+
+    # Default part_max_iou=0.65 suppresses Quad 1 with IoU 0.70
+    keep_default = polygon_nms(
+        quads,
+        scores,
+        iou_threshold=0.75,
+        nms_mode="part_aware",
+        part_max_iou=0.65,
+    )
+    assert keep_default.tolist() == [0]
+
+    # Configured part_max_iou=0.80 keeps Quad 1
+    keep_relaxed = polygon_nms(
+        quads,
+        scores,
+        iou_threshold=0.75,
+        nms_mode="part_aware",
+        part_max_iou=0.80,
+    )
+    assert keep_relaxed.tolist() == [0, 1]
