@@ -23,6 +23,7 @@ from student_detector.sam_student_data import (
     SAMStudentDataset,
     SAMStudentHBBDataset,
 )
+from student_detector.targets import point_validity_from_pixel_mask
 
 
 def parse_args() -> argparse.Namespace:
@@ -798,7 +799,26 @@ def main() -> None:
 
             images_tensor = torch.stack([s.image for s in batch_slice]).to(device)
             output = model(images_tensor)
-            detections = decoder(output, (384, 384))
+
+            shapes = tuple(
+                (t.shape[-2], t.shape[-1])
+                for t in (
+                    output.objectness if args.geometry == "hbb" else output.quality
+                )
+            )
+            valid_by_sample = [
+                point_validity_from_pixel_mask(
+                    s.valid_mask.to(device),
+                    shapes,
+                    decoder.strides,
+                )[1]
+                for s in batch_slice
+            ]
+            level_masks = tuple(
+                torch.stack([valid_by_sample[b][lvl] for b in range(len(batch_slice))])
+                for lvl in range(len(shapes))
+            )
+            detections = decoder(output, (384, 384), level_masks)
 
             for idx_in_batch, (sample, orig_idx) in enumerate(
                 zip(batch_slice, batch_indices, strict=True)

@@ -18,17 +18,24 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 - Loss Formulations:
   - **HBB (`ProposalLoss`)**: Quality Focal Loss on objectness + CIoU box loss + BCE centerness loss.
   - **Quad (`QuadProposalLoss`)**: Quality Focal Loss + Corner L1 loss + Gaussian Wasserstein Distance (GWD) loss + corner validity loss.
+- Training Pipelines & Automation:
+  - **Stage 1 (Self-Supervised Discovery Pre-Training)**: Trained on 10,000 balanced multi-domain images using SAM pseudo-labels (`SAMStudentHBBDataset`). High recall baseline across broad object candidates. Run script: `scripts/train_student_pilot.py`.
+  - **Stage 2 (Canonical Ground-Truth Fine-Tuning)**: Fine-tunes Stage 1 checkpoints on verified human ground-truth boxes (`HumanGTHBBDataset`) from `quad_train.sqlite`. Combines scale-invariant CIoU (`box_weight=2.0`) with Smooth-L1 boundary distance regression (`ltrb_weight=0.5`) and continuous QFL. Uses `weak_negative_weight=0.15` to protect open-world recall for downstream SigLIP while cutting boundary regression error in half and eliminating SAM texture hallucinations. Run script: `scripts/finetune_student_gt.py`.
+  - **Unified Pipeline Automation**: `scripts/run_two_stage_pipeline.sh` orchestrates Stage 1, Stage 2, evaluation, and dashboard generation in a single command.
 - Decoders & Suppression:
-  - `InferenceDecoder` (HBB) and `QuadInferenceDecoder` (Quads) support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$), `"part_aware_soft"`, and `"nms_free"`.
+  - `InferenceDecoder` (HBB) and `QuadInferenceDecoder` (Quads) support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$, max duplicate IoU threshold `part_max_iou=0.65`), `"part_aware_soft"`, and `"nms_free"`.
   - Centerness scoring parameter `centerness_alpha` ($\in [0.0, 1.0]$) blends scores as $\text{score} = \sigma(\text{obj}) \times \sigma(\text{center})^\alpha$. For HBB, $\alpha=1.0$ is the authoritative baseline, protecting the fixed 100-proposal budget for large and medium objects against dense P2 small-proposal crowding. For Quads, centerness is decoupled ($\alpha = 0.0$) to avoid aspect-ratio distortion penalties.
   - Stage 2 Run B v3 (Quad Recipe 2 with Topological Container Suppression + Scale-Gated TAL & Active GWD on 10,000 images) achieved **53.51% Recall@100@50** (+5.24% gain over Run B v2), **23.94% AR@100**, **74.82% Large Object Recall** (up from 55.04%), **54.01% Fisheye Recall**, and **36.35%** zero-latency NMS-free recall. When wrapped to HBB, it achieves **39.58% Recall@100@50** and **80.00% Large Object Recall**.
   - Stage 2 Run C v3 (HBB Recipe 2 with Container Suppression + Scale-Gated TAL on 10,000 images) achieved **44.54% Recall@100@50**, **23.64% Strict Recall@75**, **52.16% Large Object Recall**, and **11.42% Rec@10@50**, with **zero road false positives**, cleanly resolving the macro-container swallow problem.
-  - Qualitative visualization defaults to **Part-Aware NMS (IoU threshold 0.45)** to suppress adjacent anchor cluster duplicates from 1-to-1 ignore mask halos.
+  - Qualitative visualization defaults to **Part-Aware NMS (IoU threshold 0.45, duplicate limit 0.65)** to suppress adjacent anchor cluster duplicates from 1-to-1 ignore mask halos.
 - Pseudo-Label Storage & DataLoader:
   - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`.
+  - Authoritative human GT dataset: `HumanGTHBBDataset` in `student_detector/human_gt_data.py`.
 
 # Active Design Patterns & Decisions
 
+- **Two-Stage Training Paradigm (OWLv2 Analogy)**: Stage 1 trains broad visual representation on diverse SAM pseudo-labels; Stage 2 sharpens bounding envelopes and calibrates confidence scores exclusively on human ground truth.
+- **Envelope Tightening Loss**: Joint Smooth-$\mathcal{L}_1$ (`ltrb_weight=0.5`) + CIoU (`box_weight=2.0`) directly penalizes loose boundaries, halving coordinate loss ($0.3557 \to 0.1757$).
 - P2-stride feature pyramid ($s=4$) enables direct representation and localization of small objects down to 4–16 px across all pyramid levels.
 - Hybrid supervision combines confirmed human GT (6,452 thing instances) with SAM novel discoveries (25,728 instances with stability >= 0.88).
 - Suppressed internal subparts (28,354 instances) and non-object stuff (`road_surface`) are assigned to ignore regions rather than hard negatives.
@@ -40,9 +47,10 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 
 # Local Constraints & Gotchas
 
+- **Letterbox Invariants & Level Masks**: Images are transformed into a square $384 \times 384$ canvas with aspect-preserving letterboxing (`sample.transform = (scale, off_x, off_y)`). When running inference, `level_masks` sampled from `sample.valid_mask` via `point_validity_from_pixel_mask` MUST be passed to `InferenceDecoder` so padding cells are masked to $-\infty$. When projecting boxes back to original image space, coordinates must be un-letterboxed: `boxes[:, 0::2] = ((boxes[:, 0::2] - off_x) / scale).clamp(0, orig_w)` and `boxes[:, 1::2] = ((boxes[:, 1::2] - off_y) / scale).clamp(0, orig_h)`. Never multiply letterboxed coordinates by crude aspect ratios.
 - Stride-8 (P3) models drop small objects (<16px); student models must maintain P2 (stride 4).
 - PyTorch CUDA eigensolvers (`linalg.eigh`) fail to converge when symmetric 2x2 covariance matrices have repeated eigenvalues without jitter.
 - Suppressed SAM subparts must remain in ignore masks; treating them as background penalties penalizes detector predictions of whole objects.
 - `sample.original_size` is `(height, width)`. When calculating scale and unletterboxing, unpack as `orig_h, orig_w`.
 - Image files are read from dataset storage at `/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/`.
-- Training pipeline: `scripts/train_student_pilot.py` and visualizer `scripts/visualize_student_validation.py`.
+- Training pipelines: `scripts/train_student_pilot.py` (Stage 1), `scripts/finetune_student_gt.py` (Stage 2), and visualizers `scripts/visualize_student_validation.py` & `scripts/visualize_finetune_comparison.py`.
