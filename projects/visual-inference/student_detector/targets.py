@@ -127,10 +127,14 @@ class TargetBuilder:
         assigner: ATSSAssigner | TaskAlignedAssigner,
         *,
         background_loss_weights: Mapping[str, float] | None = None,
+        default_background_weight: float = 0.0,
         hard_negative_focus_weight: float = 1.0,
     ) -> None:
         self.assigner = assigner
         self.background_loss_weights = dict(background_loss_weights or {})
+        if not (0.0 <= default_background_weight <= 1.0):
+            raise ValueError("default background weight must be in [0, 1]")
+        self.default_background_weight = default_background_weight
         if any(
             weight < 0 or weight > 1 for weight in self.background_loss_weights.values()
         ):
@@ -252,7 +256,9 @@ class TargetBuilder:
             hard_negative_focus = trusted_background & focus_points
             weak_background = available & ~trusted_points
             ignored = valid_flat & ignored_points & ~positive
-            weak_weight = self.background_loss_weights.get(sample.source_dataset, 0.0)
+            weak_weight = self.background_loss_weights.get(
+                sample.source_dataset, self.default_background_weight
+            )
             weights = torch.zeros_like(valid_flat, dtype=torch.float32)
             weights[trusted_background] = 1.0
             weights[hard_negative_focus] = self.hard_negative_focus_weight

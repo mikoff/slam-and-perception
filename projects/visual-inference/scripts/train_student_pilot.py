@@ -134,15 +134,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--score-mode",
         type=str,
-        default="objectness_x_centerness",
+        default="objectness",
         choices=["objectness", "objectness_x_centerness"],
-        help="Scoring mode for HBB decoder (default: objectness_x_centerness).",
+        help="Scoring mode for HBB decoder (default: objectness).",
     )
     parser.add_argument(
         "--centerness-alpha",
         type=float,
-        default=1.0,
-        help="Exponent for centerness scoring in HBB decoder (default: 1.0).",
+        default=0.0,
+        help="Exponent for centerness scoring in HBB decoder (default: 0.0).",
     )
     parser.add_argument(
         "--nms-mode",
@@ -191,11 +191,12 @@ def train() -> None:
 
     # 1. Datasets and Loaders
     val_pseudo_labels = args.val_pseudo_labels or args.pseudo_labels
+    train_split = "all" if args.val_pseudo_labels else "train"
     if args.geometry == "hbb":
         train_dataset = SAMStudentHBBDataset(
             pseudo_labels_path=args.pseudo_labels,
             image_root=args.image_root,
-            split="train",
+            split=train_split,
             val_ratio=0.20,
             input_size=args.input_size,
             min_stability=args.min_stability,
@@ -213,7 +214,7 @@ def train() -> None:
         train_dataset = SAMStudentDataset(
             pseudo_labels_path=args.pseudo_labels,
             image_root=args.image_root,
-            split="train",
+            split=train_split,
             val_ratio=0.20,
             input_size=args.input_size,
             min_stability=args.min_stability,
@@ -272,15 +273,20 @@ def train() -> None:
                 top_k=4,
                 assignment_mode="one_to_many",
             )
-            target_builder = TargetBuilder(assigner)
-            target_builder_aux = TargetBuilder(assigner_aux)
+            target_builder = TargetBuilder(
+                assigner, default_background_weight=0.20
+            )
+            target_builder_aux = TargetBuilder(
+                assigner_aux, default_background_weight=0.20
+            )
             # Evaluate primary head with selected NMS mode
             decoder = InferenceDecoder(
                 strides=strides,
                 top_k=1000,
-                nms_iou_threshold=0.50,
+                nms_iou_threshold=0.45,
                 max_detections=100,
-                score_mode="objectness",
+                score_mode=args.score_mode,
+                centerness_alpha=args.centerness_alpha,
                 nms_mode=args.nms_mode,
                 part_scale_ratio=0.4,
             )
@@ -288,9 +294,10 @@ def train() -> None:
                 InferenceDecoder(
                     strides=strides,
                     top_k=1000,
-                    nms_iou_threshold=0.50,
+                    nms_iou_threshold=0.45,
                     max_detections=100,
-                    score_mode="objectness",
+                    score_mode=args.score_mode,
+                    centerness_alpha=args.centerness_alpha,
                     nms_mode="nms_free",
                 )
                 if args.nms_mode != "nms_free"
@@ -304,15 +311,19 @@ def train() -> None:
                 top_k=4,
                 center_radius=1.0,
             )
-            target_builder = TargetBuilder(assigner)
+            target_builder = TargetBuilder(
+                assigner, default_background_weight=0.20
+            )
             target_builder_aux = None
             decoder = InferenceDecoder(
                 strides=strides,
                 top_k=1000,
-                nms_iou_threshold=0.50,
+                nms_iou_threshold=0.45,
                 max_detections=100,
                 score_mode=args.score_mode,
                 centerness_alpha=args.centerness_alpha,
+                nms_mode=args.nms_mode,
+                part_scale_ratio=0.4,
             )
             decoder_free = None
 
@@ -322,6 +333,7 @@ def train() -> None:
             box_loss="ciou",
             box_weight=2.0,
             centerness_weight=1.0,
+            objectness_normalization="num_positives",
         )
     else:
         is_recipe2 = args.recipe == "recipe2"
@@ -363,7 +375,7 @@ def train() -> None:
             decoder = QuadInferenceDecoder(
                 strides=strides,
                 pre_nms_top_k=1000,
-                nms_iou_threshold=0.50,
+                nms_iou_threshold=0.45,
                 max_proposals=100,
                 centerness_alpha=0.0,
                 nms_mode=args.nms_mode,
@@ -373,7 +385,7 @@ def train() -> None:
                 QuadInferenceDecoder(
                     strides=strides,
                     pre_nms_top_k=1000,
-                    nms_iou_threshold=0.50,
+                    nms_iou_threshold=0.45,
                     max_proposals=100,
                     centerness_alpha=0.0,
                     nms_mode="nms_free",
@@ -403,7 +415,7 @@ def train() -> None:
             decoder = QuadInferenceDecoder(
                 strides=strides,
                 pre_nms_top_k=1000,
-                nms_iou_threshold=0.50,
+                nms_iou_threshold=0.45,
                 max_proposals=100,
                 centerness_alpha=0.0,
             )

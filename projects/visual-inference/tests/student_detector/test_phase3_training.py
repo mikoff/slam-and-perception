@@ -625,3 +625,22 @@ def test_mid_epoch_checkpoint_resumes_the_same_epoch(tmp_path):
     assert checkpoint["epoch"] == 0
     assert checkpoint["batch_in_epoch"] == 2
     assert checkpoint["epoch_complete"] is False
+
+
+def test_num_positives_normalization_produces_finite_loss_and_gradients() -> None:
+    model = StudentDetector(backbone=StubBackbone()).train()
+    samples = [_sample(), _sample(dense=False)]
+    images = torch.stack([sample.image for sample in samples])
+    output = model(images)
+    shapes = tuple((tensor.shape[-2], tensor.shape[-1]) for tensor in output.objectness)
+    targets = TargetBuilder(ATSSAssigner(), default_background_weight=0.20)(
+        samples, shapes, device=torch.device("cpu")
+    )
+    losses = ProposalLoss(objectness_normalization="num_positives")(output, targets)
+    assert torch.isfinite(losses.total)
+    assert torch.isfinite(losses.objectness)
+    assert losses.objectness > 0
+    losses.total.backward()
+    gradients = [p.grad for p in model.parameters() if p.requires_grad and p.grad is not None]
+    assert all(torch.isfinite(g).all() for g in gradients)
+

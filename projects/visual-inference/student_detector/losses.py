@@ -156,7 +156,17 @@ class ProposalLoss(nn.Module):
         box_weighting: str = "uniform",
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
+        objectness_normalization: str = "per_state_mean",
     ) -> None:
+        """Build the loss.
+
+        @param objectness_normalization ``per_state_mean`` averages positives,
+            trusted background and weak background separately (legacy: each
+            background anchor is diluted by the size of its group).
+            ``num_positives`` sums every weighted anchor and divides by the
+            positive count of the image (GFL/QFL convention), so each
+            background anchor keeps its configured weight.
+        """
         super().__init__()
         if objectness_loss not in {"focal", "quality_focal"}:
             raise ValueError("objectness_loss must be 'focal' or 'quality_focal'")
@@ -166,6 +176,11 @@ class ProposalLoss(nn.Module):
             raise ValueError("box_weighting must be 'uniform' or 'centerness'")
         if ltrb_weight < 0:
             raise ValueError("ltrb_weight must be non-negative")
+        if objectness_normalization not in {"per_state_mean", "num_positives"}:
+            raise ValueError(
+                "objectness_normalization must be 'per_state_mean' or 'num_positives'"
+            )
+        self.objectness_normalization = objectness_normalization
         self.strides = strides
         self.objectness_weight = objectness_weight
         self.box_weight = box_weight
@@ -308,11 +323,15 @@ class ProposalLoss(nn.Module):
             )
             weighted_mask = targets.objectness_weights * mask_float
             weight_sums = weighted_mask.sum(dim=1).detach()
-            # Preserve weak-region coefficients: normalize by point count, not
-            # by their weighted count. Ignore has zero effective weight.
-            effective = (classification_losses * weighted_mask).sum(
-                dim=1
-            ) / counts.clamp(min=1)
+            if self.objectness_normalization == "num_positives":
+                norm = positive_float.sum(dim=1).clamp(min=1.0).to(dtype=detached_quality.dtype)
+                effective = (classification_losses * weighted_mask).sum(dim=1) / norm
+            else:
+                # Preserve weak-region coefficients: normalize by point count, not
+                # by their weighted count. Ignore has zero effective weight.
+                effective = (classification_losses * weighted_mask).sum(
+                    dim=1
+                ) / counts.clamp(min=1)
             state_raw[state] = raw.detach()
             state_effective[state] = effective
             state_counts[state] = counts

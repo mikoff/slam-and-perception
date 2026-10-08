@@ -115,7 +115,15 @@ def _load_pseudo_label_records(
             cols = [
                 c[1] for c in conn.execute("PRAGMA table_info(images)").fetchall()
             ]
-            if "split" in cols and split in ("train", "val"):
+            has_explicit_val = False
+            if "split" in cols:
+                has_explicit_val = bool(
+                    conn.execute(
+                        "SELECT 1 FROM images WHERE split = 'val' LIMIT 1"
+                    ).fetchone()
+                )
+
+            if "split" in cols and has_explicit_val and split in ("train", "val"):
                 rows = conn.execute(
                     """
                     SELECT image_id, file_name, width, height, source_dataset
@@ -136,7 +144,7 @@ def _load_pseudo_label_records(
                     for r in rows
                 ]
                 indices = list(range(len(images)))
-            elif split == "all" or "split" not in cols:
+            elif split == "all" or not has_explicit_val:
                 rows = conn.execute(
                     """
                     SELECT image_id, file_name, width, height, source_dataset
@@ -279,19 +287,22 @@ def suppress_container_boxes(
     img_width: float,
     img_height: float,
     containment_threshold: float = 0.75,
+    min_macro_area_ratio: float = 0.20,
 ) -> tuple[list[list[float]], list[list[float]]]:
     """Downgrade discovered proposals that enclose other objects to ignore_boxes.
 
     A discovered proposal is topologically a scene container (context/road/sky)
-    rather than an atomic object instance if:
+    rather than an atomic object instance if its area is macroscopic (>= min_macro_area_ratio)
+    and:
     1. It encloses >= 2 other objects by at least containment_threshold (default 0.75), OR
-    2. It encloses 1 other object, while its area is massive (> 15% image area and > 8x child area).
+    2. It encloses 1 other object, while its area is > 6x child area.
 
     /// @param positive_boxes List of candidate positive bounding boxes [x1, y1, x2, y2].
     /// @param is_discovered Boolean list indicating whether each box is a SAM discovery.
     /// @param img_width Width of the original image.
     /// @param img_height Height of the original image.
     /// @param containment_threshold Minimum fraction of child box area inside candidate.
+    /// @param min_macro_area_ratio Minimum image area fraction for a container.
     /// @return Tuple of (filtered_positive_boxes, suppressed_container_boxes).
     """
     if len(positive_boxes) < 2 or not any(is_discovered):
@@ -325,14 +336,14 @@ def suppress_container_boxes(
 
         contained_children = torch.where(contained[i])[0]
         is_container = False
-        if len(contained_children) >= 2:
-            is_container = True
-        elif len(contained_children) == 1:
-            child_idx = int(contained_children[0].item())
-            if (areas[i] / img_area > 0.15) and (
-                areas[i] / max(float(areas[child_idx].item()), 1.0) > 8.0
-            ):
+        area_ratio = float(areas[i].item()) / img_area
+        if area_ratio >= min_macro_area_ratio:
+            if len(contained_children) >= 2:
                 is_container = True
+            elif len(contained_children) == 1:
+                child_idx = int(contained_children[0].item())
+                if areas[i] / max(float(areas[child_idx].item()), 1.0) > 6.0:
+                    is_container = True
 
         if is_container:
             containers.append(box)
@@ -349,6 +360,7 @@ def suppress_container_quads(
     img_width: float,
     img_height: float,
     containment_threshold: float = 0.75,
+    min_macro_area_ratio: float = 0.20,
 ) -> tuple[list[list[list[float]]], list[float], list[list[list[float]]]]:
     """Downgrade discovered quads that enclose other objects to ignore_quads.
 
@@ -358,6 +370,7 @@ def suppress_container_quads(
     /// @param img_width Width of the original image.
     /// @param img_height Height of the original image.
     /// @param containment_threshold Minimum fraction of child quad area inside candidate.
+    /// @param min_macro_area_ratio Minimum image area fraction for a container.
     /// @return Tuple of (filtered_positive_quads, filtered_stabilities, suppressed_container_quads).
     """
     if len(positive_quads) < 2 or not any(is_discovered):
@@ -404,14 +417,14 @@ def suppress_container_quads(
 
         contained_children = torch.where(contained[i])[0]
         is_container = False
-        if len(contained_children) >= 2:
-            is_container = True
-        elif len(contained_children) == 1:
-            child_idx = int(contained_children[0].item())
-            if (areas[i] / img_area > 0.15) and (
-                areas[i] / max(float(areas[child_idx].item()), 1.0) > 8.0
-            ):
+        area_ratio = float(areas[i].item()) / img_area
+        if area_ratio >= min_macro_area_ratio:
+            if len(contained_children) >= 2:
                 is_container = True
+            elif len(contained_children) == 1:
+                child_idx = int(contained_children[0].item())
+                if areas[i] / max(float(areas[child_idx].item()), 1.0) > 6.0:
+                    is_container = True
 
         if is_container:
             container_quads.append(q)
@@ -435,6 +448,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         input_size: int = 384,
         min_stability: float = 0.80,
         augmentation: AugmentationConfig | None = None,
+        regular_min_side: float = 8.0,
         seed: int = 42,
     ) -> None:
         """Initialize the SAM pseudo-label dataset.
@@ -447,6 +461,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         @param input_size Input image resolution for the detector (e.g. 384).
         @param min_stability Minimum SAM mask stability score to accept as positive novel.
         @param augmentation Data augmentation configuration (used when split='train').
+        @param regular_min_side Minimum side length in pixels to accept regular quad.
         @param seed Runtime random seed for epoch-dependent augmentations.
         """
         super().__init__()
@@ -487,7 +502,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
             input_size=input_size,
             augmentation=augmentation,
             training=(split == "train"),
-            regular_min_side=16.0,
+            regular_min_side=regular_min_side,
         )
 
     def __len__(self) -> int:
@@ -595,8 +610,8 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         input_size: int = 384,
         min_stability: float = 0.80,
         augmentation: AugmentationConfig | None = None,
-        tiny_area: float = 16.0,
-        tiny_min_side: float = 4.0,
+        tiny_area: float = 4.0,
+        tiny_min_side: float = 2.0,
         seed: int = 42,
     ) -> None:
         """Initialize the SAM pseudo-label HBB dataset.

@@ -491,7 +491,9 @@ def polygon_nms(
         pair_ratios = scale_ratios[idx, rem_tensor]
 
         if nms_mode == "part_aware":
-            to_suppress = (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
+            to_suppress = (pair_ious > 0.65) | (
+                (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
+            )
             suppressed[rem_tensor[to_suppress]] = True
         elif nms_mode == "soft":
             decay = torch.exp(-(pair_ious**2) / soft_sigma)
@@ -500,7 +502,7 @@ def polygon_nms(
             suppressed[rem_tensor[dropped]] = True
         elif nms_mode == "part_aware_soft":
             decay = torch.where(
-                pair_ratios <= part_scale_ratio,
+                (pair_ratios <= part_scale_ratio) & (pair_ious <= 0.65),
                 torch.ones_like(pair_ious),
                 torch.exp(-(pair_ious**2) / soft_sigma),
             )

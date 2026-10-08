@@ -151,3 +151,27 @@ def test_topological_container_suppression() -> None:
     assert [0.0, 0.0, 384.0, 100.0] in filtered_boxes
 
 
+def test_car_with_subparts_not_suppressed_as_container() -> None:
+    from student_detector.sam_student_data import suppress_container_boxes
+
+    # A discovered car containing 2 discovered wheels (area fraction 3.4% of image)
+    # Car: [50, 50, 150, 100] (area 5000)
+    # Wheel 1: [60, 80, 80, 100] (area 400)
+    # Wheel 2: [120, 80, 140, 100] (area 400)
+    boxes = [
+        [50.0, 50.0, 150.0, 100.0],
+        [60.0, 80.0, 80.0, 100.0],
+        [120.0, 80.0, 140.0, 100.0],
+    ]
+    is_disc = [True, True, True]
+
+    filtered_boxes, containers = suppress_container_boxes(
+        boxes, is_disc, img_width=384.0, img_height=384.0
+    )
+
+    # Car must NOT be suppressed as a container because it is an atomic object (< 20% image area)
+    assert len(containers) == 0
+    assert len(filtered_boxes) == 3
+    assert [50.0, 50.0, 150.0, 100.0] in filtered_boxes
+
+

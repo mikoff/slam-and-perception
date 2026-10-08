@@ -107,12 +107,10 @@ class LossConfig:
 @dataclass(frozen=True)
 class InferenceConfig:
     pre_nms_top_k: int = 300
-    # Proposal recall is the primary objective; leave duplicate suppression
-    # conservative and let the fixed 100-proposal cap control output size.
-    nms_iou_threshold: float = 0.9
+    nms_iou_threshold: float = 0.45
     max_proposals: int = 100
     score_mode: str = "objectness"
-    centerness_alpha: float = 1.0
+    centerness_alpha: float = 0.0
 
 
 @dataclass(frozen=True)
