@@ -12,7 +12,8 @@ import torch
 from torch.utils.data import DataLoader
 
 from student_detector.assigner import ATSSAssigner
-from student_detector.decoder import InferenceDecoder
+from student_detector.decoder import Detection, InferenceDecoder
+from student_detector.evaluation import EvaluationImage, evaluate_proposals
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.quad_assigner import QuadAssigner
 from student_detector.quad_decoder import QuadInferenceDecoder
@@ -53,6 +54,42 @@ def parse_args() -> argparse.Namespace:
         help="Execution device.",
     )
     return parser.parse_args()
+
+
+@torch.no_grad()
+def validate_quad_wrapped(
+    model: QuadProposalDetector,
+    loader: DataLoader,
+    decoder: QuadInferenceDecoder,
+    device: torch.device,
+) -> dict[str, float]:
+    model.eval()
+    evaluated: list[EvaluationImage] = []
+    for images, samples in loader:
+        images = images.to(device, non_blocking=device.type == "cuda")
+        output = model(images)
+        detections = decoder(output, (images.shape[-2], images.shape[-1]))
+        for sample, det in zip(samples, detections, strict=True):
+            if det.quads.numel() > 0:
+                x1 = det.quads[:, :, 0].min(dim=1).values
+                y1 = det.quads[:, :, 1].min(dim=1).values
+                x2 = det.quads[:, :, 0].max(dim=1).values
+                y2 = det.quads[:, :, 1].max(dim=1).values
+                boxes = torch.stack([x1, y1, x2, y2], dim=-1)
+            else:
+                boxes = torch.empty((0, 4), device=images.device)
+            evaluated.append(
+                EvaluationImage(
+                    sample.image_id,
+                    sample.domain,
+                    sample.camera_type,
+                    (images.shape[-2], images.shape[-1]),
+                    sample.boxes.cpu(),
+                    sample.ignore_boxes.cpu(),
+                    Detection(boxes.cpu(), det.scores.cpu()),
+                )
+            )
+    return evaluate_proposals(evaluated)
 
 
 def main() -> None:
@@ -235,6 +272,69 @@ def main() -> None:
                 f"     Recall@100@0.50: {results[tag]['recall_100_50']}% | "
                 f"AR@100: {results[tag]['ar_100']}% | "
                 f"Small: {results[tag]['recall_small']}% | "
+                f"Fisheye: {results[tag]['recall_fisheye']}%"
+            )
+
+    # 3. Quad Models Wrapped to HBB (evaluated against HBB validation labels)
+    for name, path in quad_models.items():
+        if not path.exists():
+            continue
+        print(f"\nEvaluating Quad model WRAPPED to HBB: {name} ({path.name})...")
+        ckpt = torch.load(path, map_location=device)
+        strides = tuple(ckpt.get("strides", (4, 8, 16, 32)))
+        is_dual = ckpt.get("recipe") == "recipe2" or any(
+            k.startswith("aux_head") for k in ckpt["model_state_dict"].keys()
+        )
+        model = QuadProposalDetector(
+            pretrained_backbone=False,
+            neck_type="lite",
+            strides=strides,
+            fpn_channels=96,
+            dual_head=is_dual,
+        ).to(device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        model.eval()
+
+        wrapped_configs = [
+            ("part_aware", "part_aware", 0.0),
+        ]
+        if is_dual:
+            wrapped_configs.append(("nms_free", "nms_free", 0.0))
+
+        for cfg_name, mode, alpha in wrapped_configs:
+            print(f"  -> Testing {name} wrapped with mode='{mode}'...")
+            decoder = QuadInferenceDecoder(
+                strides=strides,
+                pre_nms_top_k=1000,
+                nms_iou_threshold=0.50,
+                max_proposals=100,
+                centerness_alpha=alpha,
+                nms_mode=mode,
+                soft_sigma=0.5,
+                part_scale_ratio=0.4,
+            )
+            m = validate_quad_wrapped(model, val_loader_hbb, decoder, device)
+            tag = f"{name}_wrapped_to_hbb_{cfg_name}"
+            results[tag] = {
+                "model": f"{name}_wrapped_to_hbb",
+                "config": cfg_name,
+                "nms_mode": mode,
+                "recall_100_50": round(m.get("recall/100@50", 0.0) * 100, 2),
+                "recall_100_75": round(m.get("recall/100@75", 0.0) * 100, 2),
+                "recall_10_50": round(m.get("recall/10@50", 0.0) * 100, 2),
+                "ap_50": round(m.get("ap/50", 0.0) * 100, 2),
+                "recall_small": round(m.get("recall/size_small/100@50", 0.0) * 100, 2),
+                "recall_medium": round(m.get("recall/size_medium/100@50", 0.0) * 100, 2),
+                "recall_large": round(m.get("recall/size_large/100@50", 0.0) * 100, 2),
+                "recall_general": round(m.get("recall/general/100@50", 0.0) * 100, 2),
+                "recall_automotive": round(m.get("recall/automotive/100@50", 0.0) * 100, 2),
+                "recall_fisheye": round(m.get("recall/fisheye/100@50", 0.0) * 100, 2),
+            }
+            print(
+                f"     Recall@100@50: {results[tag]['recall_100_50']}% | "
+                f"AP@50: {results[tag]['ap_50']}% | "
+                f"Strict@75: {results[tag]['recall_100_75']}% | "
+                f"Large: {results[tag]['recall_large']}% | "
                 f"Fisheye: {results[tag]['recall_fisheye']}%"
             )
 

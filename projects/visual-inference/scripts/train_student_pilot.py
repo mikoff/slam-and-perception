@@ -501,10 +501,16 @@ def train() -> None:
                             (t.shape[-2], t.shape[-1]) for t in output_primary.objectness
                         )
                         targets_pri = target_builder(
-                            samples, feature_shapes, device=device
+                            samples,
+                            feature_shapes,
+                            device=device,
+                            pred_output=output_primary,
                         )
                         targets_aux = target_builder_aux(
-                            samples, feature_shapes, device=device
+                            samples,
+                            feature_shapes,
+                            device=device,
+                            pred_output=output_aux,
                         )
                         loss_pri = criterion(output_primary, targets_pri)
                         loss_aux = criterion(output_aux, targets_aux)
@@ -516,10 +522,16 @@ def train() -> None:
                             (t.shape[-2], t.shape[-1]) for t in output_primary.quality
                         )
                         targets_pri = target_builder(
-                            samples, feature_shapes, device=device
+                            samples,
+                            feature_shapes,
+                            device=device,
+                            pred_output=output_primary,
                         )
                         targets_aux = target_builder_aux(
-                            samples, feature_shapes, device=device
+                            samples,
+                            feature_shapes,
+                            device=device,
+                            pred_output=output_aux,
                         )
                         loss_pri = criterion(output_primary, targets_pri)
                         loss_aux = criterion(output_aux, targets_aux)
@@ -532,7 +544,12 @@ def train() -> None:
                         feature_shapes = tuple(
                             (t.shape[-2], t.shape[-1]) for t in output.objectness
                         )
-                        targets = target_builder(samples, feature_shapes, device=device)
+                        targets = target_builder(
+                            samples,
+                            feature_shapes,
+                            device=device,
+                            pred_output=output,
+                        )
                         loss_output = criterion(output, targets)
                         loss_total = loss_output.total
                         sub1 = loss_output.objectness.item()
@@ -541,7 +558,12 @@ def train() -> None:
                         feature_shapes = tuple(
                             (t.shape[-2], t.shape[-1]) for t in output.quality
                         )
-                        targets = target_builder(samples, feature_shapes, device=device)
+                        targets = target_builder(
+                            samples,
+                            feature_shapes,
+                            device=device,
+                            pred_output=output,
+                        )
                         loss_output = criterion(output, targets)
                         loss_total = loss_output.total
                         sub1 = loss_output.quality.item()

@@ -77,7 +77,19 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="auto",
         choices=["auto", "hard", "part_aware", "part_aware_soft", "nms_free"],
-        help="NMS mode ('auto' selects 'nms_free' for dual-head and 'part_aware' for single-head).",
+        help="NMS mode ('auto' selects 'part_aware').",
+    )
+    parser.add_argument(
+        "--nms-iou-threshold",
+        type=float,
+        default=0.45,
+        help="NMS IoU suppression threshold (default: 0.45).",
+    )
+    parser.add_argument(
+        "--part-scale-ratio",
+        type=float,
+        default=0.4,
+        help="Part-aware NMS scale ratio threshold (default: 0.4).",
     )
     parser.add_argument(
         "--score-mode",
@@ -97,6 +109,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path to evaluation metrics JSON (overrides summary metrics).",
+    )
+    parser.add_argument(
+        "--wrap-to-bbox",
+        action="store_true",
+        help="For Quad models, wrap predicted oriented quads into horizontal bounding boxes.",
     )
     parser.add_argument(
         "--device",
@@ -703,11 +720,7 @@ def main() -> None:
         k.startswith("aux_head") for k in checkpoint_data["model_state_dict"].keys()
     )
 
-    chosen_nms = (
-        ("nms_free" if is_dual else "part_aware")
-        if args.nms_mode == "auto"
-        else args.nms_mode
-    )
+    chosen_nms = "part_aware" if args.nms_mode == "auto" else args.nms_mode
 
     alpha = args.centerness_alpha
     if alpha is None:
@@ -724,12 +737,12 @@ def main() -> None:
         decoder = InferenceDecoder(
             strides=strides,
             top_k=1000,
-            nms_iou_threshold=0.50,
+            nms_iou_threshold=args.nms_iou_threshold,
             max_detections=100,
             score_mode=args.score_mode,
             centerness_alpha=alpha,
             nms_mode=chosen_nms,
-            part_scale_ratio=0.4,
+            part_scale_ratio=args.part_scale_ratio,
         )
     else:
         model = QuadProposalDetector(
@@ -742,11 +755,11 @@ def main() -> None:
         decoder = QuadInferenceDecoder(
             strides=strides,
             pre_nms_top_k=1000,
-            nms_iou_threshold=0.50,
+            nms_iou_threshold=args.nms_iou_threshold,
             max_proposals=100,
             centerness_alpha=alpha,
             nms_mode=chosen_nms,
-            part_scale_ratio=0.4,
+            part_scale_ratio=args.part_scale_ratio,
         )
 
     model.load_state_dict(checkpoint_data["model_state_dict"])
@@ -820,21 +833,36 @@ def main() -> None:
                         q = quads[q_idx].clone()
                         q[:, 0] = ((q[:, 0] - off_x) / scale).clamp(0, orig_w)
                         q[:, 1] = ((q[:, 1] - off_y) / scale).clamp(0, orig_h)
-                        pred_items.append(
-                            {
-                                "quad": [
-                                    [round(float(pt[0]), 1), round(float(pt[1]), 1)]
-                                    for pt in q
-                                ],
-                                "score": round(float(scores_list[q_idx]), 3),
-                            }
-                        )
+                        if args.wrap_to_bbox:
+                            pred_items.append(
+                                {
+                                    "box": [
+                                        round(float(q[:, 0].min()), 1),
+                                        round(float(q[:, 1].min()), 1),
+                                        round(float(q[:, 0].max()), 1),
+                                        round(float(q[:, 1].max()), 1),
+                                    ],
+                                    "score": round(float(scores_list[q_idx]), 3),
+                                }
+                            )
+                        else:
+                            pred_items.append(
+                                {
+                                    "quad": [
+                                        [round(float(pt[0]), 1), round(float(pt[1]), 1)]
+                                        for pt in q
+                                    ],
+                                    "score": round(float(scores_list[q_idx]), 3),
+                                }
+                            )
 
                 # Extract GT and SAM novel boxes/quads
                 gt_items = []
                 novel_items = []
                 supp_items = []
-                geom_key = "bbox" if args.geometry == "hbb" else "quad"
+                geom_key = (
+                    "bbox" if (args.geometry == "hbb" or args.wrap_to_bbox) else "quad"
+                )
                 for ann in rec.get("annotations", []):
                     item = ann.get(geom_key)
                     if not item:
@@ -866,7 +894,8 @@ def main() -> None:
                 )
 
     print(f"Processed {len(payload)} validation images for dashboard.")
-    generate_html(payload, summary, args.output_html, geometry=args.geometry)
+    active_geom = "hbb" if (args.geometry == "hbb" or args.wrap_to_bbox) else "quad"
+    generate_html(payload, summary, args.output_html, geometry=active_geom)
 
 
 if __name__ == "__main__":

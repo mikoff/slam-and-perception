@@ -115,3 +115,39 @@ def test_sam_student_hbb_dataset_collate_and_target_builder() -> None:
     assert targets.box_distances.shape[-1] == 4
     assert len(targets.valid_point_masks) == 4
 
+
+def test_topological_container_suppression() -> None:
+    from student_detector.sam_student_data import (
+        suppress_container_boxes,
+        suppress_container_quads,
+    )
+
+    # 2 small cars inside 1 giant road box
+    # Car 1: [50, 200, 100, 250]
+    # Car 2: [150, 200, 200, 250]
+    # Giant Road: [0, 150, 384, 300] (encloses Car 1 and Car 2)
+    # Background Sky: [0, 0, 384, 100] (doesn't enclose cars)
+    boxes = [
+        [50.0, 200.0, 100.0, 250.0],
+        [150.0, 200.0, 200.0, 250.0],
+        [0.0, 150.0, 384.0, 300.0],
+        [0.0, 0.0, 384.0, 100.0],
+    ]
+    # Cars are human GT (False), Road & Sky are discovered (True)
+    is_disc = [False, False, True, True]
+
+    filtered_boxes, containers = suppress_container_boxes(
+        boxes, is_disc, img_width=384.0, img_height=384.0
+    )
+
+    # The giant road should be identified as a container and suppressed
+    assert len(containers) == 1
+    assert containers[0] == [0.0, 150.0, 384.0, 300.0]
+
+    # The 2 cars and the non-enclosing sky remain
+    assert len(filtered_boxes) == 3
+    assert [50.0, 200.0, 100.0, 250.0] in filtered_boxes
+    assert [150.0, 200.0, 200.0, 250.0] in filtered_boxes
+    assert [0.0, 0.0, 384.0, 100.0] in filtered_boxes
+
+

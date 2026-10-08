@@ -11,6 +11,8 @@ from torch import Tensor
 from .assigner import ATSSAssigner
 from .data import ProposalSample
 from .geometry import make_grid_points
+from .head import DetectorOutput
+from .task_aligned_assigner import TaskAlignedAssigner
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ class TargetBuilder:
 
     def __init__(
         self,
-        assigner: ATSSAssigner,
+        assigner: ATSSAssigner | TaskAlignedAssigner,
         *,
         background_loss_weights: Mapping[str, float] | None = None,
         hard_negative_focus_weight: float = 1.0,
@@ -147,6 +149,7 @@ class TargetBuilder:
         feature_shapes: Sequence[tuple[int, int]],
         *,
         device: torch.device,
+        pred_output: DetectorOutput | None = None,
     ) -> TrainingTargets:
         cache_key = (tuple(feature_shapes), device)
         if cache_key not in self._grid_cache:
@@ -157,6 +160,15 @@ class TargetBuilder:
                 dtype=torch.float32,
             )
         points, level_slices = self._grid_cache[cache_key]
+        pred_scores_b: Tensor | None = None
+        pred_distances_b: Tensor | None = None
+        if pred_output is not None:
+            from .losses import flatten_detector_output
+
+            obj_flat, dist_flat, _ = flatten_detector_output(pred_output)
+            pred_scores_b = obj_flat.detach()
+            pred_distances_b = dist_flat.detach()
+
         objectness = []
         objectness_masks = []
         objectness_weights = []
@@ -175,7 +187,7 @@ class TargetBuilder:
             len(feature_shapes), dtype=torch.long, device=device
         )
 
-        for sample in samples:
+        for i, sample in enumerate(samples):
             boxes = sample.boxes.to(device=device)
             ignore_boxes = sample.ignore_boxes.to(device=device)
             valid_flat, valid_levels = point_validity_from_pixel_mask(
@@ -185,12 +197,24 @@ class TargetBuilder:
                 points=points,
                 level_slices=level_slices,
             )
-            assignment = self.assigner.assign(
-                boxes,
-                feature_shapes,
-                (sample.image.shape[-2], sample.image.shape[-1]),
-                valid_flat,
-            )
+            scores_i = pred_scores_b[i] if pred_scores_b is not None else None
+            dists_i = pred_distances_b[i] if pred_distances_b is not None else None
+            if isinstance(self.assigner, TaskAlignedAssigner):
+                assignment = self.assigner.assign(
+                    boxes,
+                    feature_shapes,
+                    (sample.image.shape[-2], sample.image.shape[-1]),
+                    valid_flat,
+                    pred_scores=scores_i,
+                    pred_distances=dists_i,
+                )
+            else:
+                assignment = self.assigner.assign(
+                    boxes,
+                    feature_shapes,
+                    (sample.image.shape[-2], sample.image.shape[-1]),
+                    valid_flat,
+                )
             # A geometrically valid but grid-unrepresentable GT is ignored rather
             # than forced into negative ReLU-constrained LTRB targets.
             if assignment.unrepresentable_gt_indices.numel():
@@ -202,6 +226,13 @@ class TargetBuilder:
                 )
             ignored_points = points_inside_boxes(points, ignore_boxes)
             positive = assignment.positive_mask
+            if getattr(self.assigner, "assignment_mode", None) == "one_to_one":
+                box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+                img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
+                valid_bound_boxes = boxes[box_areas < 0.25 * img_area]
+                ignored_points = ignored_points | (
+                    points_inside_boxes(points, valid_bound_boxes) & ~positive
+                )
             trusted_boxes = sample.trusted_background_boxes
             trusted_points = points_inside_boxes(
                 points,

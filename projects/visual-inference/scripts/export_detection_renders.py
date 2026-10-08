@@ -13,7 +13,6 @@ from student_detector.decoder import InferenceDecoder
 from student_detector.model import StudentDetector
 from student_detector.sam_student_data import (
     DEFAULT_IMAGE_ROOT,
-    DEFAULT_PSEUDO_LABELS_PATH,
     SAMStudentHBBDataset,
 )
 
@@ -94,7 +93,12 @@ def create_panel_image(
     for p in predictions:
         b = p["box"]
         if len(b) == 4 and isinstance(b[0], (int, float)):
-            item = [b[0] * scale, b[1] * scale + banner_h, b[2] * scale, b[3] * scale + banner_h]
+            item = [
+                b[0] * scale,
+                b[1] * scale + banner_h,
+                b[2] * scale,
+                b[3] * scale + banner_h,
+            ]
         else:
             item = [[pt[0] * scale, pt[1] * scale + banner_h] for pt in b]
         score = p["score"]
@@ -120,14 +124,24 @@ def create_panel_image(
     # Draw SAM novel first
     for b in sam_novel_boxes:
         if len(b) == 4 and isinstance(b[0], (int, float)):
-            item = [b[0] * scale, b[1] * scale + banner_h, b[2] * scale, b[3] * scale + banner_h]
+            item = [
+                b[0] * scale,
+                b[1] * scale + banner_h,
+                b[2] * scale,
+                b[3] * scale + banner_h,
+            ]
         else:
             item = [[pt[0] * scale, pt[1] * scale + banner_h] for pt in b]
         draw_labeled_item(d2, item, color=(52, 211, 153), width=2, font=font)
     # Draw Human GT on top
     for b in gt_boxes:
         if len(b) == 4 and isinstance(b[0], (int, float)):
-            item = [b[0] * scale, b[1] * scale + banner_h, b[2] * scale, b[3] * scale + banner_h]
+            item = [
+                b[0] * scale,
+                b[1] * scale + banner_h,
+                b[2] * scale,
+                b[3] * scale + banner_h,
+            ]
         else:
             item = [[pt[0] * scale, pt[1] * scale + banner_h] for pt in b]
         draw_labeled_item(d2, item, color=(251, 191, 36), width=3, font=font)
@@ -179,12 +193,14 @@ def main() -> None:
     parser.add_argument(
         "--nms-mode",
         type=str,
-        default="part_aware",
+        default="hard",
         choices=["part_aware", "nms_free", "hard"],
         help="NMS mode ('part_aware', 'nms_free', or 'hard').",
     )
+    parser.add_argument("--nms-iou-threshold", type=float, default=0.45)
     parser.add_argument("--samples-per-cohort", type=int, default=2)
-    parser.add_argument("--conf-threshold", type=float, default=0.20)
+    parser.add_argument("--conf-threshold", type=float, default=0.25)
+    parser.add_argument("--max-predictions", type=int, default=20)
     parser.add_argument(
         "--wrap-to-bbox",
         action="store_true",
@@ -214,7 +230,7 @@ def main() -> None:
         decoder = InferenceDecoder(
             strides=strides,
             top_k=1000,
-            nms_iou_threshold=0.50,
+            nms_iou_threshold=args.nms_iou_threshold,
             max_detections=100,
             score_mode="objectness_x_centerness",
             centerness_alpha=1.0,
@@ -242,7 +258,7 @@ def main() -> None:
         decoder = QuadInferenceDecoder(
             strides=strides,
             pre_nms_top_k=1000,
-            nms_iou_threshold=0.50,
+            nms_iou_threshold=args.nms_iou_threshold,
             max_proposals=100,
             centerness_alpha=0.0,
             nms_mode=args.nms_mode,
@@ -271,8 +287,12 @@ def main() -> None:
     font = None
     title_font = None
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11)
-        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13)
+        font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 11
+        )
+        title_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 13
+        )
     except Exception:
         font = ImageFont.load_default()
         title_font = ImageFont.load_default()
@@ -301,10 +321,17 @@ def main() -> None:
                 for b, s in zip(boxes, scores, strict=True):
                     score_val = float(s)
                     if score_val >= args.conf_threshold:
-                        predictions.append({
-                            "box": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
-                            "score": score_val,
-                        })
+                        predictions.append(
+                            {
+                                "box": [
+                                    float(b[0]),
+                                    float(b[1]),
+                                    float(b[2]),
+                                    float(b[3]),
+                                ],
+                                "score": score_val,
+                            }
+                        )
             else:
                 quads = det.quads.clone()
                 scores = det.scores.clone()
@@ -312,29 +339,39 @@ def main() -> None:
                     score_val = float(s)
                     if score_val >= args.conf_threshold:
                         q_unscaled = q.clone()
-                        q_unscaled[:, 0] = ((q_unscaled[:, 0] - off_x) / scale).clamp(0, orig_w)
-                        q_unscaled[:, 1] = ((q_unscaled[:, 1] - off_y) / scale).clamp(0, orig_h)
+                        q_unscaled[:, 0] = ((q_unscaled[:, 0] - off_x) / scale).clamp(
+                            0, orig_w
+                        )
+                        q_unscaled[:, 1] = ((q_unscaled[:, 1] - off_y) / scale).clamp(
+                            0, orig_h
+                        )
                         if args.wrap_to_bbox:
                             x1 = float(q_unscaled[:, 0].min())
                             y1 = float(q_unscaled[:, 1].min())
                             x2 = float(q_unscaled[:, 0].max())
                             y2 = float(q_unscaled[:, 1].max())
-                            predictions.append({
-                                "box": [x1, y1, x2, y2],
-                                "score": score_val,
-                            })
+                            predictions.append(
+                                {
+                                    "box": [x1, y1, x2, y2],
+                                    "score": score_val,
+                                }
+                            )
                         else:
-                            predictions.append({
-                                "box": q_unscaled.tolist(),
-                                "score": score_val,
-                            })
+                            predictions.append(
+                                {
+                                    "box": q_unscaled.tolist(),
+                                    "score": score_val,
+                                }
+                            )
 
             predictions.sort(key=lambda x: x["score"], reverse=True)
-            predictions = predictions[:30]
+            predictions = predictions[: args.max_predictions]
 
             gt_boxes = []
             sam_novel = []
-            geom_key = "bbox" if (args.geometry == "hbb" or args.wrap_to_bbox) else "quad"
+            geom_key = (
+                "bbox" if (args.geometry == "hbb" or args.wrap_to_bbox) else "quad"
+            )
             for ann in rec.get("annotations", []):
                 item = ann.get(geom_key)
                 if not item or ann.get("is_suppressed") or not ann.get("is_positive"):
@@ -344,7 +381,11 @@ def main() -> None:
                 elif ann.get("source") == "sam_discovered":
                     sam_novel.append(item)
 
-            cohort_clean = rec["source_dataset"].replace("_images_100k", "").replace("_rgb_fisheye", "")
+            cohort_clean = (
+                rec["source_dataset"]
+                .replace("_images_100k", "")
+                .replace("_rgb_fisheye", "")
+            )
             meta = {
                 "dataset": cohort_clean.upper(),
                 "image_id": rec["image_id"],
@@ -361,9 +402,14 @@ def main() -> None:
                 font,
                 title_font,
             )
-            out_file = args.output_dir / f"detection_sample_{count:02d}_{cohort_clean}_{rec['image_id']}.png"
+            out_file = (
+                args.output_dir
+                / f"detection_sample_{count:02d}_{cohort_clean}_{rec['image_id']}.png"
+            )
             panel.save(out_file, "PNG", optimize=True)
-            print(f"[{count}/{len(selected_indices)}] Saved {out_file.name} ({len(predictions)} preds, {len(gt_boxes)} GT, {len(sam_novel)} SAM)")
+            print(
+                f"[{count}/{len(selected_indices)}] Saved {out_file.name} ({len(predictions)} preds, {len(gt_boxes)} GT, {len(sam_novel)} SAM)"
+            )
 
     print(f"\nAll detection visual comparison panels saved to {args.output_dir}")
 

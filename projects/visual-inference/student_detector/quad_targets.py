@@ -9,8 +9,10 @@ import torch
 from torch import Tensor
 
 from .geometry import make_grid_points
+from .head import QuadDetectorOutput
 from .quad_assigner import QuadAssigner
 from .quad_geometry import quad_from_bbox
+from .task_aligned_assigner import QuadTaskAlignedAssigner
 
 
 @dataclass(frozen=True)
@@ -105,7 +107,10 @@ class QuadTargetBuilder:
     """Build fixed-shape quad targets outside the exported model graph."""
 
     def __init__(
-        self, assigner: QuadAssigner, *, weak_negative_weight: float = 0.0
+        self,
+        assigner: QuadAssigner | QuadTaskAlignedAssigner,
+        *,
+        weak_negative_weight: float = 0.0,
     ) -> None:
         if not 0 <= weak_negative_weight <= 1:
             raise ValueError("weak_negative_weight must be in [0, 1]")
@@ -122,6 +127,7 @@ class QuadTargetBuilder:
         feature_shapes: Sequence[tuple[int, int]],
         *,
         device: torch.device,
+        pred_output: QuadDetectorOutput | None = None,
     ) -> QuadTrainingTargets:
         cache_key = (tuple(feature_shapes), device)
         if cache_key not in self._grid_cache:
@@ -129,6 +135,15 @@ class QuadTargetBuilder:
                 feature_shapes, self.assigner.strides, device=device, dtype=torch.float32
             )
         points, level_slices = self._grid_cache[cache_key]
+        pred_quality_b: Tensor | None = None
+        pred_offsets_b: Tensor | None = None
+        if pred_output is not None:
+            from .quad_losses import flatten_quad_output
+
+            qual_flat, off_flat = flatten_quad_output(pred_output)
+            pred_quality_b = qual_flat.detach()
+            pred_offsets_b = off_flat.detach()
+
         quality, corner_offsets, positive_masks = [], [], []
         matched_gt_indices = []
         trusted_background_masks, weak_background_masks = [], []
@@ -140,7 +155,7 @@ class QuadTargetBuilder:
             len(feature_shapes), dtype=torch.long, device=device
         )
 
-        for sample in samples:
+        for i, sample in enumerate(samples):
             quads = _sample_quads(sample, "quads", "boxes").to(device)
             ignore_quads = _sample_quads(sample, "ignore_quads", "ignore_boxes").to(
                 device
@@ -152,17 +167,44 @@ class QuadTargetBuilder:
                 points=points,
                 level_slices=level_slices,
             )
-            assignment = self.assigner.assign(
-                quads,
-                feature_shapes,
-                (int(sample.image.shape[-2]), int(sample.image.shape[-1])),
-                valid_flat,
-            )
+            qual_i = pred_quality_b[i] if pred_quality_b is not None else None
+            off_i = pred_offsets_b[i] if pred_offsets_b is not None else None
+            if isinstance(self.assigner, QuadTaskAlignedAssigner):
+                assignment = self.assigner.assign(
+                    quads,
+                    feature_shapes,
+                    (int(sample.image.shape[-2]), int(sample.image.shape[-1])),
+                    valid_flat,
+                    pred_quality=qual_i,
+                    pred_offsets=off_i,
+                )
+            else:
+                assignment = self.assigner.assign(
+                    quads,
+                    feature_shapes,
+                    (int(sample.image.shape[-2]), int(sample.image.shape[-1])),
+                    valid_flat,
+                )
             if assignment.unrepresentable_gt_indices.numel():
                 ignore_quads = torch.cat(
                     (ignore_quads, quads[assignment.unrepresentable_gt_indices])
                 )
             ignored = points_inside_quads(points, ignore_quads)
+            if getattr(self.assigner, "assignment_mode", None) == "one_to_one":
+                x = quads[:, :, 0]
+                y = quads[:, :, 1]
+                shoelace = 0.5 * (
+                    (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
+                    + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
+                    + (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2])
+                    + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
+                ).abs()
+                img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
+                valid_bound_quads = quads[shoelace < 0.25 * img_area]
+                ignored = ignored | (
+                    points_inside_quads(points, valid_bound_quads)
+                    & ~assignment.positive_mask
+                )
             trusted_quads = _sample_quads(
                 sample, "trusted_background_quads", "trusted_background_boxes"
             ).to(device)

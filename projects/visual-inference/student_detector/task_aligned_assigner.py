@@ -9,11 +9,11 @@ from torch import Tensor
 
 from .assigner import Assignment
 from .geometry import (
+    aligned_iou,
     decode_ltrb,
     encode_ltrb,
     make_grid_points,
 )
-from .losses import aligned_iou
 from .quad_assigner import QuadAssignment
 from .quad_geometry import (
     aligned_quad_iou,
@@ -75,7 +75,7 @@ class TaskAlignedAssigner:
         strides: tuple[int, ...] = (8, 16, 32),
         top_k: int = 4,
         alpha: float = 1.0,
-        beta: float = 6.0,
+        beta: float = 2.0,
         center_radius: float = 1.5,
         assignment_mode: str = "one_to_many",
     ) -> None:
@@ -178,6 +178,26 @@ class TaskAlignedAssigner:
         )
         candidate_mask = in_gt & in_center & valid_point_mask[:, None]
 
+        # Scale-Gated FPN specialization: restrict candidates by stride receptive field
+        box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        box_scales = torch.sqrt(box_areas.clamp(min=1.0))
+        min_stride = min(self.strides)
+        max_stride = max(self.strides)
+        min_scale_per_point = torch.where(
+            point_strides == min_stride,
+            torch.tensor(0.0, device=gt_boxes.device),
+            point_strides * 4.0,
+        )
+        max_scale_per_point = torch.where(
+            point_strides == max_stride,
+            torch.tensor(float("inf"), device=gt_boxes.device),
+            point_strides * 16.0,
+        )
+        scale_valid = (box_scales[None, :] >= min_scale_per_point[:, None]) & (
+            box_scales[None, :] <= max_scale_per_point[:, None]
+        )
+        candidate_mask = candidate_mask & scale_valid
+
         # Decode predicted boxes if available; else decode virtual prior boxes
         if pred_distances is not None:
             pred_b = decode_ltrb(points, pred_distances)
@@ -197,6 +217,13 @@ class TaskAlignedAssigner:
         from .geometry import box_iou
 
         pair_ious = box_iou(pred_b, boxes).clamp(min=1e-6)
+        if pred_distances is None:
+            # Proximity floor in fallback mode to prevent large-object starvation
+            dists = ((points[:, None, :] - gt_centers[None, :, :]) ** 2).sum(dim=2).sqrt()
+            max_d = radius.clamp(min=1.0)
+            center_prox = (1.0 - (dists / max_d)).clamp(min=0.1, max=1.0)
+            pair_ious = torch.maximum(pair_ious, center_prox * 0.5)
+
         pair_scores = scores.unsqueeze(1).clamp(min=1e-6)
         raw_t = (pair_scores**self.alpha) * (pair_ious**self.beta)
         alignment_matrix = raw_t * candidate_mask.float()
@@ -226,10 +253,18 @@ class TaskAlignedAssigner:
                 matched[cand_idx] = valid_indices[gt_idx]
                 centerness[cand_idx] = aligned_iou(pred_b[cand_idx], boxes[gt_idx])
         else:
-            k = min(self.top_k, num_points)
-            topk_vals, topk_indices = torch.topk(alignment_matrix, k, dim=0)
+            box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+            box_scales = torch.sqrt(box_areas.clamp(min=1.0))
+            k_per_gt = torch.clamp(
+                (self.top_k * (box_scales / 64.0)).round().to(torch.long),
+                min=3,
+                max=16,
+            )
+            k_max = int(min(k_per_gt.max().item(), num_points))
+            topk_vals, topk_indices = torch.topk(alignment_matrix, k_max, dim=0)
+            ranks = torch.arange(k_max, device=gt_boxes.device)[:, None]
+            keep_topk = (topk_vals > 0) & (ranks < k_per_gt[None, :])
             selected_per_gt = torch.zeros_like(alignment_matrix, dtype=torch.bool)
-            keep_topk = topk_vals > 0
             selected_per_gt.scatter_(0, topk_indices, keep_topk)
 
             best_metric, best_gt = (
@@ -296,7 +331,7 @@ class QuadTaskAlignedAssigner:
         strides: tuple[int, ...] = (8, 16, 32),
         top_k: int = 4,
         alpha: float = 1.0,
-        beta: float = 6.0,
+        beta: float = 2.0,
         assignment_mode: str = "one_to_many",
     ) -> None:
         if assignment_mode not in {"one_to_many", "one_to_one"}:
@@ -366,6 +401,33 @@ class QuadTaskAlignedAssigner:
         num_gt = canonical.shape[0]
         inside = points_inside_convex_quads(points, canonical) & valid_point_mask[:, None]
 
+        # Scale-Gated FPN specialization: restrict candidates by stride receptive field
+        x = canonical[:, :, 0]
+        y = canonical[:, :, 1]
+        shoelace = 0.5 * (
+            (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
+            + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
+            + (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2])
+            + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
+        ).abs()
+        quad_scales = torch.sqrt(shoelace.clamp(min=1.0))
+        min_stride = min(self.strides)
+        max_stride = max(self.strides)
+        min_scale_per_point = torch.where(
+            point_strides == min_stride,
+            torch.tensor(0.0, device=value.device),
+            point_strides * 4.0,
+        )
+        max_scale_per_point = torch.where(
+            point_strides == max_stride,
+            torch.tensor(float("inf"), device=value.device),
+            point_strides * 16.0,
+        )
+        scale_valid = (quad_scales[None, :] >= min_scale_per_point[:, None]) & (
+            quad_scales[None, :] <= max_scale_per_point[:, None]
+        )
+        inside = inside & scale_valid
+
         if pred_offsets is not None:
             pred_q = decode_quad_offsets(
                 points.unsqueeze(0), pred_offsets.unsqueeze(0), point_strides.reshape(1, -1, 1)
@@ -393,6 +455,13 @@ class QuadTaskAlignedAssigner:
             pair_ious = aligned_quad_iou(
                 pred_q[cand_pts], canonical[cand_gts]
             ).clamp(min=1e-6)
+            if pred_offsets is None:
+                centers = canonical[cand_gts].mean(dim=1)
+                dists = ((points[cand_pts] - centers) ** 2).sum(dim=1).sqrt()
+                radius = 1.5 * point_strides[cand_pts]
+                max_d = radius.clamp(min=1.0)
+                center_prox = (1.0 - (dists / max_d)).clamp(min=0.1, max=1.0)
+                pair_ious = torch.maximum(pair_ious, center_prox * 0.5)
             pair_scores = scores[cand_pts].clamp(min=1e-6)
             t = (pair_scores**self.alpha) * (pair_ious**self.beta)
             alignment_matrix[cand_pts, cand_gts] = t
@@ -408,6 +477,10 @@ class QuadTaskAlignedAssigner:
             pair_ious = aligned_quad_iou(
                 pred_q[closest_cands], canonical[zero_gt_indices]
             ).clamp(min=1e-6)
+            if pred_offsets is None:
+                pair_ious = torch.maximum(
+                    pair_ious, torch.tensor(0.1, device=value.device)
+                )
             pair_scores = scores[closest_cands].clamp(min=1e-6)
             t = (pair_scores**self.alpha) * (pair_ious**self.beta)
             alignment_matrix[closest_cands, zero_gt_indices] = t
@@ -426,10 +499,22 @@ class QuadTaskAlignedAssigner:
                     pred_q[cand_idx], canonical[gt_idx]
                 )
         else:
-            k = min(self.top_k, num_points)
-            topk_vals, topk_indices = torch.topk(alignment_matrix, k, dim=0)
+            quad_xmin = canonical[:, :, 0].min(dim=1)[0]
+            quad_xmax = canonical[:, :, 0].max(dim=1)[0]
+            quad_ymin = canonical[:, :, 1].min(dim=1)[0]
+            quad_ymax = canonical[:, :, 1].max(dim=1)[0]
+            quad_areas = (quad_xmax - quad_xmin) * (quad_ymax - quad_ymin)
+            quad_scales = torch.sqrt(quad_areas.clamp(min=1.0))
+            k_per_gt = torch.clamp(
+                (self.top_k * (quad_scales / 64.0)).round().to(torch.long),
+                min=3,
+                max=16,
+            )
+            k_max = int(min(k_per_gt.max().item(), num_points))
+            topk_vals, topk_indices = torch.topk(alignment_matrix, k_max, dim=0)
+            ranks = torch.arange(k_max, device=value.device)[:, None]
+            keep_topk = (topk_vals > 0) & (ranks < k_per_gt[None, :])
             selected_per_gt = torch.zeros_like(alignment_matrix, dtype=torch.bool)
-            keep_topk = topk_vals > 0
             selected_per_gt.scatter_(0, topk_indices, keep_topk)
 
             best_metric, best_gt = (

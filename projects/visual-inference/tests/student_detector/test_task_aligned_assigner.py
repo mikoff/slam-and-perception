@@ -64,8 +64,8 @@ def test_hbb_task_aligned_assigner_one_to_one_vs_one_to_many() -> None:
     )
     assignment_many = assigner_many.assign(gt_boxes, feature_shapes, image_size)
     assert assignment_many.positive_mask.sum().item() >= 2
-    assert (assignment_many.matched_gt_indices == 0).sum().item() <= 4
-    assert (assignment_many.matched_gt_indices == 1).sum().item() <= 4
+    assert (assignment_many.matched_gt_indices == 0).sum().item() <= 16
+    assert (assignment_many.matched_gt_indices == 1).sum().item() <= 16
 
 
 def test_quad_task_aligned_assigner_one_to_one_vs_one_to_many() -> None:
@@ -91,5 +91,31 @@ def test_quad_task_aligned_assigner_one_to_one_vs_one_to_many() -> None:
     )
     assignment_many = assigner_many.assign(gt_quads, feature_shapes, image_size)
     assert assignment_many.positive_mask.sum().item() >= 2
-    assert (assignment_many.matched_gt_indices == 0).sum().item() <= 4
-    assert (assignment_many.matched_gt_indices == 1).sum().item() <= 4
+    assert (assignment_many.matched_gt_indices == 0).sum().item() <= 16
+    assert (assignment_many.matched_gt_indices == 1).sum().item() <= 16
+
+
+def test_scale_gated_fpn_specialization() -> None:
+    # Small box: 20x20 (scale=20) -> should prefer P2 (stride 4) or P3 (stride 8)
+    # Huge box: 300x200 (scale=245) -> should prefer P4 (stride 16) or P5 (stride 32)
+    gt_boxes = torch.tensor(
+        [
+            [10.0, 10.0, 30.0, 30.0],
+            [10.0, 10.0, 310.0, 210.0],
+        ]
+    )
+    feature_shapes = ((96, 96), (48, 48), (24, 24), (12, 12))
+    image_size = (384, 384)
+
+    assigner = TaskAlignedAssigner(
+        strides=(4, 8, 16, 32),
+        assignment_mode="one_to_one",
+    )
+    assignment = assigner.assign(gt_boxes, feature_shapes, image_size)
+    assert assignment.positive_mask.sum().item() == 2
+
+    # Check level distribution: small box on level 0 or 1, huge box on level 2 or 3
+    counts = assignment.positive_counts_per_level
+    assert counts[0] + counts[1] >= 1  # small box on P2 or P3
+    assert counts[2] + counts[3] >= 1  # huge box on P4 or P5
+

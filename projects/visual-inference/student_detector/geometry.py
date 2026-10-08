@@ -107,3 +107,16 @@ def box_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
     area2 = (boxes2[:, 2:] - boxes2[:, :2]).clamp(min=0).prod(dim=1)
     union = area1[:, None] + area2[None, :] - intersection
     return intersection / union.clamp(min=torch.finfo(intersection.dtype).eps)
+
+
+def aligned_iou(boxes1: Tensor, boxes2: Tensor) -> Tensor:
+    """IoU for aligned xyxy pairs."""
+    intersection_top_left = torch.maximum(boxes1[:, :2], boxes2[:, :2])
+    intersection_bottom_right = torch.minimum(boxes1[:, 2:], boxes2[:, 2:])
+    intersection = (
+        (intersection_bottom_right - intersection_top_left).clamp(min=0).prod(dim=1)
+    )
+    size1 = (boxes1[:, 2:] - boxes1[:, :2]).clamp(min=0)
+    size2 = (boxes2[:, 2:] - boxes2[:, :2]).clamp(min=0)
+    union = size1.prod(dim=1) + size2.prod(dim=1) - intersection
+    return intersection / union.clamp(min=torch.finfo(boxes1.dtype).eps)

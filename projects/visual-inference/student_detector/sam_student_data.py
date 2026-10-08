@@ -273,6 +273,155 @@ def _fetch_record_annotations(
     return annotations, sqlite_conn
 
 
+def suppress_container_boxes(
+    positive_boxes: list[list[float]],
+    is_discovered: list[bool],
+    img_width: float,
+    img_height: float,
+    containment_threshold: float = 0.75,
+) -> tuple[list[list[float]], list[list[float]]]:
+    """Downgrade discovered proposals that enclose other objects to ignore_boxes.
+
+    A discovered proposal is topologically a scene container (context/road/sky)
+    rather than an atomic object instance if:
+    1. It encloses >= 2 other objects by at least containment_threshold (default 0.75), OR
+    2. It encloses 1 other object, while its area is massive (> 15% image area and > 8x child area).
+
+    /// @param positive_boxes List of candidate positive bounding boxes [x1, y1, x2, y2].
+    /// @param is_discovered Boolean list indicating whether each box is a SAM discovery.
+    /// @param img_width Width of the original image.
+    /// @param img_height Height of the original image.
+    /// @param containment_threshold Minimum fraction of child box area inside candidate.
+    /// @return Tuple of (filtered_positive_boxes, suppressed_container_boxes).
+    """
+    if len(positive_boxes) < 2 or not any(is_discovered):
+        return positive_boxes, []
+
+    b = torch.tensor(positive_boxes, dtype=torch.float32)
+    inter_x1 = torch.maximum(b[:, None, 0], b[None, :, 0])
+    inter_y1 = torch.maximum(b[:, None, 1], b[None, :, 1])
+    inter_x2 = torch.minimum(b[:, None, 2], b[None, :, 2])
+    inter_y2 = torch.minimum(b[:, None, 3], b[None, :, 3])
+
+    inter_w = (inter_x2 - inter_x1).clamp(min=0.0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0.0)
+    inter_area = inter_w * inter_h
+
+    areas = (b[:, 2] - b[:, 0]).clamp(min=0.0) * (b[:, 3] - b[:, 1]).clamp(min=0.0)
+    img_area = max(float(img_width) * float(img_height), 1.0)
+
+    child_coverage = inter_area / areas[None, :].clamp(min=1e-6)
+    child_coverage.fill_diagonal_(0.0)
+
+    contained = child_coverage >= containment_threshold
+
+    filtered_pos: list[list[float]] = []
+    containers: list[list[float]] = []
+
+    for i, (box, is_disc) in enumerate(zip(positive_boxes, is_discovered, strict=True)):
+        if not is_disc:
+            filtered_pos.append(box)
+            continue
+
+        contained_children = torch.where(contained[i])[0]
+        is_container = False
+        if len(contained_children) >= 2:
+            is_container = True
+        elif len(contained_children) == 1:
+            child_idx = int(contained_children[0].item())
+            if (areas[i] / img_area > 0.15) and (
+                areas[i] / max(float(areas[child_idx].item()), 1.0) > 8.0
+            ):
+                is_container = True
+
+        if is_container:
+            containers.append(box)
+        else:
+            filtered_pos.append(box)
+
+    return filtered_pos, containers
+
+
+def suppress_container_quads(
+    positive_quads: list[list[list[float]]],
+    stabilities: list[float],
+    is_discovered: list[bool],
+    img_width: float,
+    img_height: float,
+    containment_threshold: float = 0.75,
+) -> tuple[list[list[list[float]]], list[float], list[list[list[float]]]]:
+    """Downgrade discovered quads that enclose other objects to ignore_quads.
+
+    /// @param positive_quads List of candidate positive quads [4, 2].
+    /// @param stabilities Stability scores corresponding to positive quads.
+    /// @param is_discovered Boolean list indicating whether each quad is a SAM discovery.
+    /// @param img_width Width of the original image.
+    /// @param img_height Height of the original image.
+    /// @param containment_threshold Minimum fraction of child quad area inside candidate.
+    /// @return Tuple of (filtered_positive_quads, filtered_stabilities, suppressed_container_quads).
+    """
+    if len(positive_quads) < 2 or not any(is_discovered):
+        return positive_quads, stabilities, []
+
+    boxes = [
+        [
+            float(min(pt[0] for pt in q)),
+            float(min(pt[1] for pt in q)),
+            float(max(pt[0] for pt in q)),
+            float(max(pt[1] for pt in q)),
+        ]
+        for q in positive_quads
+    ]
+    b = torch.tensor(boxes, dtype=torch.float32)
+    inter_x1 = torch.maximum(b[:, None, 0], b[None, :, 0])
+    inter_y1 = torch.maximum(b[:, None, 1], b[None, :, 1])
+    inter_x2 = torch.minimum(b[:, None, 2], b[None, :, 2])
+    inter_y2 = torch.minimum(b[:, None, 3], b[None, :, 3])
+
+    inter_w = (inter_x2 - inter_x1).clamp(min=0.0)
+    inter_h = (inter_y2 - inter_y1).clamp(min=0.0)
+    inter_area = inter_w * inter_h
+
+    areas = (b[:, 2] - b[:, 0]).clamp(min=0.0) * (b[:, 3] - b[:, 1]).clamp(min=0.0)
+    img_area = max(float(img_width) * float(img_height), 1.0)
+
+    child_coverage = inter_area / areas[None, :].clamp(min=1e-6)
+    child_coverage.fill_diagonal_(0.0)
+
+    contained = child_coverage >= containment_threshold
+
+    filtered_quads: list[list[list[float]]] = []
+    filtered_stab: list[float] = []
+    container_quads: list[list[list[float]]] = []
+
+    for i, (q, stab, is_disc) in enumerate(
+        zip(positive_quads, stabilities, is_discovered, strict=True)
+    ):
+        if not is_disc:
+            filtered_quads.append(q)
+            filtered_stab.append(stab)
+            continue
+
+        contained_children = torch.where(contained[i])[0]
+        is_container = False
+        if len(contained_children) >= 2:
+            is_container = True
+        elif len(contained_children) == 1:
+            child_idx = int(contained_children[0].item())
+            if (areas[i] / img_area > 0.15) and (
+                areas[i] / max(float(areas[child_idx].item()), 1.0) > 8.0
+            ):
+                is_container = True
+
+        if is_container:
+            container_quads.append(q)
+        else:
+            filtered_quads.append(q)
+            filtered_stab.append(stab)
+
+    return filtered_quads, filtered_stab, container_quads
+
+
 class SAMStudentDataset(Dataset[QuadProposalSample]):
     """PyTorch Dataset loading SAM discovery pseudo-labels and human GT for student training."""
 
@@ -353,6 +502,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         image_path = self.image_root / record["file_name"]
 
         positive_quads: list[list[list[float]]] = []
+        is_discovered: list[bool] = []
         ignore_quads: list[list[list[float]]] = []
         stabilities: list[float] = []
 
@@ -368,6 +518,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
             if ann.get("is_positive") and not ann.get("is_suppressed"):
                 if ann.get("source") == "human_gt":
                     positive_quads.append(quad)
+                    is_discovered.append(False)
                     stabilities.append(1.0)
                 elif ann.get("source") == "sam_discovered":
                     stability = ann.get("sam_stability_score", 1.0)
@@ -375,12 +526,21 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
                         ignore_quads.append(quad)
                     else:
                         positive_quads.append(quad)
+                        is_discovered.append(True)
                         stabilities.append(
                             float(stability if stability is not None else 1.0)
                         )
             else:
                 # Suppressed subparts, duplicate GT, or stuff (road_surface)
                 ignore_quads.append(quad)
+
+        # Topological Non-Leaf Suppression (Solution 1):
+        orig_w = float(record.get("width", 384))
+        orig_h = float(record.get("height", 384))
+        positive_quads, stabilities, container_quads = suppress_container_quads(
+            positive_quads, stabilities, is_discovered, orig_w, orig_h
+        )
+        ignore_quads.extend(container_quads)
 
         with Image.open(image_path) as loaded:
             image = loaded.convert("RGB")
@@ -510,6 +670,7 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         image_path = self.image_root / record["file_name"]
 
         positive_boxes: list[list[float]] = []
+        is_discovered: list[bool] = []
         ignore_boxes: list[list[float]] = []
 
         anns, self._connection = _fetch_record_annotations(
@@ -524,15 +685,25 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
             if ann.get("is_positive") and not ann.get("is_suppressed"):
                 if ann.get("source") == "human_gt":
                     positive_boxes.append(bbox)
+                    is_discovered.append(False)
                 elif ann.get("source") == "sam_discovered":
                     stability = ann.get("sam_stability_score", 1.0)
                     if stability is not None and stability < self.min_stability:
                         ignore_boxes.append(bbox)
                     else:
                         positive_boxes.append(bbox)
+                        is_discovered.append(True)
             else:
                 # Suppressed subparts, duplicate GT, or stuff (road_surface)
                 ignore_boxes.append(bbox)
+
+        # Topological Non-Leaf Suppression (Solution 1):
+        orig_w = float(record.get("width", 384))
+        orig_h = float(record.get("height", 384))
+        positive_boxes, container_boxes = suppress_container_boxes(
+            positive_boxes, is_discovered, orig_w, orig_h
+        )
+        ignore_boxes.extend(container_boxes)
 
         with Image.open(image_path) as loaded:
             image = loaded.convert("RGB")
