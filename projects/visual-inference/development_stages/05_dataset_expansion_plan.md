@@ -2,8 +2,9 @@
 
 **Document ID:** `05_dataset_expansion_plan.md`  
 **Status:** Approved Technical Architecture & Operational Roadmap  
-**Target Storage:** External SSD (`/media/sashamikoff/fb.com-mikoff/datasets/public/`)  
-**Target Database:** `quad_train_enriched.sqlite` (Cloned from `quad_train.sqlite`)  
+**Working Storage:** Local Repo (`data/visual-inference-datasets/`)  
+**Archive Storage:** External SSD (`/media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/`)  
+**Target Database:** `quad_train_enriched.sqlite` (Cloned locally from `quad_train.sqlite`)  
 **Scope:** Expanding student detector perception across roadside infrastructure and indoor structured parking facilities with a safe, limited-scope Phase 1 curriculum.
 
 ---
@@ -16,7 +17,7 @@ The visual inference student detector (`MobileNetV4-Conv-Medium` with P2 Lite-FP
 
 ### Phase 1 Limited-Scope Strategy:
 Rather than ingesting massive raw web corpora that would overwhelm local storage, this roadmap implements a **strictly bounded, high-signal enrichment**:
-- **Reuses Existing Corpora**: Preserves our verified BDD100k, COCO 2017, nuImages, and WoodScape Fisheye splits (already present on SSD).
+- **Reuses Existing Corpora**: Preserves our verified BDD100k, COCO 2017, nuImages, and WoodScape Fisheye splits (already present locally in `data/visual-inference-datasets/raw/`).
 - **Ingests Exactly Three New Permissive Datasets**:
   1. **ADE20K (SceneParse150)** (BSD-3): Architectural pillars/columns, trash cans, street lamps, signboards, and canopies.
   2. **Open Images V7 (Expanded Domain Subset)** (CC-BY 4.0): Charging stations, parking meters, fire hydrants, solar panels, traffic cones, waste containers, fences, shopping carts, strollers, wheelchairs, and roadside assets.
@@ -25,47 +26,58 @@ Rather than ingesting massive raw web corpora that would overwhelm local storage
 
 ---
 
-## 2. Storage Topology & External SSD Safety Gate
+## 2. Storage Topology: Local Working Tree & External SSD Archives
 
-### Hardware Storage Constraints:
-- **Internal System Disk (`/`)**: 466 GB total, **only 20 GB available (96% full)**. Under no circumstances may raw downloads, uncompressed image archives, or SQLite database duplicates be placed on `/`.
-- **External SSD (`/media/sashamikoff/fb.com-mikoff`)**: 916 GB total, **424 GB available (52% free)**. All downloads, raw files, manifests, and database copies reside strictly here.
+### Storage Capacity:
+- **Internal System Disk (`/`)**: 466 GB total, **112 GB available (75% use)** after retiring the legacy 13.5 GB JSON manifests.
+- **External SSD (`/media/sashamikoff/fb.com-mikoff`)**: 916 GB total, **424 GB available (52% free)**.
 
-### External SSD Directory Layout:
+### Hybrid Storage Allocation Policy:
+1. **Raw Download Archives & Tarballs**: Downloaded to the **External SSD** to prevent intermediate compression bloat and preserve offline reproducibility.
+2. **Extracted Images, Manifests, & Working Database**: Stored **locally** in `data/visual-inference-datasets/` (~8–9 GB total footprint) for maximum NVMe I/O throughput during training.
+
+### Directory Layout:
+
 ```
-/media/sashamikoff/fb.com-mikoff/datasets/public/
-├── incoming_enrichment/
-│   ├── ade20k/
-│   │   ├── archives/                 # ADEChallengeData2016.zip (~900 MB)
-│   │   ├── raw/                      # Extracted images & annotations
-│   │   └── manifests/                # Filtered positive instance manifest
-│   ├── open_images_subset/
-│   │   ├── metadata/                 # train-annotations-bbox.csv (~75 MB)
-│   │   │                             # class-descriptions-boxable.csv
-│   │   ├── raw/                      # Filtered image downloads (~1.5–2.0 GB)
-│   │   └── manifests/                # proposal-manifest.v2 export
-│   └── roboflow_ev_parking/
-│       ├── raw/                      # Curated COCO/YOLO zip exports (~600 MB)
-│       └── manifests/                # Converted manifests with oriented quads
-├── quad_train_enriched.sqlite        # Cloned & enriched working database (~5.6 GB)
-└── quad_val_enriched.sqlite          # Cloned validation database (~350 MB)
+[EXTERNAL SSD] /media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/
+├── ade20k/
+│   └── ADEChallengeData2016.zip (~900 MB)
+├── open_images_subset/
+│   ├── train-annotations-bbox.csv (~75 MB)
+│   └── class-descriptions-boxable.csv
+└── roboflow_ev_parking/
+    └── ev_parking_curated_archives.zip (~600 MB)
+
+[LOCAL WORKSPACE] data/visual-inference-datasets/
+├── raw/
+│   ├── bdd100k_images_100k/          # Existing (8.4 GB)
+│   ├── coco_2017/                    # Existing (31 GB)
+│   ├── nuimages/                     # Existing (34 GB)
+│   ├── woodscape_rgb_fisheye/        # Existing (26 GB)
+│   ├── ade20k/                       # [NEW] Extracted target images & annotations (~500 MB)
+│   ├── open_images_subset/           # [NEW] Extracted target images & annotations (~1.5 GB)
+│   └── roboflow_ev_parking/          # [NEW] Extracted target images & annotations (~600 MB)
+├── output/
+│   ├── images/
+│   │   ├── train/                    # 274k+ relative symlinks (../../../raw/...)
+│   │   └── val/
+│   └── indexes/
+│       ├── quad_train.sqlite         # Original production index (5.07 GB, pristine)
+│       ├── quad_train_enriched.sqlite# [NEW] Local cloned & enriched working database (~5.6 GB)
+│       └── quad_val_enriched.sqlite  # [NEW] Local validation database (~350 MB)
 ```
 
 ---
 
 ## 3. Database Cloning & Non-Overlapping Namespace Contract
 
-To ensure that the production training index ([`quad_train.sqlite`](file:///home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite), 267,800 images, 5.07 GB) remains completely intact, pristine, and reproducible:
+The production training index ([`quad_train.sqlite`](file:///home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite), 267,800 images, 5.07 GB) remains completely untouched and pristine.
 
-### 1. Atomic Clone Execution:
+### 1. Local Clone Execution:
 ```bash
-# 1. Clone quad_train.sqlite to external SSD
-cp /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite \
-   /media/sashamikoff/fb.com-mikoff/datasets/public/quad_train_enriched.sqlite
-
-# 2. Symlink back to the visual-inference output indexes directory
-ln -sf /media/sashamikoff/fb.com-mikoff/datasets/public/quad_train_enriched.sqlite \
-   /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite
+# Clone quad_train.sqlite directly within the local indexes directory
+cp data/visual-inference-datasets/output/indexes/quad_train.sqlite \
+   data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite
 ```
 
 ### 2. Primary Key Namespace Partitioning:
@@ -76,7 +88,7 @@ Existing records occupy IDs `1` through `~267,800`. The new datasets are allocat
 - **Curated Roboflow EV & Parking**: `700,000` – `799,999`
 
 ### 3. SQLite Schema v8 Strict Compliance:
-All inserted rows must adhere strictly to the SQLite v8 contract:
+All inserted rows adhere strictly to the SQLite v8 contract without intermediate JSON files:
 - `images` table: `(row_index, image_id, file_name, width, height, source_dataset, camera_type, background_supervision, positive_count)`
 - `annotations` table: `(image_id, x1, y1, x2, y2, ignore_region, category_name, object_condition, quad_json, geometry_tier, fit_coverage, fit_tightness, seen_status)`
 
@@ -211,18 +223,19 @@ To prevent dominant highway driving frames from overwhelming rare infrastructure
 
 ```
 Phase 1: External SSD Download & Curation
-  ├── 1.1 Download ADEChallengeData2016.zip (~900 MB) to /media/.../incoming_enrichment/ade20k/
-  ├── 1.2 Download Open Images bbox CSV & target image subset (~1.8 GB) to open_images_subset/
-  └── 1.3 Download curated Roboflow EV & Parking dataset archives (~600 MB) to roboflow_ev_parking/
+  ├── 1.1 Download ADEChallengeData2016.zip (~900 MB) to SSD: incoming_enrichment/archives/ade20k/
+  ├── 1.2 Download Open Images bbox CSV & target images (~1.8 GB) to SSD: incoming_enrichment/archives/open_images/
+  └── 1.3 Download curated Roboflow EV & Parking archives (~600 MB) to SSD: incoming_enrichment/archives/roboflow/
 
-Phase 2: Database Cloning & Ingestion Adapters
-  ├── 2.1 Copy quad_train.sqlite -> quad_train_enriched.sqlite on external SSD
-  ├── 2.2 Symlink quad_train_enriched.sqlite to data/visual-inference-datasets/output/indexes/
-  ├── 2.3 Implement adapter scripts:
+Phase 2: Local Ingestion & Database Cloning
+  ├── 2.1 Copy quad_train.sqlite -> quad_train_enriched.sqlite locally in data/visual-inference-datasets/output/indexes/
+  ├── 2.2 Unpack & extract positive instances directly to local: data/visual-inference-datasets/raw/{ade20k,open_images_subset,roboflow_ev_parking}/
+  ├── 2.3 Symlink new images to local: data/visual-inference-datasets/output/images/train/
+  ├── 2.4 Implement direct SQLite ingestion scripts:
   │     ├── scripts/ingest_ade20k.py
   │     ├── scripts/ingest_open_images.py
   │     └── scripts/ingest_roboflow_ev_parking.py
-  └── 2.4 Atomically insert records into quad_train_enriched.sqlite with isolated namespaces
+  └── 2.5 Atomically insert records into quad_train_enriched.sqlite with isolated namespaces (500k, 600k, 700k)
 
 Phase 3: Validation & Quality Auditing
   ├── 3.1 Verify SQLite integrity (PRAGMA integrity_check, zero FK violations)
@@ -240,7 +253,8 @@ Phase 4: DataLoader & Orchestrator Integration
 ## 10. Verification Plan & Success Criteria
 
 ### 1. Storage & Database Safety Gates:
-- Root disk `/` space remains $> 18$ GB free at all times; all downloads and writes stay on external SSD.
+- Root disk `/` space remains $> 90$ GB free at all times (currently 112 GB free).
+- Large download archives stay on external SSD.
 - Original `quad_train.sqlite` checksum is unchanged; `quad_train_enriched.sqlite` passes `PRAGMA integrity_check`.
 
 ### 2. Empirical Model Evaluation Targets:
