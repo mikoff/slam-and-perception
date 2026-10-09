@@ -53,4 +53,4 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 - Suppressed SAM subparts must remain in ignore masks; treating them as background penalties penalizes detector predictions of whole objects.
 - `sample.original_size` is `(height, width)`. When calculating scale and unletterboxing, unpack as `orig_h, orig_w`.
 - Image files are read from dataset storage at `/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/`.
-- Training pipelines: `scripts/train_student_pilot.py` (Stage 1), `scripts/finetune_student_gt.py` (Stage 2 HBB & Quad), and comparative visualizers `scripts/visualize_student_comparison.py` (Master 4-model dashboard) & `scripts/visualize_student_validation.py`.
+- Training pipelines: `scripts/train_student_pilot.py` (Stage 1), `scripts/finetune_student_gt.py` (Stage 2 HBB & Quad), and comparative visualizers `scripts/visualize_student_comparison.py` (Master 4-model dashboard), `scripts/visualize_v1_vs_v2_comparison.py` (v1 vs v2 parity dashboard), & `scripts/visualize_student_validation.py`.
