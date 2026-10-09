@@ -93,11 +93,17 @@ def load_semantic_image_records(
             ).fetchall()
         else:
             id_list = list(image_ids)
-            placeholders = ",".join(["?"] * len(id_list))
-            image_rows = connection.execute(
-                f"SELECT image_id, file_name, width, height, source_dataset FROM images WHERE image_id IN ({placeholders}) ORDER BY row_index",
-                id_list,
-            ).fetchall()
+            image_rows = []
+            chunk_size = 500
+            for i in range(0, len(id_list), chunk_size):
+                chunk = id_list[i : i + chunk_size]
+                placeholders = ",".join(["?"] * len(chunk))
+                image_rows.extend(
+                    connection.execute(
+                        f"SELECT image_id, file_name, width, height, source_dataset FROM images WHERE image_id IN ({placeholders}) ORDER BY row_index",
+                        chunk,
+                    ).fetchall()
+                )
 
         if not image_rows:
             return []

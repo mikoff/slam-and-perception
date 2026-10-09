@@ -29,7 +29,7 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
   - Stage 2 Run C v3 (HBB Recipe 2 with Container Suppression + Scale-Gated TAL on 10,000 images) achieved **44.54% Recall@100@50**, **23.64% Strict Recall@75**, **52.16% Large Object Recall**, and **11.42% Rec@10@50**, with **zero road false positives**, cleanly resolving the macro-container swallow problem.
   - Qualitative visualization defaults to **Part-Aware NMS (IoU threshold 0.45, duplicate limit 0.65)** to suppress adjacent anchor cluster duplicates from 1-to-1 ignore mask halos.
 - Pseudo-Label Storage & DataLoader:
-  - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`.
+  - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`. Full-scale dataset discovery (267.8k images) orchestrated with start/pause/resume daemon via `scripts/manage_sam_discovery.sh`.
   - Authoritative human GT dataset: `HumanGTHBBDataset` in `student_detector/human_gt_data.py`.
 
 # Active Design Patterns & Decisions
