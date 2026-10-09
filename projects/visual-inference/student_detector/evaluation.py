@@ -47,19 +47,18 @@ def _average_precision(
         true_positive = torch.zeros(scores.shape[0])
         false_positive = torch.zeros(scores.shape[0])
         matched = torch.zeros(image.ground_truth.shape[0], dtype=torch.bool)
-        for detection_index, box in enumerate(boxes):
-            if image.ground_truth.numel() == 0:
-                false_positive[detection_index] = 1
-                continue
-            overlaps = box_iou(
-                box.unsqueeze(0), image.ground_truth
-            ).squeeze(0)
-            overlap, gt_index = overlaps.max(dim=0)
-            if overlap >= iou_threshold and not matched[gt_index]:
-                matched[gt_index] = True
-                true_positive[detection_index] = 1
-            else:
-                false_positive[detection_index] = 1
+        if image.ground_truth.numel() == 0:
+            false_positive[:] = 1
+        else:
+            all_overlaps = box_iou(boxes, image.ground_truth)
+            for detection_index in range(boxes.shape[0]):
+                overlaps = all_overlaps[detection_index]
+                overlap, gt_index = overlaps.max(dim=0)
+                if overlap >= iou_threshold and not matched[gt_index]:
+                    matched[gt_index] = True
+                    true_positive[detection_index] = 1
+                else:
+                    false_positive[detection_index] = 1
         all_scores.append(scores)
         all_true_positives.append(true_positive)
         all_false_positives.append(false_positive)

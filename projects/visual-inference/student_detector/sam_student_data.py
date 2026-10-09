@@ -97,6 +97,7 @@ def _load_pseudo_label_records(
     val_ratio: float,
     split_seed: int,
     min_stability: float,
+    cohort_ids: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[int], int, int, int, bool]:
     """Load image records and dataset totals from SQLite or JSON pseudo-labels.
 
@@ -105,6 +106,7 @@ def _load_pseudo_label_records(
     /// @param val_ratio Fraction of cohort reserved for validation.
     /// @param split_seed Seed for deterministic stratified cohort splitting.
     /// @param min_stability Minimum SAM mask stability score.
+    /// @param cohort_ids Optional set of image IDs to restrict the cohort.
     /// @return Tuple of (images, indices, total_gt, total_novel, total_suppressed, is_sqlite).
     """
     is_sqlite = pseudo_labels_path.suffix in (".sqlite", ".db")
@@ -142,6 +144,7 @@ def _load_pseudo_label_records(
                         "source_dataset": str(r[4]),
                     }
                     for r in rows
+                    if cohort_ids is None or int(r[0]) in cohort_ids
                 ]
                 indices = list(range(len(images)))
             elif split == "all" or not has_explicit_val:
@@ -161,6 +164,7 @@ def _load_pseudo_label_records(
                         "source_dataset": str(r[4]),
                     }
                     for r in rows
+                    if cohort_ids is None or int(r[0]) in cohort_ids
                 ]
                 if split == "all":
                     images = all_images
@@ -195,6 +199,10 @@ def _load_pseudo_label_records(
             data = json.load(f)
 
         all_images = data["images"]
+        if cohort_ids is not None:
+            all_images = [
+                img for img in all_images if img.get("image_id") in cohort_ids
+            ]
         train_indices, val_indices = split_cohort_indices(
             all_images, val_ratio=val_ratio, seed=split_seed
         )
@@ -447,6 +455,9 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         split_seed: int = 42,
         input_size: int = 384,
         min_stability: float = 0.80,
+        cohort_size: int | None = None,
+        cohort_ids: set[int] | None = None,
+        gt_index_path: Path | str | None = None,
         augmentation: AugmentationConfig | None = None,
         regular_min_side: float = 8.0,
         seed: int = 42,
@@ -460,6 +471,9 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         @param split_seed Seed for deterministic stratified cohort splitting.
         @param input_size Input image resolution for the detector (e.g. 384).
         @param min_stability Minimum SAM mask stability score to accept as positive novel.
+        @param cohort_size If 10000, restrict strictly to the balanced 10k cohort.
+        @param cohort_ids Optional set of explicit image IDs to restrict the cohort.
+        @param gt_index_path Path to authoritative quad_train.sqlite index.
         @param augmentation Data augmentation configuration (used when split='train').
         @param regular_min_side Minimum side length in pixels to accept regular quad.
         @param seed Runtime random seed for epoch-dependent augmentations.
@@ -479,6 +493,11 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
                 f"Pseudo-labels file not found: {self.pseudo_labels_path}"
             )
 
+        if cohort_size == 10000 and cohort_ids is None:
+            from .human_gt_data import DEFAULT_GT_INDEX_PATH, get_stage2_10k_cohort_ids
+
+            cohort_ids = get_stage2_10k_cohort_ids(gt_index_path or DEFAULT_GT_INDEX_PATH)
+
         (
             self.images,
             self.indices,
@@ -492,6 +511,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
             val_ratio=val_ratio,
             split_seed=split_seed,
             min_stability=min_stability,
+            cohort_ids=cohort_ids,
         )
 
         if augmentation is None:
@@ -609,6 +629,9 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         split_seed: int = 42,
         input_size: int = 384,
         min_stability: float = 0.80,
+        cohort_size: int | None = None,
+        cohort_ids: set[int] | None = None,
+        gt_index_path: Path | str | None = None,
         augmentation: AugmentationConfig | None = None,
         tiny_area: float = 4.0,
         tiny_min_side: float = 2.0,
@@ -623,6 +646,9 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         @param split_seed Seed for deterministic stratified cohort splitting.
         @param input_size Input image resolution for the detector (e.g. 384).
         @param min_stability Minimum SAM mask stability score to accept as positive novel.
+        @param cohort_size If 10000, restrict strictly to the balanced 10k cohort.
+        @param cohort_ids Optional set of explicit image IDs to restrict the cohort.
+        @param gt_index_path Path to authoritative quad_train.sqlite index.
         @param augmentation Data augmentation configuration (used when split='train').
         @param tiny_area Minimum pixel area in resized input space to retain box.
         @param tiny_min_side Minimum side length in resized input space to retain box.
@@ -646,6 +672,11 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
                 f"Pseudo-labels file not found: {self.pseudo_labels_path}"
             )
 
+        if cohort_size == 10000 and cohort_ids is None:
+            from .human_gt_data import DEFAULT_GT_INDEX_PATH, get_stage2_10k_cohort_ids
+
+            cohort_ids = get_stage2_10k_cohort_ids(gt_index_path or DEFAULT_GT_INDEX_PATH)
+
         (
             self.images,
             self.indices,
@@ -659,6 +690,7 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
             val_ratio=val_ratio,
             split_seed=split_seed,
             min_stability=min_stability,
+            cohort_ids=cohort_ids,
         )
 
         if augmentation is None:

@@ -175,6 +175,20 @@ def parse_args() -> argparse.Namespace:
         help="Path to checkpoint file for evaluation.",
     )
     parser.add_argument(
+        "--cohort-size",
+        type=int,
+        default=10000,
+        help="Cohort size limit (default: 10000 for standard 10k dataset; set 0 for all DB images).",
+    )
+    parser.add_argument(
+        "--gt-index",
+        type=Path,
+        default=Path(
+            "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite"
+        ),
+        help="Path to authoritative quad_train.sqlite ground-truth index for cohort filtering.",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -193,7 +207,7 @@ def train() -> None:
         f"Device: {device} ({torch.cuda.get_device_name(0) if device.type == 'cuda' else 'CPU'})"
     )
     print(
-        f"Configuration: geometry={args.geometry}, epochs={args.epochs}, batch_size={args.batch_size}, lr={args.lr}, input_size={args.input_size}"
+        f"Configuration: geometry={args.geometry}, epochs={args.epochs}, batch_size={args.batch_size}, lr={args.lr}, input_size={args.input_size}, cohort_size={args.cohort_size}"
     )
     print(f"Pseudo-labels: {args.pseudo_labels}")
 
@@ -204,6 +218,7 @@ def train() -> None:
     # 1. Datasets and Loaders
     val_pseudo_labels = args.val_pseudo_labels or args.pseudo_labels
     train_split = "all" if args.val_pseudo_labels else "train"
+    cohort_size = args.cohort_size if args.cohort_size > 0 else None
     if args.geometry == "hbb":
         train_dataset = SAMStudentHBBDataset(
             pseudo_labels_path=args.pseudo_labels,
@@ -212,6 +227,8 @@ def train() -> None:
             val_ratio=0.20,
             input_size=args.input_size,
             min_stability=args.min_stability,
+            cohort_size=cohort_size,
+            gt_index_path=args.gt_index,
         )
         val_dataset = SAMStudentHBBDataset(
             pseudo_labels_path=val_pseudo_labels,
@@ -230,6 +247,8 @@ def train() -> None:
             val_ratio=0.20,
             input_size=args.input_size,
             min_stability=args.min_stability,
+            cohort_size=cohort_size,
+            gt_index_path=args.gt_index,
         )
         val_dataset = SAMStudentDataset(
             pseudo_labels_path=val_pseudo_labels,
