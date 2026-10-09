@@ -1,240 +1,251 @@
-# Implementation Plan: Multi-Domain Dataset Expansion (Roadside Infrastructure & Indoor Parking Facilities)
+# Implementation Plan: Multi-Domain Dataset Expansion & Limited-Scope Enrichment
 
 **Document ID:** `05_dataset_expansion_plan.md`  
-**Status:** Approved Technical Architecture Contract  
-**Scope:** Expanding student detector perception across roadside infrastructure and indoor structured parking facilities.
+**Status:** Approved Technical Architecture & Operational Roadmap  
+**Target Storage:** External SSD (`/media/sashamikoff/fb.com-mikoff/datasets/public/`)  
+**Target Database:** `quad_train_enriched.sqlite` (Cloned from `quad_train.sqlite`)  
+**Scope:** Expanding student detector perception across roadside infrastructure and indoor structured parking facilities with a safe, limited-scope Phase 1 curriculum.
 
 ---
 
-## 1. Goal Description
+## 1. Executive Summary & Phased Scoping
 
-The objective is to expand the visual inference perception pipeline to detect:
-1. **Indoor Parking Facility Features**: Concrete support pillars, marked parking bays (perpendicular and slanted), ground navigation arrows, low-clearance overhead barriers, wall-mounted/standalone EV chargers, and speed bumps under artificial lighting.
-2. **Roadside Infrastructure & Street Furniture**: Utility boxes/cabinets, pillars, traffic cones, traffic lights, trees, trash bins, bus stops, barriers (guard rails, fences, jersey barriers), roofs/canopies, and solar chargers.
+The visual inference student detector (`MobileNetV4-Conv-Medium` with P2 Lite-FPN) has achieved solid performance on road traffic participants (vehicles, pedestrians, cyclists), achieving **77.01% GT Recall@100@50** on Quads and **54.38%** on HBBs. However, robust operational deployment across automated parking, low-speed delivery robotics, and curbside perception requires extending detection capabilities to:
+1. **Vertical Roadside Furniture & Micro-Infrastructure**: Structural pillars/columns, utility boxes/cabinets, waste containers, street lights, traffic cones, fire hydrants, parking meters, barriers, and clean-energy infrastructure (EV chargers, solar panels).
+2. **Indoor Parking Facilities & Underground Garages**: Concrete support pillars, marked parking bays (perpendicular and slanted), ground navigation arrows, low-clearance barriers, and wall-mounted EV charging units under artificial lighting.
 
-### User Requirements Alignment:
-- **Dual Camera Optics**: Must handle both **perspective cameras** (~60°–100° FoV) and **wide-angle / fisheye cameras** (180°+ FoV).
-- **Commercial-First Licensing**: Prioritize commercial-friendly permissive datasets (BSD-3, CC-BY 4.0, MIT) while maintaining an optional research-tier extension (Mapillary Vistas 2.0, Tongji PS2.0) that can be enabled when license constraints allow.
-- **Equal Domain Weight**: Balanced 50/50 dataset curriculum between indoor parking lots and roadside street corridors.
-
----
-
-## 2. In-Depth Comparative Dataset Matrix
-
-| Dataset | Primary Domain | Target Features Covered | Size & Format | Geometry Fit | License | Commercial Viability |
-|---|---|---|---|---|---|---|
-| **ADE20K (SceneParse150)** | Indoor & Outdoor Complex Scenes | Pillars/columns (class 43), trash cans, signboards, traffic lights, trees, canopies, streetlights, building facades | 25,000 images with 150 semantic categories | Instance segmentation masks &rarr; HBB & Quad | **BSD-3** | **Fully Commercial** |
-| **Open Images V7 (Subset)** | Universal Objects | Waste containers, solar panels, EV charging stations, traffic cones, billboards, streetlights | Filterable subset (~30k images) | Bounding boxes & instance masks | **CC-BY 4.0** | **Fully Commercial** |
-| **BDD100k + WoodScape + COCO** | Automotive Highway & Fisheye | Traffic lights, traffic signs, barriers, poles, pedestrians, vehicles | ~267,800 images in current index | Clockwise Quads + HBBs | **BSD-3 / CC-BY** | **Fully Commercial** |
-| **Curated Roboflow EV & Parking** | Niche Infrastructure | EV chargers (wallboxes & superchargers), indoor garage pillars, warehouse cones | 5,000–10,000 images across community sets | YOLO/COCO bounding boxes | **CC-BY / MIT** | **Fully Commercial** |
-| **Mapillary Vistas 2.0 (MVD)** | Roadside & Urban Streets | Trash bins, utility poles, street lights, traffic lights, cones, temporary barriers, guard rails, fences, bus stops, billboards, manholes, catch basins, crosswalks, arrows, roofs | 25,000 images (up to 4K resolution) | Dense instance polygon masks &rarr; HBB & Quad | **CC-BY-NC-SA 4.0** | Research Tier (Commercial Fee) |
-| **Tongji Parking-Slot 2.0 (PS2.0)** | Indoor Garages & Outdoor Parking | Parking slots (parallel, perpendicular, slanted), ground arrows, pillars, speed bumps, obstacles | 12,165 images (perspective & AVM) | Ground slot corner coordinates &rarr; Quad | **Academic Open** | Research Tier |
-| **AVP-SLAM / VISSLAM** | Indoor Structured Garages | Concrete pillars, parking lines, slot corners, floor arrows, speed bumps, low-light corridors | ~10k synchronized frames with surround & front views | Semantic point/polygon markings | **Research Open** | Research Tier |
-| **ApolloScape Road Markings** | Road & Parking Surfaces | 28 road marking types: 12 arrow varieties, parking zone boundaries, zebra lines, stop lines, text | 200,000+ images (HD perspective) | Vectorized lane/marking segmentation &rarr; Quad | **Non-commercial** | Research Tier |
+### Phase 1 Limited-Scope Strategy:
+Rather than ingesting massive raw web corpora that would overwhelm local storage, this roadmap implements a **strictly bounded, high-signal enrichment**:
+- **Reuses Existing Corpora**: Preserves our verified BDD100k, COCO 2017, nuImages, and WoodScape Fisheye splits (already present on SSD).
+- **Ingests Exactly Three New Permissive Datasets**:
+  1. **ADE20K (SceneParse150)** (BSD-3): Architectural pillars/columns, trash cans, street lamps, signboards, and canopies.
+  2. **Open Images V7 (Expanded Domain Subset)** (CC-BY 4.0): Charging stations, parking meters, fire hydrants, solar panels, traffic cones, waste containers, fences, shopping carts, strollers, wheelchairs, and roadside assets.
+  3. **Curated Roboflow EV & Parking Dataset** (CC-BY / MIT): Dedicated EV wallboxes/superchargers, indoor parking bays (slanted/perpendicular), ground arrows, and garage pillars.
+- **Explicitly Excludes in Phase 1**: Mapillary Vistas 2.0 (commercial license fee), Tongji PS2.0, ApolloScape, and large-scale bulk web dumps.
 
 ---
 
-## 3. Tiered Licensing Strategy
+## 2. Storage Topology & External SSD Safety Gate
+
+### Hardware Storage Constraints:
+- **Internal System Disk (`/`)**: 466 GB total, **only 20 GB available (96% full)**. Under no circumstances may raw downloads, uncompressed image archives, or SQLite database duplicates be placed on `/`.
+- **External SSD (`/media/sashamikoff/fb.com-mikoff`)**: 916 GB total, **424 GB available (52% free)**. All downloads, raw files, manifests, and database copies reside strictly here.
+
+### External SSD Directory Layout:
+```
+/media/sashamikoff/fb.com-mikoff/datasets/public/
+├── incoming_enrichment/
+│   ├── ade20k/
+│   │   ├── archives/                 # ADEChallengeData2016.zip (~900 MB)
+│   │   ├── raw/                      # Extracted images & annotations
+│   │   └── manifests/                # Filtered positive instance manifest
+│   ├── open_images_subset/
+│   │   ├── metadata/                 # train-annotations-bbox.csv (~75 MB)
+│   │   │                             # class-descriptions-boxable.csv
+│   │   ├── raw/                      # Filtered image downloads (~1.5–2.0 GB)
+│   │   └── manifests/                # proposal-manifest.v2 export
+│   └── roboflow_ev_parking/
+│       ├── raw/                      # Curated COCO/YOLO zip exports (~600 MB)
+│       └── manifests/                # Converted manifests with oriented quads
+├── quad_train_enriched.sqlite        # Cloned & enriched working database (~5.6 GB)
+└── quad_val_enriched.sqlite          # Cloned validation database (~350 MB)
+```
+
+---
+
+## 3. Database Cloning & Non-Overlapping Namespace Contract
+
+To ensure that the production training index ([`quad_train.sqlite`](file:///home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite), 267,800 images, 5.07 GB) remains completely intact, pristine, and reproducible:
+
+### 1. Atomic Clone Execution:
+```bash
+# 1. Clone quad_train.sqlite to external SSD
+cp /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite \
+   /media/sashamikoff/fb.com-mikoff/datasets/public/quad_train_enriched.sqlite
+
+# 2. Symlink back to the visual-inference output indexes directory
+ln -sf /media/sashamikoff/fb.com-mikoff/datasets/public/quad_train_enriched.sqlite \
+   /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite
+```
+
+### 2. Primary Key Namespace Partitioning:
+Existing records occupy IDs `1` through `~267,800`. The new datasets are allocated dedicated non-overlapping numeric ranges:
+- **Existing Ingested Corpora**: `1` – `499,999` (BDD100k, COCO 2017, nuImages, WoodScape)
+- **ADE20K Subset**: `500,000` – `599,999`
+- **Open Images V7 Subset**: `600,000` – `699,999`
+- **Curated Roboflow EV & Parking**: `700,000` – `799,999`
+
+### 3. SQLite Schema v8 Strict Compliance:
+All inserted rows must adhere strictly to the SQLite v8 contract:
+- `images` table: `(row_index, image_id, file_name, width, height, source_dataset, camera_type, background_supervision, positive_count)`
+- `annotations` table: `(image_id, x1, y1, x2, y2, ignore_region, category_name, object_condition, quad_json, geometry_tier, fit_coverage, fit_tightness, seen_status)`
+
+---
+
+## 4. Open Images V7: Comprehensive Domain Class Catalog
+
+Open Images V7 provides 600 boxable categories under permissive CC-BY 4.0 licensing. We filter exclusively for classes directly applicable to roadside corridors, curbside environments, parking facilities, and robotic navigation hazards.
+
+### Targeted Domain Classes & Rationale:
+
+| Category Group | Open Images MID | Label / Class Name | Target Geometry | Operational Robotics & Domain Rationale |
+| :--- | :--- | :--- | :--- | :--- |
+| **Curbside & Roadside Infrastructure** | `/m/0g4cdk` | **Charging station** | Tight HBB + Quad | EV charging pedestals, fast-charging cabinets, curbside plugs. |
+| | `/m/015p6` | **Parking meter** | Tight HBB | Paid curbside parking markers; vertical sidewalk collision hazards. |
+| | `/m/01pns0` | **Fire hydrant** | Tight HBB | Universal curbside obstacle; critical legal no-parking demarcator. |
+| | `/m/033rq4` | **Street light** | Tight HBB | Tall vertical poles along roads and parking lot dividers/islands. |
+| | `/m/015qff` | **Traffic light** | Tight HBB | Overhead and pole-mounted signals; garage ramp control lights. |
+| | `/m/01mqdt` | **Traffic sign** | Tight HBB + Quad | Road signs, parking restriction signs, speed limits, wayfinding. |
+| | `/m/02pv19` | **Stop sign** | Tight HBB + Quad | High-priority regulatory signage at garage exits and intersections. |
+| | `/m/0159k` | **Traffic cone** | Tight HBB | Temporary work zones, blocked parking spots, lane guides. |
+| | `/m/02zn6n` | **Waste container** | Tight HBB + Quad | Curbside wheelie bins, dumpster enclosures, commercial trash bins. |
+| | `/m/034c16` | **Mailbox** | Tight HBB | Curbside postal boxes and residential driveway boundary hazards. |
+| | `/m/01kn49` | **Billboard** | Tight HBB + Quad | Elevated roadside signage, rate boards at parking lot entries. |
+| **Perimeter & Street Furniture** | `/m/015kr` | **Fence** | Tight HBB + Quad | Parking lot perimeter fences, construction barriers, chain-link. |
+| | `/m/0cvnqh` | **Bench** | Tight HBB | Sidewalk furniture, pedestrian rest areas in transit hubs. |
+| | `/m/01642q` | **Solar panel** | Oriented Quad + HBB | Solar parking canopies, green carport roofs, roadside solar banks. |
+| | `/m/02522` | **Porch / Canopy** | Tight HBB + Quad | Overhead garage entrance canopies, carport shade roofs, gas station awnings. |
+| | `/m/07j7r` | **Tree** | Tight HBB | Roadside tree trunks and low-hanging branches encroaching on bays. |
+| **Parking Hazards & Mobile Obstacles** | `/m/0kmg4` | **Shopping cart** | Tight HBB | Ubiquitous hazard in commercial/retail parking lots; rolls into stalls. |
+| | `/m/018xm` | **Baby carriage / Stroller**| Tight HBB | High-vulnerability dynamic hazard in parking lanes and crosswalks. |
+| | `/m/0qmmr` | **Wheelchair** | Tight HBB | Accessible ADA parking stalls, loading aisles, pedestrian ramps. |
+| | `/m/01s55n` | **Luggage and bags** | Tight HBB | Hotel/airport curbside drop-off zones, temporary aisle clutter. |
+| | `/m/0199g` | **Bicycle** | Tight HBB | Two-wheelers parked in or between stalls, rack enclosures. |
+| | `/m/04_sv` | **Motorcycle** | Tight HBB | Compact motorized vehicles occupying full or partial parking bays. |
+| **Logistics & Commercial Vehicles** | `/m/02q3bx` | **Forklift** | Tight HBB | Industrial parking lots, warehouse loading zones, freight docks. |
+| | `/m/078jl` | **Trailer** | Tight HBB + Quad | Detached boat/cargo trailers parked in vehicle stalls or shoulders. |
+| **Surface Features** | `/m/02688pb` | **Manhole** | Oriented Quad + HBB | Storm drains, utility access covers on roadway/parking pavement. |
+
+---
+
+## 5. Curated Roboflow EV & Parking Dataset Details
+
+To fill the specific gap in **floor-plane markings** and **niche indoor EV equipment** not covered by standard COCO or Open Images:
+
+1. **EV Infrastructure**:
+   - Wallbox chargers (residential & commercial garage walls).
+   - High-voltage public DC superchargers.
+   - Charging plugs, cables, and holsters.
+2. **Indoor Structured Parking Features**:
+   - Marked parking bays (perpendicular, parallel, and slanted).
+   - Ground navigation arrows (straight, left, right, bidirectional).
+   - Concrete basement support pillars and low-clearance overhead hanging beams.
+3. **Geometry Treatment**:
+   - **Parking slots and ground arrows** are ingested directly as **oriented clockwise 4-corner Quads** (`geometry_tier = 'quad'`).
+   - Supervised using Gaussian Wasserstein Distance (GWD) loss + Corner $\mathcal{L}_1$ loss to train the student's `QuadProposalDetector` directly on angled perspective ground planes.
+   - Expected yield: **~2,000 to 2,500 annotated images**.
+
+---
+
+## 6. ADE20K SceneParse150 Ingestion Details
+
+ADE20K provides dense scene segmentations across 150 categories with permissive BSD-3 licensing:
+- **Class 43**: `column; pillar` &rarr; Concrete support pillars in basements and outdoor arcades.
+- **Class 143**: `ashcan; trash can; garbage can; wastebin` &rarr; Street and sidewalk trash bins.
+- **Class 41**: `street lamp; streetlight` &rarr; Lighting fixtures and poles.
+- **Class 82**: `signboard; sign` &rarr; Directional and parking regulatory signs.
+- **Class 87**: `canopy; awning` &rarr; Overhead carport canopies and garage entrances.
+- **Contour Extraction**: Segmented instance masks are traced with Douglas-Peucker polygon approximation to yield both tight clockwise 4-corner Quads and bounding envelopes $(x_1, y_1, x_2, y_2)$.
+- Expected yield: **~1,500 to 2,000 images**.
+
+---
+
+## 7. Two-Level Data Balancing Curriculum
 
 ```mermaid
 graph TD
-    subgraph Tier1["Tier 1: Commercial-Safe Core (Default)"]
-        T1A["ADE20K (BSD-3)\nPillars, Trash Bins, Posts, Signs"]
-        T1B["Open Images V7 (CC-BY 4.0)\nEV Stations, Solar Panels, Waste Containers"]
-        T1C["Existing Ingested Core (BSD-3 / CC-BY)\nBDD100k + WoodScape Fisheye + COCO 2017"]
-        T1D["Curated Garage Benchmarks (CC-BY)\nIndoor Pillars & Marked Slots"]
+    subgraph Balancing["Two-Level Balancing Curriculum"]
+        L1["Level 1: Domain-Level Cohort Quotas\n(Balanced 14,000-Image Curriculum)"]
+        L2["Level 2: Class & Instance-Level Capping\n(Min Area 8x8, Max 5/class/img, Zero Background)"]
     end
 
-    subgraph Tier2["Tier 2: Extended Research Fallback (Flag-Toggled)"]
-        T2A["Mapillary Vistas 2.0 (CC-BY-NC-SA)\n124 Street Asset Classes"]
-        T2B["Tongji PS2.0 / VISSLAM (Research)\n12k Underground Garage Frames"]
-        T2C["ApolloScape Markings (Non-commercial)\n28 Road Marking & Arrow Types"]
+    subgraph Cohorts["Balanced 14,000 Training Cohort"]
+        C1["COCO 2017: 2,500 imgs (17.9%)\nGeneral Object Baseline"]
+        C2["BDD100k: 2,000 imgs (14.3%)\nUrban Roadway Driving"]
+        C3["nuImages: 1,500 imgs (10.7%)\nMulti-Camera Road Participants"]
+        C4["WoodScape: 1,500 imgs (10.7%)\nFisheye Surround Optics"]
+        C5["ADE20K Subset: 2,000 imgs (14.3%)\nPillars, Trash Bins, Lamps, Canopies"]
+        C6["Open Images Subset: 2,000 imgs (14.3%)\nCharging Stations, Meters, Hydrants, Carts"]
+        C7["Roboflow EV & Parking: 2,500 imgs (17.8%)\nEV Wallboxes, Marked Bays, Garage Pillars"]
     end
 
-    subgraph Pipeline["Unified Storage & Student Training"]
-        Store["quad_train.sqlite Extended Engine\n(--tier commercial | --tier all)"]
-    end
-
-    T1A --> Store
-    T1B --> Store
-    T1C --> Store
-    T1D --> Store
-    T2A -. Optional .-> Store
-    T2B -. Optional .-> Store
-    T2C -. Optional .-> Store
+    L1 --> Cohorts
+    L2 --> Cohorts
 ```
 
-- **Tier 1 (Commercial-Safe Core — Recommended Default)**:
-  - 100% commercially unencumbered models trained exclusively on BSD-3 and CC-BY 4.0 datasets.
-  - Covers all essential categories: pillars, trash cans, signs, posts, EV chargers, solar panels, cones, vehicles.
-- **Tier 2 (Extended Research Fallback — Optional `--tier all`)**:
-  - Incorporates Mapillary Vistas 2.0 and Tongji PS2.0 for maximum benchmark accuracy when academic/research exemptions apply.
+### 1. Level 1: Domain Cohort Quotas (`STAGE2_COHORT_QUOTAS`)
+To prevent dominant highway driving frames from overwhelming rare infrastructure classes:
+
+| Dataset Cohort | Domain Specialization | Quota (Images) | Share | Target Semantic Representation |
+| :--- | :--- | :---: | :---: | :--- |
+| `coco_2017` | General open-world objects | 2,500 | 17.9% | Persons, bicycles, common objects |
+| `bdd100k_images_100k` | Roadway & highway driving | 2,000 | 14.3% | Traffic lights, vehicles, road barriers |
+| `nuimages` | Multi-view automotive | 1,500 | 10.7% | Close-proximity road participants |
+| `woodscape_rgb_fisheye` | Fisheye surround optics | 1,500 | 10.7% | Fisheye distorted instances, curbs |
+| `ade20k` | Architectural & street furniture | 2,000 | 14.3% | **Pillars/columns**, trash cans, canopies |
+| `open_images_subset` | Curbside & parking hazards | 2,000 | 14.3% | **EV stations, hydrants, meters, carts, cones** |
+| `roboflow_ev_parking` | Indoor garages & EV facilities | 2,500 | 17.8% | **EV wallboxes, parking slots, garage pillars** |
+| **Total Enriched Cohort** | **Multi-Domain Unified Curriculum** | **14,000** | **100%** | **Balanced across all operational domains** |
+
+### 2. Level 2: Instance-Level Filtering Rules
+- **Zero Empty Background Images**: Every ingested image must contain at least 1 verified target instance.
+- **Minimum Resolution Gate**: Discard bounding boxes $< 8 \times 8$ px in raw space to eliminate annotation noise.
+- **Instance Capping**: Cap dominant background instances (e.g., maximum 5 cones or signboards per image) so loss backpropagation is not dominated by dense repetitive clusters.
+- **Clockwise Quad Normalization**: Enforce top-left clockwise vertex ordering: $(p_0, p_1, p_2, p_3)$.
 
 ---
 
-## 4. Dual-Geometry Representation (HBB vs. Quad)
+## 8. Dual-Geometry Representation (HBB vs. Quad)
 
-- **Vertical Features** (pillars, trash bins, utility boxes, EV chargers, bus stops):
-  - In standard perspective view, these have dominant vertical bounding axes.
-  - Supervised by both **HBB** (`StudentDetector`) and oriented **Quad**.
-- **Floor Plane Features** (slanted parking spots, ground arrows, speed bumps):
-  - In perspective and fisheye cameras, planar road markings have extreme perspective slant and curvature.
+- **Vertical Features** (pillars, EV chargers, parking meters, fire hydrants, trash bins, light poles):
+  - Upright orientation in perspective camera views.
+  - Supervised by both **HBB** (`StudentDetector`) and oriented **Quad** (`QuadProposalDetector`).
+- **Planar Ground Markings** (perpendicular/slanted parking bays, ground navigation arrows, speed bumps):
+  - Suffer from severe perspective foreshortening and curvature in wide-angle/fisheye lenses.
   - Axis-aligned HBBs enclose large areas of irrelevant road asphalt, destroying IoU.
-  - Supervised by our **4-corner oriented Quad detector (`QuadProposalDetector`)** with Gaussian Wasserstein Distance (GWD) loss.
+  - Supervised exclusively as **oriented 4-corner Quads** using Gaussian Wasserstein Distance (GWD) loss + Corner $\mathcal{L}_1$ loss.
 
 ---
 
-## 5. Technical Architecture & Proposed Changes
+## 9. Step-by-Step Implementation Roadmap
 
-```mermaid
-flowchart TD
-    subgraph DataIngestion["dataset-pipeline (New Adapters)"]
-        ADE["ADE20K Adapter\n(Pillars, Trash Bins, Posts)"]
-        OIV["Open Images V7 Adapter\n(EV Chargers, Solar, Boxes)"]
-        PS2["PS2.0 / Parking Adapter\n(Slots, Arrows, Garage Pillars)"]
-        MVD["Mapillary Vistas Adapter\n(Street Furniture, Barriers)"]
-    end
-
-    subgraph Normalization["Manifest & SQLite Exporter"]
-        Norm["proposal-manifest.v2 Normalizer\n(Clockwise Quads + Tight HBBs)"]
-        ADE --> Norm
-        OIV --> Norm
-        PS2 --> Norm
-        MVD --> Norm
-        Norm --> DB[("quad_train.sqlite\n(Extended Multi-Domain Database)")]
-    end
-
-    subgraph ModelTraining["visual-inference (Dual Geometry)"]
-        HBB_FT["Stage 2 HBB Fine-Tuning\n(Vertical Infrastructure)"]
-        QUAD_FT["Stage 2 Quad Fine-Tuning\n(Floor Slots, Arrows, Fisheye)"]
-        DB --> HBB_FT
-        DB --> QUAD_FT
-    end
-
-    subgraph Export["Edge Deployment"]
-        RPI["Raspberry Pi 5 Export\n(ONNX / NCNN / TFLite)"]
-        HBB_FT --> RPI
-        QUAD_FT --> RPI
-    end
 ```
+Phase 1: External SSD Download & Curation
+  ├── 1.1 Download ADEChallengeData2016.zip (~900 MB) to /media/.../incoming_enrichment/ade20k/
+  ├── 1.2 Download Open Images bbox CSV & target image subset (~1.8 GB) to open_images_subset/
+  └── 1.3 Download curated Roboflow EV & Parking dataset archives (~600 MB) to roboflow_ev_parking/
 
-### Component 1: `dataset-pipeline` (Data Ingestion & Normalization)
+Phase 2: Database Cloning & Ingestion Adapters
+  ├── 2.1 Copy quad_train.sqlite -> quad_train_enriched.sqlite on external SSD
+  ├── 2.2 Symlink quad_train_enriched.sqlite to data/visual-inference-datasets/output/indexes/
+  ├── 2.3 Implement adapter scripts:
+  │     ├── scripts/ingest_ade20k.py
+  │     ├── scripts/ingest_open_images.py
+  │     └── scripts/ingest_roboflow_ev_parking.py
+  └── 2.4 Atomically insert records into quad_train_enriched.sqlite with isolated namespaces
 
-#### [NEW] `projects/visual-inference/dataset-pipeline/dataset_pipeline/ade20k_adapter.py`
-Parses ADE20K semantic and instance annotations into `proposal-manifest.v2`:
-- Extracts `column; pillar` (Class 43), `ashcan; trash can`, `signboard`, `canopy`, `post`.
-- Filters for indoor garages, structured basements, and street corridors.
-- Fits Douglas-Peucker polygons to produce clockwise 4-corner Quads and HBBs.
+Phase 3: Validation & Quality Auditing
+  ├── 3.1 Verify SQLite integrity (PRAGMA integrity_check, zero FK violations)
+  ├── 3.2 Verify image symlinks and resolution bounds
+  └── 3.3 Generate visual audit preview (60 samples verifying tight boxes & quads)
 
-#### [NEW] `projects/visual-inference/dataset-pipeline/dataset_pipeline/open_images_adapter.py`
-Downloads and converts targeted Open Images V7 subsets:
-- Queries `/m/0g4cdk` (`Charging station`), `/m/01642q` (`Solar panel`), `/m/02zn6n` (`Waste container`), `/m/0159k` (`Traffic cone`), `/m/01kn49` (`Billboard`).
-- Normalizes bounding boxes and verifies image integrity.
-
-#### [NEW] `projects/visual-inference/dataset-pipeline/dataset_pipeline/parking_slot_adapter.py`
-Ingests Tongji PS2.0 and curated CC-BY indoor parking datasets:
-- Maps parking slot corner point pairs $(p_1, p_2, p_3, p_4)$ directly into our 4-corner clockwise Quad representation.
-- Ingests indoor garage support pillars and ground navigation arrows.
-- Preserves both perspective camera frames and Around-View Monitor (AVM) fisheye images.
-
-#### [MODIFY] `projects/visual-inference/dataset-pipeline/dataset_pipeline/taxonomy.py`
-Update canonical taxonomy mappings to include the new object classes:
-```python
-CANONICAL_EXTENDED: tuple[str, ...] = (
-    "pillar",
-    "trash_bin",
-    "utility_box",
-    "parking_slot",
-    "road_arrow",
-    "ev_charger",
-    "solar_panel",
-    "bus_stop",
-    "barrier",
-    "traffic_light",
-    "tree",
-    "roof",
-)
+Phase 4: DataLoader & Orchestrator Integration
+  ├── 4.1 Update STAGE2_COHORT_QUOTAS in student_detector/human_gt_data.py
+  ├── 4.2 Update scripts/run_two_stage_pipeline.sh with --gt-index quad_train_enriched.sqlite
+  └── 4.3 Run Stage-2 Fine-Tuning across HBB and Quad geometries
 ```
 
 ---
 
-### Component 2: `student_detector` (Ontology & Data Loaders)
+## 10. Verification Plan & Success Criteria
 
-#### [MODIFY] `projects/visual-inference/student_detector/ontology.py`
-Promote `empty_parking_bay` from `unsupported` to `evaluable`, and register new target categories:
-```python
-READINESS_STATUS.update({
-    "pillar": "evaluable",
-    "trash_bin": "evaluable",
-    "utility_box": "evaluable",
-    "parking_slot": "evaluable",
-    "road_arrow": "evaluable",
-    "ev_charger": "evaluable",
-    "solar_panel": "evaluable",
-    "bus_stop": "evaluable",
-    "barrier": "evaluable",
-    "traffic_light": "evaluable",
-    "tree": "evaluable",
-    "roof": "evaluable",
-})
-```
+### 1. Storage & Database Safety Gates:
+- Root disk `/` space remains $> 18$ GB free at all times; all downloads and writes stay on external SSD.
+- Original `quad_train.sqlite` checksum is unchanged; `quad_train_enriched.sqlite` passes `PRAGMA integrity_check`.
 
-#### [MODIFY] `projects/visual-inference/student_detector/human_gt_data.py`
-Update `HumanGTHBBDataset` to support querying the extended categories and filtering by domain (`indoor_parking`, `roadside`, `automotive_highway`).
-
-#### [NEW] `projects/visual-inference/student_detector/human_gt_quad_data.py`
-Create a high-performance DataLoader for **Quad Proposal Training** directly on human ground-truth boxes and oriented polygons:
-- Unpacks `quad_json` coordinates `[4, 2]` into tensor vertices `[N, 8]`.
-- Implements spatial jitter and affine letterboxing while strictly preserving clockwise winding.
-- Computes valid pixel masks to prevent padding band artifacts on fisheye and perspective cameras.
-
----
-
-### Component 3: Training & Orchestration Scripts
-
-#### [NEW] `projects/visual-inference/scripts/download_infrastructure_datasets.py`
-Automated download script with checksum verification for:
-1. ADE20K SceneParse150 (BSD-3)
-2. Open Images V7 targeted infrastructure subset
-3. PS2.0 / AVP indoor parking benchmark
-
-#### [NEW] `projects/visual-inference/scripts/finetune_student_multidomain.py`
-Extends `finetune_student_gt.py` to support:
-- Multi-domain curriculum balancing (50% indoor parking / 50% roadside infrastructure).
-- Joint HBB and Quad geometry training with `dual_head=True`.
-- Smooth-$\mathcal{L}_1$ boundary regression (`ltrb_weight=0.5`) + CIoU (`box_weight=2.0`) for HBB.
-- Corner $\mathcal{L}_1$ + Gaussian Wasserstein Distance (GWD) loss for Quads.
-
----
-
-## 6. Verification Plan
-
-### Automated Unit & Integration Tests
-
-1. **Dataset Pipeline Ingestion Tests**:
-   ```bash
-   cd projects/visual-inference/dataset-pipeline
-   uv run pytest tests/test_ade20k_adapter.py -v
-   uv run pytest tests/test_parking_slot_adapter.py -v
-   ```
-   *Verifies quad winding order (top-left clockwise), coordinate bounds within $[0, W] \times [0, H]$, and non-zero area.*
-
-2. **Student Detector Loss & Target Tests**:
-   ```bash
-   cd projects/visual-inference
-   uv run pytest tests/student_detector/test_human_gt_data.py -v
-   uv run pytest tests/student_detector/ -q
-   ```
-   *Ensures all 148 existing tests pass and target assignment handles parking slots and pillars without NaN losses.*
-
-### Empirical & Qualitative Verification
-
-1. **Before & After Model Comparison Dashboard**:
-   - Generate an interactive comparison dashboard evaluating 60 held-out images:
-     - 30 images from **indoor parking facilities** (underground garages, low-light corridors, pillars, slanted parking bays, floor arrows).
-     - 30 images from **roadside corridors** (trash bins, utility cabinets, bus stops, barriers, traffic lights, EV chargers).
-2. **Success Metrics**:
-   - **Indoor Pillar Recall@100@50**: $> 60\%$ (up from $< 15\%$ baseline).
-   - **Parking Slot & Arrow Quad AP@50**: $> 45\%$.
-   - **Roadside Furniture (Trash Bins, Utility Boxes) Recall@50**: $> 50\%$.
-   - **Zero Sky/Ceiling False Positives**: Verified with level masks.
+### 2. Empirical Model Evaluation Targets:
+- **Indoor Support Pillar Recall@100@50**: $> 60\%$ (up from $< 15\%$ baseline).
+- **EV Charger (Pedestal & Wallbox) Recall@100@50**: $> 55\%$.
+- **Parking Bay Slot & Ground Arrow Quad AP@50**: $> 45\%$.
+- **Roadside Furniture (Trash Bins, Hydrants, Meters) Recall@50**: $> 50\%$.
+- **Traffic Participant Preservation**: Retains $> 90\%$ of baseline recall on cars, pedestrians, and cyclists without catastrophic forgetting.
