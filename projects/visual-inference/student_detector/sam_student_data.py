@@ -49,6 +49,9 @@ SOURCE_DOMAINS: dict[str, str] = {
     "nuimages": "automotive",
     "bdd100k_images_100k": "automotive",
     "woodscape_rgb_fisheye": "fisheye",
+    "ade20k": "roadside",
+    "open_images_subset": "roadside",
+    "roboflow_ev_parking": "indoor_parking",
 }
 
 CAMERA_TYPES: dict[str, str] = {
@@ -56,6 +59,9 @@ CAMERA_TYPES: dict[str, str] = {
     "nuimages": "pinhole",
     "bdd100k_images_100k": "pinhole",
     "woodscape_rgb_fisheye": "fisheye",
+    "ade20k": "pinhole",
+    "open_images_subset": "pinhole",
+    "roboflow_ev_parking": "pinhole",
 }
 
 
@@ -114,9 +120,7 @@ def _load_pseudo_label_records(
         with sqlite3.connect(
             f"file:{pseudo_labels_path}?mode=ro&immutable=1", uri=True
         ) as conn:
-            cols = [
-                c[1] for c in conn.execute("PRAGMA table_info(images)").fetchall()
-            ]
+            cols = [c[1] for c in conn.execute("PRAGMA table_info(images)").fetchall()]
             has_explicit_val = False
             if "split" in cols:
                 has_explicit_val = bool(
@@ -228,9 +232,7 @@ def _load_pseudo_label_records(
                     if ann.get("source") == "human_gt":
                         total_gt += 1
                     elif ann.get("source") == "sam_discovered":
-                        if (
-                            ann.get("sam_stability_score") or 1.0
-                        ) >= min_stability:
+                        if (ann.get("sam_stability_score") or 1.0) >= min_stability:
                             total_novel += 1
                 elif ann.get("is_suppressed"):
                     total_suppressed += 1
@@ -493,10 +495,13 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
                 f"Pseudo-labels file not found: {self.pseudo_labels_path}"
             )
 
-        if cohort_size == 10000 and cohort_ids is None:
-            from .human_gt_data import DEFAULT_GT_INDEX_PATH, get_stage2_10k_cohort_ids
+        if cohort_size is not None and cohort_ids is None:
+            from .human_gt_data import DEFAULT_GT_INDEX_PATH, get_stage2_cohort_ids
 
-            cohort_ids = get_stage2_10k_cohort_ids(gt_index_path or DEFAULT_GT_INDEX_PATH)
+            cohort_ids = get_stage2_cohort_ids(
+                gt_index_path or DEFAULT_GT_INDEX_PATH,
+                target_count=cohort_size,
+            )
 
         (
             self.images,
@@ -616,7 +621,6 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         )
 
 
-
 class SAMStudentHBBDataset(Dataset[ProposalSample]):
     """PyTorch Dataset loading SAM discovery pseudo-labels and human GT as Horizontal Bounding Boxes (HBB)."""
 
@@ -672,10 +676,13 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
                 f"Pseudo-labels file not found: {self.pseudo_labels_path}"
             )
 
-        if cohort_size == 10000 and cohort_ids is None:
-            from .human_gt_data import DEFAULT_GT_INDEX_PATH, get_stage2_10k_cohort_ids
+        if cohort_size is not None and cohort_ids is None:
+            from .human_gt_data import DEFAULT_GT_INDEX_PATH, get_stage2_cohort_ids
 
-            cohort_ids = get_stage2_10k_cohort_ids(gt_index_path or DEFAULT_GT_INDEX_PATH)
+            cohort_ids = get_stage2_cohort_ids(
+                gt_index_path or DEFAULT_GT_INDEX_PATH,
+                target_count=cohort_size,
+            )
 
         (
             self.images,

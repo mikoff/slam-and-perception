@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import torch
 from torch.utils.data import DataLoader
 
 from student_detector.discovery_storage import (

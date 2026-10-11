@@ -40,6 +40,9 @@ from .sam_student_data import (
 DEFAULT_GT_INDEX_PATH = Path(
     "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite"
 )
+DEFAULT_ENRICHED_GT_INDEX_PATH = Path(
+    "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
+)
 
 STAGE2_COHORT_QUOTAS: dict[str, int] = {
     "coco_2017": 5000,
@@ -48,16 +51,36 @@ STAGE2_COHORT_QUOTAS: dict[str, int] = {
     "woodscape_rgb_fisheye": 1000,
 }
 
+STAGE2_ENRICHED_COHORT_QUOTAS: dict[str, int] = {
+    "coco_2017": 2500,
+    "bdd100k_images_100k": 2000,
+    "nuimages": 1500,
+    "woodscape_rgb_fisheye": 1500,
+    "ade20k": 2000,
+    "open_images_subset": 2000,
+    "roboflow_ev_parking": 2500,
+}
 
-def get_stage2_10k_cohort_ids(
+
+def get_stage2_cohort_ids(
     gt_index_path: Path | str = DEFAULT_GT_INDEX_PATH,
+    target_count: int | None = None,
 ) -> set[int]:
-    """Return the authoritative 10,000 image IDs matching the Stage-2 benchmark contract."""
+    """Return authoritative cohort image IDs matching the Stage-2 benchmark contract."""
+    index_str = str(gt_index_path)
+    is_enriched = "enriched" in index_str or (
+        target_count is not None and target_count > 10000
+    )
+    quotas = dict(
+        STAGE2_ENRICHED_COHORT_QUOTAS if is_enriched else STAGE2_COHORT_QUOTAS
+    )
+    limit = target_count or sum(quotas.values())
+
     with sqlite3.connect(f"file:{gt_index_path}?mode=ro&immutable=1", uri=True) as conn:
         rows = conn.execute(
             "SELECT image_id, source_dataset FROM images ORDER BY row_index"
         ).fetchall()
-    quotas = dict(STAGE2_COHORT_QUOTAS)
+
     observed: dict[str, int] = {k: 0 for k in quotas}
     selected_ids: set[int] = set()
     for r in rows:
@@ -66,9 +89,87 @@ def get_stage2_10k_cohort_ids(
         if source in quotas and observed[source] < quotas[source]:
             selected_ids.add(img_id)
             observed[source] += 1
-        if len(selected_ids) == 10000:
+        if len(selected_ids) >= limit:
             break
     return selected_ids
+
+
+def get_stage2_10k_cohort_ids(
+    gt_index_path: Path | str = DEFAULT_GT_INDEX_PATH,
+) -> set[int]:
+    """Backwards-compatible alias returning the 10,000 image cohort IDs."""
+    return get_stage2_cohort_ids(gt_index_path, target_count=10000)
+
+
+def load_cohort_image_records(
+    cohort_db_path: Path | str,
+    gt_index_path: Path | str,
+    cohort_size: int | None = 10000,
+) -> list[dict[str, Any]]:
+    """Load image records matching the requested cohort size and database indexes."""
+    cohort_path = Path(cohort_db_path)
+    gt_path = Path(gt_index_path)
+    is_enriched = "enriched" in str(gt_path) or (
+        cohort_size is not None and cohort_size > 10000
+    )
+
+    if is_enriched and (
+        cohort_path == DEFAULT_PSEUDO_LABELS_DB or cohort_path == gt_path
+    ):
+        target_ids = get_stage2_cohort_ids(gt_path, target_count=cohort_size)
+        with sqlite3.connect(f"file:{gt_path}?mode=ro&immutable=1", uri=True) as conn:
+            conn.execute(
+                "CREATE TEMP TABLE target_cohort_ids (image_id INTEGER PRIMARY KEY)"
+            )
+            conn.executemany(
+                "INSERT INTO target_cohort_ids VALUES (?)",
+                [(i,) for i in target_ids],
+            )
+            cohort_rows = conn.execute(
+                """
+                SELECT img.image_id, img.file_name, img.source_dataset, img.width, img.height
+                FROM images img
+                JOIN target_cohort_ids tgt ON img.image_id = tgt.image_id
+                ORDER BY img.image_id
+                """
+            ).fetchall()
+        return [
+            {
+                "image_id": int(r[0]),
+                "file_name": str(r[1]),
+                "source_dataset": str(r[2]),
+                "width": int(r[3]),
+                "height": int(r[4]),
+            }
+            for r in cohort_rows
+        ]
+
+    with sqlite3.connect(
+        f"file:{cohort_path}?mode=ro&immutable=1", uri=True
+    ) as cohort_conn:
+        cohort_rows = cohort_conn.execute(
+            "SELECT image_id, file_name, source_dataset, width, height FROM images ORDER BY image_id"
+        ).fetchall()
+
+    all_images = [
+        {
+            "image_id": int(r[0]),
+            "file_name": str(r[1]),
+            "source_dataset": str(r[2]),
+            "width": int(r[3]),
+            "height": int(r[4]),
+        }
+        for r in cohort_rows
+    ]
+
+    if cohort_size == 10000:
+        target_ids = get_stage2_10k_cohort_ids(gt_path)
+        all_images = [img for img in all_images if img["image_id"] in target_ids]
+    elif cohort_size is not None:
+        target_ids = get_stage2_cohort_ids(gt_path, target_count=cohort_size)
+        all_images = [img for img in all_images if img["image_id"] in target_ids]
+
+    return all_images
 
 
 class HumanGTHBBDataset(Dataset[ProposalSample]):
@@ -102,7 +203,7 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         @param val_ratio Fraction of images allocated to validation split.
         @param split_seed Seed for deterministic stratified cohort splitting.
         @param input_size Input image resolution for the detector (e.g. 384).
-        @param cohort_size If 10000, restrict strictly to the balanced 10k cohort.
+        @param cohort_size If specified, restrict to the target cohort size.
         @param augmentation Data augmentation configuration (used when split='train').
         @param tiny_area Minimum pixel area in resized input space to retain box.
         @param tiny_min_side Minimum side length in resized input space to retain box.
@@ -121,7 +222,10 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
 
         self._connection: sqlite3.Connection | None = None
 
-        if not self.cohort_db_path.exists():
+        is_enriched = "enriched" in str(self.gt_index_path) or (
+            cohort_size is not None and cohort_size > 10000
+        )
+        if not is_enriched and not self.cohort_db_path.exists():
             raise FileNotFoundError(f"Cohort database not found: {self.cohort_db_path}")
         if not self.gt_index_path.exists():
             raise FileNotFoundError(
@@ -129,27 +233,11 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
             )
 
         # 1. Fetch cohort images
-        with sqlite3.connect(
-            f"file:{self.cohort_db_path}?mode=ro&immutable=1", uri=True
-        ) as cohort_conn:
-            cohort_rows = cohort_conn.execute(
-                "SELECT image_id, file_name, source_dataset, width, height FROM images ORDER BY image_id"
-            ).fetchall()
-
-        all_images: list[dict[str, Any]] = [
-            {
-                "image_id": int(r[0]),
-                "file_name": str(r[1]),
-                "source_dataset": str(r[2]),
-                "width": int(r[3]),
-                "height": int(r[4]),
-            }
-            for r in cohort_rows
-        ]
-
-        if cohort_size == 10000:
-            target_ids = get_stage2_10k_cohort_ids(self.gt_index_path)
-            all_images = [img for img in all_images if img["image_id"] in target_ids]
+        all_images = load_cohort_image_records(
+            cohort_db_path=self.cohort_db_path,
+            gt_index_path=self.gt_index_path,
+            cohort_size=cohort_size,
+        )
 
         train_indices, val_indices = split_cohort_indices(
             all_images, val_ratio=val_ratio, seed=split_seed
@@ -309,34 +397,21 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         self._connection: sqlite3.Connection | None = None
         self._connection_pid: int | None = None
 
-        if not self.cohort_db_path.exists():
+        is_enriched = "enriched" in str(self.gt_index_path) or (
+            cohort_size is not None and cohort_size > 10000
+        )
+        if not is_enriched and not self.cohort_db_path.exists():
             raise FileNotFoundError(f"Cohort database not found: {self.cohort_db_path}")
         if not self.gt_index_path.exists():
             raise FileNotFoundError(
                 f"Human GT index database not found: {self.gt_index_path}"
             )
 
-        with sqlite3.connect(
-            f"file:{self.cohort_db_path}?mode=ro&immutable=1", uri=True
-        ) as cohort_conn:
-            cohort_rows = cohort_conn.execute(
-                "SELECT image_id, file_name, source_dataset, width, height FROM images ORDER BY image_id"
-            ).fetchall()
-
-        all_images: list[dict[str, Any]] = [
-            {
-                "image_id": int(r[0]),
-                "file_name": str(r[1]),
-                "source_dataset": str(r[2]),
-                "width": int(r[3]),
-                "height": int(r[4]),
-            }
-            for r in cohort_rows
-        ]
-
-        if cohort_size == 10000:
-            target_ids = get_stage2_10k_cohort_ids(self.gt_index_path)
-            all_images = [img for img in all_images if img["image_id"] in target_ids]
+        all_images = load_cohort_image_records(
+            cohort_db_path=self.cohort_db_path,
+            gt_index_path=self.gt_index_path,
+            cohort_size=cohort_size,
+        )
 
         train_indices, val_indices = split_cohort_indices(
             all_images, val_ratio=val_ratio, seed=split_seed
@@ -480,8 +555,14 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
 
 __all__ = [
     "DEFAULT_GT_INDEX_PATH",
+    "DEFAULT_ENRICHED_GT_INDEX_PATH",
+    "STAGE2_COHORT_QUOTAS",
+    "STAGE2_ENRICHED_COHORT_QUOTAS",
     "HumanGTHBBDataset",
     "HumanGTQuadDataset",
     "collate_proposal_samples",
     "collate_quad_proposal_samples",
+    "get_stage2_cohort_ids",
+    "get_stage2_10k_cohort_ids",
+    "load_cohort_image_records",
 ]

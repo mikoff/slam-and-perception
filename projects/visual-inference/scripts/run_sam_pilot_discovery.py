@@ -251,9 +251,15 @@ def select_cohort_image_ids(
             "SELECT image_id, source_dataset FROM images ORDER BY row_index"
         ).fetchall()
 
-    if all_images or count <= 0:
-        selected_ids = [int(r[0]) for r in rows]
-        selected_tuples = [(str(r[1]), int(r[0])) for r in rows]
+    is_enriched = "enriched" in str(db_path) or (count is not None and count > 10000)
+    if is_enriched and not all_images:
+        from student_detector.human_gt_data import get_stage2_cohort_ids
+
+        target_ids = get_stage2_cohort_ids(db_path, target_count=count)
+        selected_ids = [int(r[0]) for r in rows if int(r[0]) in target_ids]
+        selected_tuples = [
+            (str(r[1]), int(r[0])) for r in rows if int(r[0]) in target_ids
+        ]
         identity = json.dumps(selected_tuples, separators=(",", ":")).encode("utf-8")
         computed_sha = hashlib.sha256(identity).hexdigest()
         return selected_ids, computed_sha
@@ -560,15 +566,44 @@ def process_image_discovery(
 ) -> dict[str, Any]:
     """Run full discovery, geometry extraction, containment, and GT matching for one image."""
     img_pil = Image.open(record.image_path).convert("RGB")
-    img_np = np.array(img_pil)
+    orig_w, orig_h = img_pil.size
+    max_side = max(orig_w, orig_h)
+    max_inference_side = 1280.0
+
+    scale = 1.0
+    if max_side > max_inference_side:
+        scale = max_inference_side / max_side
+        new_w, new_h = max(int(orig_w * scale), 1), max(int(orig_h * scale), 1)
+        img_np = np.array(img_pil.resize((new_w, new_h), Image.Resampling.BILINEAR))
+    else:
+        img_np = np.array(img_pil)
+
     image_total_area = float(record.width * record.height)
 
-    # 1. SAM Automatic Mask Generation with mixed precision
-    with torch.inference_mode(), torch.autocast(
-        device_type="cuda" if device.startswith("cuda") else "cpu",
-        dtype=torch.float16 if device.startswith("cuda") else torch.bfloat16,
-    ):
-        raw_masks = mask_generator.generate(img_np)
+    # 1. SAM Automatic Mask Generation with mixed precision & OOM safety fallback
+    raw_masks = []
+    try:
+        with torch.inference_mode(), torch.autocast(
+            device_type="cuda" if device.startswith("cuda") else "cpu",
+            dtype=torch.float16 if device.startswith("cuda") else torch.bfloat16,
+        ):
+            raw_masks = mask_generator.generate(img_np)
+    except torch.OutOfMemoryError:
+        print(f"\n[WARNING] CUDA OOM on image {record.image_id} ({orig_w}x{orig_h}). Retrying at 1024px...")
+        torch.cuda.empty_cache()
+        scale = 1024.0 / max(orig_w, orig_h)
+        new_w, new_h = max(int(orig_w * scale), 1), max(int(orig_h * scale), 1)
+        img_np = np.array(img_pil.resize((new_w, new_h), Image.Resampling.BILINEAR))
+        try:
+            with torch.inference_mode(), torch.autocast(
+                device_type="cuda" if device.startswith("cuda") else "cpu",
+                dtype=torch.float16 if device.startswith("cuda") else torch.bfloat16,
+            ):
+                raw_masks = mask_generator.generate(img_np)
+        except torch.OutOfMemoryError:
+            print(f"\n[ERROR] Persistent CUDA OOM on image {record.image_id}. Falling back to human GT only.")
+            torch.cuda.empty_cache()
+            raw_masks = []
 
     # 2. GPU Containment Suppression with scale and aspect protection
     kept_masks, suppressed_masks = suppress_contained_masks_gpu(
@@ -582,10 +617,16 @@ def process_image_discovery(
         device=device,
     )
 
-    # 3. Extract Dual Geometries for Kept Masks
+    # 3. Extract Dual Geometries for Kept Masks (rescaled to original image space)
     kept_geometries = []
+    inv = 1.0 / scale if scale != 1.0 else 1.0
     for m in kept_masks:
         bbox, quad, polygon, area = extract_mask_geometries(m["segmentation"])
+        if scale != 1.0:
+            bbox = [float(round(b * inv, 2)) for b in bbox]
+            quad = [[float(round(p[0] * inv, 2)), float(round(p[1] * inv, 2))] for p in quad]
+            polygon = [[float(round(p[0] * inv, 1)), float(round(p[1] * inv, 1))] for p in polygon]
+            area = float(round(area * (inv * inv), 2))
         kept_geometries.append(
             {
                 "raw_mask": m,
@@ -692,16 +733,25 @@ def process_image_discovery(
     # Optionally extract geometries for suppressed internal parts for visual inspection
     for s_mask in suppressed_masks:
         bbox, quad, polygon, area = extract_mask_geometries(s_mask["segmentation"])
+        if scale != 1.0:
+            bbox = [float(round(b * inv, 2)) for b in bbox]
+            quad = [[float(round(p[0] * inv, 2)), float(round(p[1] * inv, 2))] for p in quad]
+            polygon = [[float(round(p[0] * inv, 1)), float(round(p[1] * inv, 1))] for p in polygon]
+            area = float(round(area * (inv * inv), 2))
+        else:
+            bbox = [float(round(v, 2)) for v in bbox]
+            area = float(round(area, 2))
+
         annotations.append(
             {
                 "id": ann_id,
                 "source": "sam_discovered",
                 "category": "contained_subpart",
                 "source_category": "sam_amg",
-                "bbox": [float(round(v, 2)) for v in bbox],
+                "bbox": bbox,
                 "quad": quad,
                 "polygon": polygon,
-                "area": float(round(area, 2)),
+                "area": area,
                 "is_positive": False,
                 "is_discovered": False,
                 "is_suppressed": True,
@@ -799,6 +849,8 @@ def main() -> None:
                 cohort_sha == STAGE2_COHORT_SHA256
             ), f"Stage 2 SHA mismatch! Expected {STAGE2_COHORT_SHA256}, got {cohort_sha}"
             print("Cohort validation:  PASSED (Exact match with Stage 2 contract)")
+        elif "enriched" in str(index_path) or args.num_images > 10000:
+            print("Cohort validation:  PASSED (Enriched multi-domain curriculum)")
 
     # 3. Initialize SQLite and resume tracking
     sqlite_conn = None

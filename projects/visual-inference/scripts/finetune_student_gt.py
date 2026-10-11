@@ -268,7 +268,8 @@ def finetune() -> None:
             f"artifacts/train_10k_{args.geometry}/checkpoints/mobilenetv4_p2_{args.geometry}_best.pt"
         )
     if args.output_dir is None:
-        args.output_dir = Path(f"artifacts/finetune_10k_{args.geometry}")
+        cohort_tag = f"{args.cohort_size // 1000}k" if args.cohort_size > 0 else "full"
+        args.output_dir = Path(f"artifacts/finetune_{cohort_tag}_{args.geometry}")
     if args.centerness_alpha is None:
         args.centerness_alpha = 1.0 if args.geometry == "hbb" else 0.0
 
@@ -477,7 +478,9 @@ def finetune() -> None:
     scaler = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
     # Helper for validation with batch limits
-    def run_eval(loader: DataLoader, limit_batches: int | None = None) -> dict[str, float]:
+    def run_eval(
+        loader: DataLoader, limit_batches: int | None = None
+    ) -> dict[str, float]:
         if limit_batches is None or limit_batches >= len(loader):
             return val_fn(
                 model=model,
@@ -637,7 +640,11 @@ def finetune() -> None:
         sam_rec = sam_m["recall_100_50"]
         val_duration = time.time() - val_start_time
 
-        gain_str = f" ({(rec_100_50 - base_gt_rec) * 100:+.2f}%)" if rec_100_50 != base_gt_rec else ""
+        gain_str = (
+            f" ({(rec_100_50 - base_gt_rec) * 100:+.2f}%)"
+            if rec_100_50 != base_gt_rec
+            else ""
+        )
         print(
             f"Epoch {epoch:02d} Complete in {epoch_duration:.1f}s | Train Loss: {avg_loss:.4f} | "
             f"GT Recall@100@50: {rec_100_50 * 100:.2f}%{gain_str} | "

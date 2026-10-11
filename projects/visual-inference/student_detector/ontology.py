@@ -32,8 +32,23 @@ DISTRACTOR_CATEGORIES: tuple[str, ...] = (
     "ego_platform_bodywork",
 )
 
-UNSUPPORTED_CATEGORIES: tuple[str, ...] = (
-    "empty_parking_bay",
+UNSUPPORTED_CATEGORIES: tuple[str, ...] = ()
+
+EXTENDED_CATEGORIES: tuple[str, ...] = (
+    "pillar",
+    "trash_bin",
+    "street_light",
+    "parking_slot",
+    "parking_meter",
+    "fire_hydrant",
+    "canopy",
+    "cart",
+    "golf_cart",
+    "luggage_and_bags",
+    "signboard",
+    "pole",
+    "bench",
+    "license_plate",
 )
 
 READINESS_STATUS: dict[str, CategoryReadiness] = {
@@ -47,8 +62,22 @@ READINESS_STATUS: dict[str, CategoryReadiness] = {
     "dog": "evaluable",
     "debris": "evaluable",
     "construction_barrier": "evaluable",
-    "wheelchair": "scarce",
-    "empty_parking_bay": "unsupported",
+    "wheelchair": "evaluable",
+    "empty_parking_bay": "evaluable",
+    "parking_slot": "evaluable",
+    "pillar": "evaluable",
+    "trash_bin": "evaluable",
+    "street_light": "evaluable",
+    "parking_meter": "evaluable",
+    "fire_hydrant": "evaluable",
+    "canopy": "evaluable",
+    "cart": "evaluable",
+    "golf_cart": "evaluable",
+    "luggage_and_bags": "evaluable",
+    "signboard": "evaluable",
+    "pole": "evaluable",
+    "bench": "evaluable",
+    "license_plate": "evaluable",
     "road_surface": "distractor",
     "sky": "distractor",
     "vegetation": "distractor",
@@ -104,10 +133,32 @@ CANONICAL_MAPPINGS: dict[str, str] = {
     "ego_vehicle": "ego_platform_bodywork",
     "ego_platform_bodywork": "ego_platform_bodywork",
     "building_wall": "building_wall",
-    "fence": "building_wall",
-    "fence_or_wall": "building_wall",
+    "fence": "fence",
+    "fence_or_wall": "fence",
     "structure": "building_wall",
     "explicit_stuff": "road_surface",
+    # Extended Multi-Domain Infrastructure
+    "empty_parking_bay": "parking_slot",
+    "parking_space": "parking_slot",
+    "parking_slot": "parking_slot",
+    "pillar": "pillar",
+    "column": "pillar",
+    "trash_bin": "trash_bin",
+    "ashcan": "trash_bin",
+    "street_light": "street_light",
+    "streetlight": "street_light",
+    "canopy": "canopy",
+    "awning": "canopy",
+    "signboard": "signboard",
+    "pole": "pole",
+    "bench": "bench",
+    "cart": "cart",
+    "golf_cart": "golf_cart",
+    "parking_meter": "parking_meter",
+    "fire_hydrant": "fire_hydrant",
+    "license_plate": "license_plate",
+    "luggage_and_bags": "luggage_and_bags",
+    "suitcase": "luggage_and_bags",
 }
 
 COMPATIBLE_LABELS: dict[str, tuple[str, ...]] = {
@@ -122,10 +173,17 @@ COMPATIBLE_LABELS: dict[str, tuple[str, ...]] = {
     "debris": ("debris",),
     "wheelchair": ("wheelchair",),
     "construction_barrier": ("construction_barrier", "barrier"),
+    "parking_slot": ("parking_slot", "parking_space", "empty_parking_bay"),
+    "pillar": ("pillar", "column"),
+    "trash_bin": ("trash_bin", "ashcan", "waste_container"),
+    "street_light": ("street_light", "streetlight", "lamp"),
+    "canopy": ("canopy", "awning", "sunshade"),
+    "cart": ("cart", "shopping_cart", "golf_cart"),
     "road_surface": ("road_surface", "road", "street"),
     "sky": ("sky",),
     "vegetation": ("vegetation", "trees", "grass"),
-    "building_wall": ("building_wall", "wall", "fence"),
+    "building_wall": ("building_wall", "wall"),
+    "fence": ("fence", "fencing"),
     "ego_platform_bodywork": ("ego_platform_bodywork", "car hood"),
 }
 
@@ -153,6 +211,7 @@ def map_to_canonical(raw_name: str) -> str | None:
     all_known = (
         BASE_CATEGORIES
         + NOVEL_CATEGORIES
+        + EXTENDED_CATEGORIES
         + DISTRACTOR_CATEGORIES
         + UNSUPPORTED_CATEGORIES
     )

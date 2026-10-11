@@ -12,6 +12,8 @@ import base64
 import io
 import json
 from pathlib import Path
+import random
+import sqlite3
 from typing import Any
 
 from PIL import Image
@@ -87,6 +89,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to validation pseudo-labels.",
     )
     parser.add_argument(
+        "--val-pseudo-labels",
+        type=Path,
+        default=Path("artifacts/phase1/pseudo_labels/sam_pilot_800.json"),
+        help="Path to classic benchmark validation pseudo-labels (e.g. sam_pilot_800.json).",
+    )
+    parser.add_argument(
         "--image-root",
         type=Path,
         default=DEFAULT_IMAGE_ROOT,
@@ -95,8 +103,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--samples-per-cohort",
         type=int,
-        default=15,
-        help="Number of images per cohort to embed (default: 15).",
+        default=35,
+        help="Number of images per cohort to embed (default: 35).",
     )
     parser.add_argument(
         "--device",
@@ -141,8 +149,14 @@ def generate_dashboard_html(
     h_base = h_hist[0] if h_hist else {}
     h_best = h_hist[-1] if h_hist else {}
 
-    q_base_rec = quad_summary.get("baseline_gt_recall_100_50", quad_summary.get("baseline_recall_100_50", q_base.get("recall_100_50", 0.5352)))
-    q_best_rec = quad_summary.get("best_gt_recall_100_50", quad_summary.get("best_recall_100_50", q_best.get("recall_100_50", 0.5352)))
+    q_base_rec = quad_summary.get(
+        "baseline_gt_recall_100_50",
+        quad_summary.get("baseline_recall_100_50", q_base.get("recall_100_50", 0.5352)),
+    )
+    q_best_rec = quad_summary.get(
+        "best_gt_recall_100_50",
+        quad_summary.get("best_recall_100_50", q_best.get("recall_100_50", 0.5352)),
+    )
     q_base_rec_10 = q_base.get("gt_recall_10_50", q_base.get("recall_10_50", 0.1270))
     q_best_rec_10 = q_best.get("gt_recall_10_50", q_best.get("recall_10_50", 0.1346))
     q_base_rec_75 = q_base.get("gt_recall_100_75", q_base.get("recall_100_75", 0.1998))
@@ -150,14 +164,60 @@ def generate_dashboard_html(
     q_base_ap = q_base.get("gt_ap_50", q_base.get("ap_50", 0.2455))
     q_best_ap = q_best.get("gt_ap_50", q_best.get("ap_50", 0.1814))
 
-    h_base_rec = hbb_summary.get("baseline_gt_recall_100_50", hbb_summary.get("baseline_recall_100_50", h_base.get("recall_100_50", 0.3666)))
-    h_best_rec = hbb_summary.get("best_gt_recall_100_50", hbb_summary.get("best_recall_100_50", h_best.get("recall_100_50", 0.5438)))
+    h_base_rec = hbb_summary.get(
+        "baseline_gt_recall_100_50",
+        hbb_summary.get("baseline_recall_100_50", h_base.get("recall_100_50", 0.3666)),
+    )
+    h_best_rec = hbb_summary.get(
+        "best_gt_recall_100_50",
+        hbb_summary.get("best_recall_100_50", h_best.get("recall_100_50", 0.5438)),
+    )
     h_base_rec_10 = h_base.get("gt_recall_10_50", h_base.get("recall_10_50", 0.1065))
     h_best_rec_10 = h_best.get("gt_recall_10_50", h_best.get("recall_10_50", 0.2912))
     h_base_rec_75 = h_base.get("gt_recall_100_75", h_base.get("recall_100_75", 0.1560))
     h_best_rec_75 = h_best.get("gt_recall_100_75", h_best.get("recall_100_75", 0.1826))
     h_base_ap = h_base.get("gt_ap_50", h_base.get("ap_50", 0.0379))
     h_best_ap = h_best.get("gt_ap_50", h_best.get("ap_50", 0.2269))
+
+    unique_sources = sorted(list({img["source_dataset"] for img in images_data}))
+    cohort_counts = {}
+    for img in images_data:
+        s = img["source_dataset"]
+        cohort_counts[s] = cohort_counts.get(s, 0) + 1
+
+    cohort_labels = {
+        "ade20k": "ADE20K (Pillars & Bins)",
+        "open_images_subset": "Open Images (Road Assets)",
+        "roboflow_ev_parking": "PKLot Parking Bays",
+        "bdd100k_images_100k": "BDD100k Driving",
+        "coco_2017": "COCO General",
+        "nuimages": "nuImages Multi-View",
+        "woodscape_rgb_fisheye": "WoodScape Fisheye",
+    }
+
+    filter_buttons = [
+        f'<button class="preset-btn active" id="filter-all" onclick="filterCohort(\'all\')">All Cohorts ({len(images_data)})</button>'
+    ]
+    for src in unique_sources:
+        label = cohort_labels.get(src, src.replace("_", " ").title())
+        count = cohort_counts.get(src, 0)
+        filter_buttons.append(
+            f'<button class="preset-btn" id="filter-{src}" onclick="filterCohort(\'{src}\')">{label} ({count})</button>'
+        )
+    filter_buttons_html = "\n    ".join(filter_buttons)
+
+    is_enriched = any(
+        src in ("ade20k", "open_images_subset", "roboflow_ev_parking")
+        for src in unique_sources
+    )
+    cohort_tag = (
+        "Enriched Multi-Domain (14k)" if is_enriched else "Pure Human GT (Balanced 10k)"
+    )
+    stage1_tag = (
+        "SAM Discovery + Human GT (Enriched 14k)"
+        if is_enriched
+        else "SAM Novel Discovery + GT (10k)"
+    )
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -360,7 +420,7 @@ def generate_dashboard_html(
     <tbody>
       <tr style="background: rgba(168, 85, 247, 0.12); font-weight: 600;">
         <td style="color: var(--accent-purple);">💎 Stage-2 Quad (Fine-Tuned)</td>
-        <td>Pure Human GT (Balanced 10k)</td>
+        <td>{cohort_tag}</td>
         <td>5</td>
         <td style="color: var(--accent-purple); font-weight: 700;">{q_best_rec * 100:.2f}% 🚀</td>
         <td>{q_best_rec_10 * 100:.2f}%</td>
@@ -370,7 +430,7 @@ def generate_dashboard_html(
       </tr>
       <tr style="background: rgba(34, 211, 238, 0.08); font-weight: 600;">
         <td style="color: var(--accent-cyan);">🔬 Stage-2 HBB (Fine-Tuned)</td>
-        <td>Pure Human GT (Balanced 10k)</td>
+        <td>{cohort_tag}</td>
         <td>5</td>
         <td style="color: var(--accent-cyan); font-weight: 700;">{h_best_rec * 100:.2f}%</td>
         <td>{h_best_rec_10 * 100:.2f}%</td>
@@ -380,7 +440,7 @@ def generate_dashboard_html(
       </tr>
       <tr style="background: rgba(245, 158, 11, 0.05);">
         <td style="color: var(--accent-amber);">Stage-1 Quad (Baseline)</td>
-        <td>SAM Novel Discovery + GT</td>
+        <td>{stage1_tag}</td>
         <td>15</td>
         <td>{q_base_rec * 100:.2f}%</td>
         <td>{q_base_rec_10 * 100:.2f}%</td>
@@ -390,7 +450,7 @@ def generate_dashboard_html(
       </tr>
       <tr style="background: rgba(59, 130, 246, 0.05);">
         <td style="color: var(--accent-blue);">Stage-1 HBB (Baseline)</td>
-        <td>SAM Novel Discovery + GT</td>
+        <td>{stage1_tag}</td>
         <td>15</td>
         <td>{h_base_rec * 100:.2f}%</td>
         <td>{h_base_rec_10 * 100:.2f}%</td>
@@ -435,11 +495,7 @@ def generate_dashboard_html(
 
   <div class="controls-row" style="border-top: 1px solid var(--border-color); padding-top: 10px;">
     <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Cohort Filter:</span>
-    <button class="preset-btn active" id="filter-all" onclick="filterCohort('all')">All Cohorts (60)</button>
-    <button class="preset-btn" id="filter-bdd" onclick="filterCohort('bdd100k_images_100k')">BDD100k (15)</button>
-    <button class="preset-btn" id="filter-coco" onclick="filterCohort('coco_2017')">COCO (15)</button>
-    <button class="preset-btn" id="filter-nuimg" onclick="filterCohort('nuimages')">nuImages (15)</button>
-    <button class="preset-btn" id="filter-wood" onclick="filterCohort('woodscape_rgb_fisheye')">WoodScape Fisheye (15)</button>
+    {filter_buttons_html}
   </div>
 </div>
 
@@ -513,14 +569,10 @@ function setPreset(mode) {{
 
 function filterCohort(cohort) {{
   activeCohort = cohort;
-  ['filter-all', 'filter-bdd', 'filter-coco', 'filter-nuimg', 'filter-wood'].forEach(id => {{
-    document.getElementById(id).classList.remove('active');
-  }});
-  if (cohort === 'all') document.getElementById('filter-all').classList.add('active');
-  else if (cohort === 'bdd100k_images_100k') document.getElementById('filter-bdd').classList.add('active');
-  else if (cohort === 'coco_2017') document.getElementById('filter-coco').classList.add('active');
-  else if (cohort === 'nuimages') document.getElementById('filter-nuimg').classList.add('active');
-  else if (cohort === 'woodscape_rgb_fisheye') document.getElementById('filter-wood').classList.add('active');
+  document.querySelectorAll('.controls-row button[id^="filter-"]').forEach(b => b.classList.remove('active'));
+  const targetId = cohort === 'all' ? 'filter-all' : 'filter-' + cohort;
+  const btn = document.getElementById(targetId);
+  if (btn) btn.classList.add('active');
   renderCards();
 }}
 
@@ -672,43 +724,108 @@ def main() -> None:
             quad_summary = json.load(f)
 
     # 2. Load raw annotations metadata
-    with open(args.pseudo_labels, encoding="utf-8") as f:
-        val_meta = json.load(f)
-
     ann_by_img_id: dict[int, dict[str, Any]] = {}
-    for img_rec in val_meta["images"]:
-        iid = img_rec["image_id"]
-        gt_quads = [
-            a["quad"]
-            for a in img_rec.get("annotations", [])
-            if a.get("source") == "human_gt" and a.get("is_positive") and "quad" in a
-        ]
-        gt_boxes = [
-            a["bbox"]
-            for a in img_rec.get("annotations", [])
-            if a.get("source") == "human_gt" and a.get("is_positive") and "bbox" in a
-        ]
-        sam_quads = [
-            a["quad"]
-            for a in img_rec.get("annotations", [])
-            if a.get("source") == "sam_discovered"
-            and a.get("is_positive")
-            and "quad" in a
-        ]
-        ann_by_img_id[iid] = {
-            "gt_quads": gt_quads,
-            "gt_boxes": gt_boxes,
-            "sam": sam_quads,
-        }
 
-    # 3. Load Validation Dataset
-    val_dataset = SAMStudentDataset(
-        pseudo_labels_path=args.pseudo_labels,
-        image_root=args.image_root,
-        split="val",
-        val_ratio=0.20,
-        input_size=384,
-    )
+    classic_val_dataset: SAMStudentDataset | None = None
+    if args.val_pseudo_labels and args.val_pseudo_labels.is_file():
+        print(
+            f"Loading classic benchmark validation cohort from {args.val_pseudo_labels}..."
+        )
+        with open(args.val_pseudo_labels, encoding="utf-8") as f:
+            classic_meta = json.load(f)
+
+        for img_rec in classic_meta.get("images", []):
+            iid = img_rec["image_id"]
+            gt_quads = [
+                a["quad"]
+                for a in img_rec.get("annotations", [])
+                if a.get("source") == "human_gt"
+                and a.get("is_positive")
+                and "quad" in a
+            ]
+            gt_boxes = [
+                a["bbox"]
+                for a in img_rec.get("annotations", [])
+                if a.get("source") == "human_gt"
+                and a.get("is_positive")
+                and "bbox" in a
+            ]
+            sam_quads = [
+                a["quad"]
+                for a in img_rec.get("annotations", [])
+                if a.get("source") == "sam_discovered"
+                and a.get("is_positive")
+                and "quad" in a
+            ]
+            ann_by_img_id[iid] = {
+                "gt_quads": gt_quads,
+                "gt_boxes": gt_boxes,
+                "sam": sam_quads,
+            }
+
+        classic_val_dataset = SAMStudentDataset(
+            pseudo_labels_path=args.val_pseudo_labels,
+            image_root=args.image_root,
+            split="val",
+            val_ratio=0.20,
+            input_size=384,
+        )
+
+    # 3. Load Primary / Enriched Validation Dataset
+    is_sqlite = args.pseudo_labels.suffix in (".sqlite", ".db")
+    primary_val_dataset: SAMStudentDataset | None = None
+    if args.pseudo_labels.exists() and args.pseudo_labels != args.val_pseudo_labels:
+        if not is_sqlite:
+            with open(args.pseudo_labels, encoding="utf-8") as f:
+                val_meta = json.load(f)
+
+            for img_rec in val_meta.get("images", []):
+                iid = img_rec["image_id"]
+                if iid not in ann_by_img_id:
+                    gt_quads = [
+                        a["quad"]
+                        for a in img_rec.get("annotations", [])
+                        if a.get("source") == "human_gt"
+                        and a.get("is_positive")
+                        and "quad" in a
+                    ]
+                    gt_boxes = [
+                        a["bbox"]
+                        for a in img_rec.get("annotations", [])
+                        if a.get("source") == "human_gt"
+                        and a.get("is_positive")
+                        and "bbox" in a
+                    ]
+                    sam_quads = [
+                        a["quad"]
+                        for a in img_rec.get("annotations", [])
+                        if a.get("source") == "sam_discovered"
+                        and a.get("is_positive")
+                        and "quad" in a
+                    ]
+                    ann_by_img_id[iid] = {
+                        "gt_quads": gt_quads,
+                        "gt_boxes": gt_boxes,
+                        "sam": sam_quads,
+                    }
+
+        primary_val_dataset = SAMStudentDataset(
+            pseudo_labels_path=args.pseudo_labels,
+            image_root=args.image_root,
+            split="val",
+            val_ratio=0.20,
+            input_size=384,
+        )
+    elif classic_val_dataset is not None:
+        primary_val_dataset = classic_val_dataset
+    else:
+        primary_val_dataset = SAMStudentDataset(
+            pseudo_labels_path=args.pseudo_labels,
+            image_root=args.image_root,
+            split="val",
+            val_ratio=0.20,
+            input_size=384,
+        )
     strides = (4, 8, 16, 32)
 
     # 4. Load Models
@@ -803,16 +920,137 @@ def main() -> None:
         model_quad_after.load_state_dict(ckpt_qa["model_state_dict"])
         model_quad_after.eval()
 
-    # 5. Select balanced samples
-    cohort_counts: dict[str, int] = {}
+    # 5. Select balanced samples prioritizing classic validation benchmarks and enriching with new cohorts
+    samples_json = Path(
+        "/media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/roboflow/samples.json"
+    )
+    non_topdown_pklot_fn: set[str] = set()
+    if samples_json.is_file():
+        try:
+            with open(samples_json, encoding="utf-8") as f:
+                pk_data = json.load(f)
+            for s in pk_data.get("samples", []):
+                if s.get("source") in ("ufpr04", "ufpr05"):
+                    non_topdown_pklot_fn.add(
+                        "images/train/parking__" + s["filepath"].split("/")[-1]
+                    )
+        except Exception as exc:
+            print(
+                f"[Master Visualizer] Note: Failed to parse PKLot samples.json: {exc}. Falling back to date heuristic."
+            )
+
+    all_cohorts: set[str] = set()
+    classic_by_cohort: dict[str, list[int]] = {}
+    if classic_val_dataset is not None:
+        for idx, img_info in enumerate(classic_val_dataset.images):
+            src = img_info["source_dataset"]
+            all_cohorts.add(src)
+            classic_by_cohort.setdefault(src, []).append(idx)
+
+    primary_by_cohort: dict[str, list[int]] = {}
+    if primary_val_dataset is not None:
+        for idx, img_info in enumerate(primary_val_dataset.images):
+            src = img_info["source_dataset"]
+            all_cohorts.add(src)
+            primary_by_cohort.setdefault(src, []).append(idx)
+
+    rng = random.Random(42)
     selected_items: list[tuple[Any, dict[str, Any]]] = []
-    for idx, sample in enumerate(val_dataset):
-        src = sample.source_dataset
-        cnt = cohort_counts.get(src, 0)
-        if cnt < args.samples_per_cohort:
-            cohort_counts[src] = cnt + 1
-            rec = val_dataset.images[idx]
-            selected_items.append((sample, rec))
+    for src in sorted(all_cohorts):
+        cohort_items: list[tuple[Any, dict[str, Any]]] = []
+        # First, include classic validation images if available
+        if src in classic_by_cohort and classic_val_dataset is not None:
+            for idx in classic_by_cohort[src][: args.samples_per_cohort]:
+                cohort_items.append(
+                    (classic_val_dataset[idx], classic_val_dataset.images[idx])
+                )
+
+        # If more images needed to reach samples_per_cohort, supplement from primary/enriched
+        if (
+            len(cohort_items) < args.samples_per_cohort
+            and src in primary_by_cohort
+            and primary_val_dataset is not None
+            and primary_val_dataset != classic_val_dataset
+        ):
+            needed = args.samples_per_cohort - len(cohort_items)
+            existing_ids = {rec["image_id"] for _, rec in cohort_items}
+            cand_indices = [
+                idx
+                for idx in primary_by_cohort[src]
+                if primary_val_dataset.images[idx]["image_id"] not in existing_ids
+            ]
+
+            if src == "roboflow_ev_parking":
+                # Filter strictly for non-overhead / perspective camera viewpoints (ufpr04 & ufpr05)
+                def is_perspective_parking(fn: str) -> bool:
+                    if non_topdown_pklot_fn:
+                        return fn in non_topdown_pklot_fn
+                    # Fallback heuristic: pucpr top-down camera was recorded in 2012-09 through 2012-11
+                    return not any(
+                        fn.startswith(f"images/train/parking__2012-{m:02d}")
+                        for m in (9, 10, 11)
+                    )
+
+                oblique_cands = [
+                    idx
+                    for idx in cand_indices
+                    if is_perspective_parking(
+                        primary_val_dataset.images[idx]["file_name"]
+                    )
+                ]
+                if oblique_cands:
+                    cand_indices = oblique_cands
+
+            # For all cohorts (including open_images_subset and ade20k), shuffle candidate indices
+            # to guarantee rich and diverse scene & class representation
+            rng.shuffle(cand_indices)
+            for idx in cand_indices[:needed]:
+                cohort_items.append(
+                    (primary_val_dataset[idx], primary_val_dataset.images[idx])
+                )
+
+        selected_items.extend(cohort_items)
+
+    if is_sqlite:
+        sqlite_img_ids = [
+            sample.image_id
+            for sample, _ in selected_items
+            if sample.image_id not in ann_by_img_id
+        ]
+        if sqlite_img_ids:
+            conn = sqlite3.connect(
+                f"file:{args.pseudo_labels}?mode=ro&immutable=1", uri=True
+            )
+            placeholders = ",".join("?" for _ in sqlite_img_ids)
+            rows = conn.execute(
+                f"""
+                SELECT image_id, bbox_x1, bbox_y1, bbox_x2, bbox_y2, quad_json, source, is_positive, is_suppressed
+                FROM annotations
+                WHERE image_id IN ({placeholders})
+                """,
+                sqlite_img_ids,
+            ).fetchall()
+            for r in rows:
+                iid = int(r[0])
+                bbox = [float(r[1]), float(r[2]), float(r[3]), float(r[4])]
+                quad = json.loads(r[5]) if r[5] else None
+                source = str(r[6])
+                is_pos = bool(r[7])
+                is_supp = bool(r[8])
+                if iid not in ann_by_img_id:
+                    ann_by_img_id[iid] = {"gt_quads": [], "gt_boxes": [], "sam": []}
+                if source == "human_gt" and is_pos and not is_supp:
+                    if quad:
+                        ann_by_img_id[iid]["gt_quads"].append(quad)
+                    ann_by_img_id[iid]["gt_boxes"].append(bbox)
+                elif source == "sam_discovered" and is_pos and not is_supp and quad:
+                    ann_by_img_id[iid]["sam"].append(quad)
+            conn.close()
+
+    for sample, _ in selected_items:
+        ann_by_img_id.setdefault(
+            sample.image_id, {"gt_quads": [], "gt_boxes": [], "sam": []}
+        )
 
     print(
         f"Processing comparative proposals for {len(selected_items)} validation samples..."

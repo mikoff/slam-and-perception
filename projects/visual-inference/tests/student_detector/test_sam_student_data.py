@@ -119,7 +119,6 @@ def test_sam_student_hbb_dataset_collate_and_target_builder() -> None:
 def test_topological_container_suppression() -> None:
     from student_detector.sam_student_data import (
         suppress_container_boxes,
-        suppress_container_quads,
     )
 
     # 2 small cars inside 1 giant road box

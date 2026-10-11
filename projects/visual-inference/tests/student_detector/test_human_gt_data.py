@@ -74,3 +74,54 @@ def test_human_gt_quad_dataset_loads_samples() -> None:
     assert images.shape == (2, 3, 128, 128)
     assert len(batch) == 2
 
+
+def test_get_stage2_cohort_ids_enriched() -> None:
+    from student_detector.human_gt_data import (
+        DEFAULT_ENRICHED_GT_INDEX_PATH,
+        STAGE2_ENRICHED_COHORT_QUOTAS,
+        get_stage2_cohort_ids,
+    )
+
+    if not DEFAULT_ENRICHED_GT_INDEX_PATH.exists():
+        pytest.skip("Enriched GT index not available.")
+
+    cohort_ids = get_stage2_cohort_ids(
+        DEFAULT_ENRICHED_GT_INDEX_PATH, target_count=14000
+    )
+    expected_sum = sum(STAGE2_ENRICHED_COHORT_QUOTAS.values())
+    assert len(cohort_ids) == expected_sum or len(cohort_ids) > 13900
+
+
+def test_human_gt_enriched_dataset_loads_samples() -> None:
+    from student_detector.human_gt_data import (
+        DEFAULT_ENRICHED_GT_INDEX_PATH,
+        HumanGTHBBDataset,
+        HumanGTQuadDataset,
+    )
+
+    if not DEFAULT_ENRICHED_GT_INDEX_PATH.exists():
+        pytest.skip("Enriched GT index not available.")
+
+    hbb_ds = HumanGTHBBDataset(
+        gt_index_path=DEFAULT_ENRICHED_GT_INDEX_PATH,
+        cohort_size=14000,
+        split="val",
+        val_ratio=0.01,
+        input_size=128,
+    )
+    assert len(hbb_ds) > 0
+    hbb_sample = hbb_ds[0]
+    assert hbb_sample.image.shape == (3, 128, 128)
+    assert hbb_sample.boxes.shape[-1] == 4
+
+    quad_ds = HumanGTQuadDataset(
+        gt_index_path=DEFAULT_ENRICHED_GT_INDEX_PATH,
+        cohort_size=14000,
+        split="val",
+        val_ratio=0.01,
+        input_size=128,
+    )
+    assert len(quad_ds) > 0
+    quad_sample = quad_ds[0]
+    assert quad_sample.image.shape == (3, 128, 128)
+    assert quad_sample.quads.ndim == 3

@@ -19,8 +19,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 PID_FILE="${PROJECT_ROOT}/artifacts/pseudo_labels/discovery.pid"
 LOG_FILE="${PROJECT_ROOT}/artifacts/pseudo_labels/discovery.log"
-DB_FILE="${PROJECT_ROOT}/artifacts/pseudo_labels/sam_discovery.sqlite"
-TOTAL_IMAGES=267800
+DB_FILE="${DB_FILE:-${PROJECT_ROOT}/artifacts/pseudo_labels/sam_discovery_enriched.sqlite}"
+TOTAL_IMAGES="${TOTAL_IMAGES:-14000}"
 
 mkdir -p "${PROJECT_ROOT}/artifacts/pseudo_labels"
 
@@ -47,6 +47,21 @@ get_db_count() {
         sqlite3 "${DB_FILE}" "SELECT count(*) FROM images;" 2>/dev/null || echo "0"
     else
         echo "0"
+    fi
+}
+
+get_cohort_completed_count() {
+    if [ -f "${DB_FILE}" ] && [ "${TOTAL_IMAGES}" -le 14000 ]; then
+        uv run python -c "
+import sqlite3
+from student_detector.human_gt_data import DEFAULT_ENRICHED_GT_INDEX_PATH, get_stage2_cohort_ids
+cohort_ids = get_stage2_cohort_ids(DEFAULT_ENRICHED_GT_INDEX_PATH, target_count=14000)
+conn = sqlite3.connect('file:${DB_FILE}?mode=ro', uri=True)
+db_ids = set(r[0] for r in conn.execute('SELECT image_id FROM images').fetchall())
+print(len(cohort_ids.intersection(db_ids)))
+" 2>/dev/null || get_db_count
+    else
+        get_db_count
     fi
 }
 
@@ -96,9 +111,16 @@ cmd_start() {
     echo "=================================================================="
 
     cd "${PROJECT_ROOT}"
-    nohup uv run python scripts/run_sam_pilot_discovery.py \
-        --all-images \
-        --output-db "${DB_FILE}" \
+    local EXTRA_ARGS="${1:-}"
+    if [ -z "${EXTRA_ARGS}" ]; then
+        if [ "${TOTAL_IMAGES}" -le 14000 ]; then
+            EXTRA_ARGS="--index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
+        else
+            EXTRA_ARGS="--all-images --output-db ${DB_FILE}"
+        fi
+    fi
+    setsid .venv/bin/python3 -u scripts/run_sam_pilot_discovery.py \
+        ${EXTRA_ARGS} \
         --save-interval 25 \
         --chunk-size 250 \
         >> "${LOG_FILE}" 2>&1 &
@@ -232,6 +254,8 @@ cmd_status() {
 
     echo "Process State:    ${proc_state} (PID: ${pid})"
 
+    local cohort_completed
+    cohort_completed=$(get_cohort_completed_count)
     local db_imgs
     db_imgs=$(get_db_count)
     local db_pos
@@ -240,12 +264,13 @@ cmd_status() {
     db_novel=$(get_db_novel_count)
 
     local pct="0.0"
-    if [ "${TOTAL_IMAGES}" -gt 0 ] && [ "${db_imgs}" -gt 0 ]; then
-        pct=$(awk "BEGIN {printf \"%.2f\", (${db_imgs} / ${TOTAL_IMAGES}) * 100}")
+    if [ "${TOTAL_IMAGES}" -gt 0 ] && [ "${cohort_completed}" -gt 0 ]; then
+        pct=$(awk "BEGIN {printf \"%.2f\", (${cohort_completed} / ${TOTAL_IMAGES}) * 100}")
     fi
 
     echo "Database:         ${DB_FILE}"
-    echo "Images Completed: ${db_imgs} / ${TOTAL_IMAGES} (${pct}%)"
+    echo "Cohort Completed: ${cohort_completed} / ${TOTAL_IMAGES} (${pct}%)"
+    echo "Total DB Images:  ${db_imgs}"
     echo "Positive Objects: ${db_pos}"
     echo "Novel SAM Discov: ${db_novel}"
 
@@ -275,11 +300,18 @@ cmd_follow() {
 }
 
 cmd_run() {
+    local EXTRA_ARGS="${1:-}"
+    if [ -z "${EXTRA_ARGS}" ]; then
+        if [ "${TOTAL_IMAGES}" -le 14000 ]; then
+            EXTRA_ARGS="--index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
+        else
+            EXTRA_ARGS="--all-images --output-db ${DB_FILE}"
+        fi
+    fi
     echo "Starting SAM Discovery interactively in foreground..."
     cd "${PROJECT_ROOT}"
     exec uv run python scripts/run_sam_pilot_discovery.py \
-        --all-images \
-        --output-db "${DB_FILE}" \
+        ${EXTRA_ARGS} \
         --save-interval 25 \
         --chunk-size 250
 }

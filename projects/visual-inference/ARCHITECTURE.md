@@ -25,12 +25,12 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 - Decoders & Suppression:
   - `InferenceDecoder` (HBB) and `QuadInferenceDecoder` (Quads) support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$, max duplicate IoU threshold `part_max_iou=0.65`), `"part_aware_soft"`, and `"nms_free"`.
   - Centerness scoring parameter `centerness_alpha` ($\in [0.0, 1.0]$) blends scores as $\text{score} = \sigma(\text{obj}) \times \sigma(\text{center})^\alpha$. For HBB, $\alpha=1.0$ protects proposal budget against dense small-proposal crowding. For Quads, centerness is decoupled ($\alpha = 0.0$) to avoid aspect-ratio distortion penalties.
-  - Stage 2 Quad Fine-Tuning on 10,000 images achieved **77.01% GT Recall@100@50** (+14.58% gain over Stage 1 baseline 62.43%) and **34.73% GT AR@100**, while preserving open-world recall (52.80% SAM recall). Checkpoint: `artifacts/finetune_10k_quad/checkpoints/mobilenetv4_p2_quad_finetune_best.pt`.
-  - Stage 2 HBB Baseline Fine-Tuning (v2 on 10k images) reached **54.38% GT Recall@100@50** (+17.72% gain over 36.66% baseline), **29.12% Rec@10@50**, and **94.4% Large Object Recall**. Checkpoint: `artifacts/finetune_10k_hbb_v2/checkpoints/mobilenetv4_p2_hbb_finetune_best.pt`.
+  - Stage 2 Quad Fine-Tuning on 14k Enriched curriculum achieved **72.47% GT Recall@100@50**, **42.53% GT Rec@10@50** (+14.32% jump), **38.45% AP@50**, and **36.93% Rec@100@75** (up from 19.98% at 10k). Checkpoint: `artifacts/finetune_14k_quad/checkpoints/mobilenetv4_p2_quad_finetune_best.pt`.
+  - Stage 2 HBB Fine-Tuning on 14k Enriched reached **57.13% GT Recall@100@50** (+2.75% over 10k v2), **35.96% Rec@10@50** (+6.84%), and **36.69% AP@50** (+14.00% gain). Checkpoint: `artifacts/finetune_14k_hbb/checkpoints/mobilenetv4_p2_hbb_finetune_best.pt`.
   - Qualitative visualization defaults to **Part-Aware NMS (IoU threshold 0.45, duplicate limit 0.65)** to suppress adjacent anchor cluster duplicates from 1-to-1 ignore mask halos.
 - Pseudo-Label Storage & DataLoader:
   - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`. Full-scale dataset discovery (267.8k images) orchestrated with start/pause/resume daemon via `scripts/manage_sam_discovery.sh`.
-  - Authoritative human GT datasets: `HumanGTHBBDataset` and `HumanGTQuadDataset` in `student_detector/human_gt_data.py`.
+  - Authoritative human GT datasets: `HumanGTHBBDataset` and `HumanGTQuadDataset` in `student_detector/human_gt_data.py`. Enriched with ADE20K (2k img: 17.2k things/agents), Open Images V7 (2k img: 6.9k mobility & infrastructure assets), and PKLot (2.4k img: 153.8k oriented parking quads) via `quad_train_enriched.sqlite` (30.4M total annotations) and synced into `sam_discovery_enriched.sqlite` (3.85M human GT annotations) across the 14k curriculum (`STAGE2_ENRICHED_COHORT_QUOTAS`).
 
 # Active Design Patterns & Decisions
 
