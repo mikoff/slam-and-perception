@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 2: MobileNetV4 Student Proposal Detector Training (HBB and Quad) on the 800-image cohort."""
+"""Train MobileNetV4 HBB and quad proposal detectors on SAM pseudo-labels."""
 
 from __future__ import annotations
 
@@ -11,13 +11,14 @@ import time
 from typing import Any
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 if hasattr(torch.multiprocessing, "set_sharing_strategy"):
     torch.multiprocessing.set_sharing_strategy("file_system")
 
 from student_detector.assigner import ATSSAssigner
 from student_detector.decoder import InferenceDecoder
+from student_detector.data_isolation import audit_training_isolation
 from student_detector.losses import ProposalLoss
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.quad_assigner import QuadAssigner
@@ -43,7 +44,7 @@ from student_detector.training import validate
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train MobileNetV4 Student Proposal Detector on 800-image SAM cohort."
+        description="Train MobileNetV4 Student Proposal Detector on a SAM cohort."
     )
     parser.add_argument(
         "--geometry",
@@ -181,6 +182,18 @@ def parse_args() -> argparse.Namespace:
         help="Cohort size limit (default: 10000 for standard 10k dataset; set 0 for all DB images).",
     )
     parser.add_argument(
+        "--pipeline-val-ratio",
+        type=float,
+        default=0.10,
+        help="Pipeline-wide cohort fraction reserved from every training stage (default: 0.10).",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Seed for the shared pipeline train/validation split (default: 42).",
+    )
+    parser.add_argument(
         "--gt-index",
         type=Path,
         default=Path(
@@ -216,25 +229,43 @@ def train() -> None:
     strides = (4, 8, 16, 32)
 
     # 1. Datasets and Loaders
+    if not 0 < args.pipeline_val_ratio < 1:
+        raise ValueError("--pipeline-val-ratio must be between 0 and 1")
     val_pseudo_labels = args.val_pseudo_labels or args.pseudo_labels
-    train_split = "all" if args.val_pseudo_labels else "train"
+    has_external_validation = (
+        args.val_pseudo_labels is not None
+        and args.val_pseudo_labels.resolve() != args.pseudo_labels.resolve()
+    )
     cohort_size = args.cohort_size if args.cohort_size > 0 else None
     if args.geometry == "hbb":
         train_dataset = SAMStudentHBBDataset(
             pseudo_labels_path=args.pseudo_labels,
             image_root=args.image_root,
-            split=train_split,
-            val_ratio=0.20,
+            split="train",
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             min_stability=args.min_stability,
             cohort_size=cohort_size,
             gt_index_path=args.gt_index,
         )
-        val_dataset = SAMStudentHBBDataset(
-            pseudo_labels_path=val_pseudo_labels,
+        cohort_val_dataset = SAMStudentHBBDataset(
+            pseudo_labels_path=args.pseudo_labels,
             image_root=args.image_root,
             split="val",
-            val_ratio=0.20,
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
+            input_size=args.input_size,
+            min_stability=args.min_stability,
+            cohort_size=cohort_size,
+            gt_index_path=args.gt_index,
+        )
+        external_val_dataset = SAMStudentHBBDataset(
+            pseudo_labels_path=val_pseudo_labels,
+            image_root=args.image_root,
+            split="all" if has_external_validation else "val",
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             min_stability=args.min_stability,
         )
@@ -243,26 +274,52 @@ def train() -> None:
         train_dataset = SAMStudentDataset(
             pseudo_labels_path=args.pseudo_labels,
             image_root=args.image_root,
-            split=train_split,
-            val_ratio=0.20,
+            split="train",
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             min_stability=args.min_stability,
             cohort_size=cohort_size,
             gt_index_path=args.gt_index,
         )
-        val_dataset = SAMStudentDataset(
-            pseudo_labels_path=val_pseudo_labels,
+        cohort_val_dataset = SAMStudentDataset(
+            pseudo_labels_path=args.pseudo_labels,
             image_root=args.image_root,
             split="val",
-            val_ratio=0.20,
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
+            input_size=args.input_size,
+            min_stability=args.min_stability,
+            cohort_size=cohort_size,
+            gt_index_path=args.gt_index,
+        )
+        external_val_dataset = SAMStudentDataset(
+            pseudo_labels_path=val_pseudo_labels,
+            image_root=args.image_root,
+            split="all" if has_external_validation else "val",
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             min_stability=args.min_stability,
         )
         collate_fn = collate_quad_proposal_samples
 
+    validation_sets = {"cohort": cohort_val_dataset.images}
+    if has_external_validation:
+        validation_sets["external"] = external_val_dataset.images
+        val_dataset = ConcatDataset([cohort_val_dataset, external_val_dataset])
+    else:
+        val_dataset = cohort_val_dataset
+    audit_training_isolation(
+        train_dataset.images,
+        validation_sets,
+        image_root=args.image_root,
+        identity_validation_sets={"cohort"},
+    )
     print(
         f"Cohorts: Train={len(train_dataset)} images ({train_dataset.total_gt} GT, {train_dataset.total_novel} SAM novel), "
-        f"Val={len(val_dataset)} images ({val_dataset.total_gt} GT, {val_dataset.total_novel} SAM novel)"
+        f"Val cohort={len(cohort_val_dataset)} images, "
+        f"Val external={len(external_val_dataset) if has_external_validation else 0} images"
     )
 
     train_loader = DataLoader(
@@ -816,6 +873,13 @@ def train() -> None:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "input_size": args.input_size,
+        "pipeline_val_ratio": args.pipeline_val_ratio,
+        "split_seed": args.split_seed,
+        "training_images": len(train_dataset),
+        "reserved_cohort_validation_images": len(cohort_val_dataset),
+        "external_validation_images": (
+            len(external_val_dataset) if has_external_validation else 0
+        ),
         "best_recall_100_50": round(best_recall_50, 4),
         "history": history,
     }

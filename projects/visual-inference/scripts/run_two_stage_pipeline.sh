@@ -26,6 +26,9 @@ fi
 COHORT_SIZE="${COHORT_SIZE:-10000}"
 GT_INDEX="${GT_INDEX:-/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite}"
 PSEUDO_LABELS_DB="${PSEUDO_LABELS_DB:-artifacts/pseudo_labels/sam_discovery.sqlite}"
+VALIDATION_PSEUDO_LABELS="${VALIDATION_PSEUDO_LABELS:-artifacts/phase1/pseudo_labels/sam_pilot_800.json}"
+PIPELINE_VAL_RATIO="${PIPELINE_VAL_RATIO:-0.10}"
+PIPELINE_SPLIT_SEED="${PIPELINE_SPLIT_SEED:-42}"
 COHORT_TAG="10k"
 
 if [ "${STAGE}" = "stage1_enriched" ] || [ "${STAGE}" = "stage2_enriched" ] || [ "${STAGE}" = "all_enriched" ] || [ "${STAGE}" = "dashboard_enriched" ]; then
@@ -49,6 +52,8 @@ echo "MobileNetV4 Two-Stage Pipeline Orchestrator (Unified HBB & Quads)"
 echo "Stage Selection : ${STAGE} (options: all | all_enriched | stage1 | stage1_enriched | stage2 | stage2_enriched | dashboard | backup)"
 echo "Cohort Size     : ${COHORT_SIZE} (tag: ${COHORT_TAG}, index: ${GT_INDEX})"
 echo "Pseudo Labels   : ${PSEUDO_LABELS_DB}"
+echo "Validation Data : ${VALIDATION_PSEUDO_LABELS}"
+echo "Pipeline Split  : validation ratio ${PIPELINE_VAL_RATIO}, seed ${PIPELINE_SPLIT_SEED}"
 echo "Geometry Target : ${GEOMETRY} (options: both | hbb | quad)"
 echo "Device          : ${DEVICE}"
 echo "Batch Size      : ${BATCH_SIZE}"
@@ -70,6 +75,27 @@ backup_artifacts() {
     echo ">>> Backup complete: $(du -sh "${BACKUP_DIR}")"
 }
 
+run_isolation_audit() {
+    local AUDIT_PATH="artifacts/training_isolation_${COHORT_TAG}.json"
+    local DASHBOARD_MANIFEST="${EVALUATION_MANIFEST:-artifacts/dashboard_holdout_${COHORT_TAG}.json}"
+    local DASHBOARD_ARGS=()
+    if [ -f "${DASHBOARD_MANIFEST}" ]; then
+        DASHBOARD_ARGS+=(--dashboard-manifest "${DASHBOARD_MANIFEST}")
+    fi
+    echo ""
+    echo ">>> [PREFLIGHT] Verifying pipeline-wide train/validation isolation..."
+    uv run python scripts/audit_training_isolation.py \
+        --cohort-db "${PSEUDO_LABELS_DB}" \
+        --gt-index "${GT_INDEX}" \
+        --cohort-size "${COHORT_SIZE}" \
+        --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
+        --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+        --split-seed "${PIPELINE_SPLIT_SEED}" \
+        --output "${AUDIT_PATH}" \
+        "${DASHBOARD_ARGS[@]}"
+    echo ">>> Isolation audit passed -> ${AUDIT_PATH}"
+}
+
 run_stage1_hbb() {
     local SUFFIX=""
     if [ "${RECIPE}" = "recipe2" ]; then SUFFIX="_recipe2"; fi
@@ -84,7 +110,9 @@ run_stage1_hbb() {
         --cohort-size "${COHORT_SIZE}" \
         --gt-index "${GT_INDEX}" \
         --pseudo-labels "${PSEUDO_LABELS_DB}" \
-        --val-pseudo-labels artifacts/phase1/pseudo_labels/sam_pilot_800.json \
+        --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
+        --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+        --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${TRAIN_HBB_DIR}" \
         --device "${DEVICE}"
     echo ">>> Stage 1 HBB Complete -> ${TRAIN_HBB_DIR}/checkpoints/mobilenetv4_p2_hbb${SUFFIX}_best.pt"
@@ -104,7 +132,9 @@ run_stage1_quad() {
         --cohort-size "${COHORT_SIZE}" \
         --gt-index "${GT_INDEX}" \
         --pseudo-labels "${PSEUDO_LABELS_DB}" \
-        --val-pseudo-labels artifacts/phase1/pseudo_labels/sam_pilot_800.json \
+        --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
+        --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+        --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${TRAIN_QUAD_DIR}" \
         --device "${DEVICE}"
     echo ">>> Stage 1 Quad Complete -> ${TRAIN_QUAD_DIR}/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt"
@@ -124,7 +154,9 @@ run_stage2_hbb() {
         --init-checkpoint "${INIT_CKPT}" \
         --cohort-db "${PSEUDO_LABELS_DB}" \
         --gt-index "${GT_INDEX}" \
-        --val-pseudo-labels artifacts/phase1/pseudo_labels/sam_pilot_800.json \
+        --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
+        --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+        --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${FINETUNE_HBB_DIR}" \
         --epochs 5 \
         --cohort-size "${COHORT_SIZE}" \
@@ -151,7 +183,9 @@ run_stage2_quad() {
         --init-checkpoint "${INIT_CKPT}" \
         --cohort-db "${PSEUDO_LABELS_DB}" \
         --gt-index "${GT_INDEX}" \
-        --val-pseudo-labels artifacts/phase1/pseudo_labels/sam_pilot_800.json \
+        --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
+        --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+        --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${FINETUNE_QUAD_DIR}" \
         --epochs 5 \
         --cohort-size "${COHORT_SIZE}" \
@@ -176,7 +210,18 @@ run_dashboard() {
         QUAD_BEFORE="artifacts/train_${COHORT_TAG}_quad/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt"
     fi
     echo ""
-    echo ">>> [DASHBOARD] Generating Unified Master Comparison Dashboard (HBB & Quads, Before/After & Side-by-Side)..."
+    local EVAL_MANIFEST="${EVALUATION_MANIFEST:-artifacts/dashboard_holdout_${COHORT_TAG}.json}"
+    if [ ! -f "${EVAL_MANIFEST}" ]; then
+        local HOLDOUT_ARGS=()
+        if [ "${COHORT_TAG}" = "14k" ]; then
+            HOLDOUT_ARGS+=(--include-new-sources)
+        fi
+        uv run python scripts/prepare_dashboard_holdout.py \
+            --gt-index "${GT_INDEX}" --cohort-size "${COHORT_SIZE}" \
+            --samples-per-cohort "${SAMPLES_PER_COHORT:-35}" \
+            --output "${EVAL_MANIFEST}" "${HOLDOUT_ARGS[@]}"
+    fi
+    echo ">>> [DASHBOARD] Generating comparison on audited unseen images..."
     uv run python scripts/visualize_student_comparison.py \
         --hbb-before "${HBB_BEFORE}" \
         --hbb-after "${FINETUNE_HBB_DIR}/checkpoints/mobilenetv4_p2_hbb_finetune_best.pt" \
@@ -184,10 +229,8 @@ run_dashboard() {
         --quad-after "${FINETUNE_QUAD_DIR}/checkpoints/mobilenetv4_p2_quad_finetune_best.pt" \
         --hbb-summary "${FINETUNE_HBB_DIR}/training_hbb_finetune_summary.json" \
         --quad-summary "${FINETUNE_QUAD_DIR}/training_quad_finetune_summary.json" \
-        --pseudo-labels "${PSEUDO_LABELS_DB}" \
-        --val-pseudo-labels artifacts/phase1/pseudo_labels/sam_pilot_800.json \
+        --evaluation-manifest "${EVAL_MANIFEST}" \
         --output-html "${DASHBOARD_HTML}" \
-        --samples-per-cohort "${SAMPLES_PER_COHORT:-35}" \
         --device "${DEVICE}"
     echo ">>> Master Dashboard Generated -> file://${ROOT_DIR}/${DASHBOARD_HTML}"
 }
@@ -209,6 +252,12 @@ run_stage2() {
         run_stage2_quad
     fi
 }
+
+case "${STAGE}" in
+    all | all_enriched | stage1 | stage1_enriched | stage2 | stage2_enriched)
+        run_isolation_audit
+        ;;
+esac
 
 case "${STAGE}" in
     all)

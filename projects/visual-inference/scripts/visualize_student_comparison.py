@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Unified Visualizer and Comparison Dashboard for MobileNetV4 HBB and Quad Pipelines.
 
-Compares Stage-1 Discovery Baselines vs Stage-2 Human GT Fine-Tuned models,
-featuring side-by-side Quads vs HBB and comprehensive metrics across all 4 cohorts.
+Compares Stage-1 Discovery Baselines vs Stage-2 Human GT Fine-Tuned models on
+an audited evaluation manifest. Training-validation metrics are historical.
 """
 
 from __future__ import annotations
@@ -10,22 +10,20 @@ from __future__ import annotations
 import argparse
 import base64
 import io
+from html import escape
 import json
 from pathlib import Path
-import random
-import sqlite3
 from typing import Any
 
 from PIL import Image
 import torch
 
+from student_detector.dashboard_holdout import file_sha256, load_holdout
 from student_detector.decoder import InferenceDecoder
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.quad_decoder import QuadInferenceDecoder
 from student_detector.sam_student_data import (
     DEFAULT_IMAGE_ROOT,
-    DEFAULT_PSEUDO_LABELS_PATH,
-    SAMStudentDataset,
 )
 from student_detector.targets import point_validity_from_pixel_mask
 
@@ -83,28 +81,16 @@ def parse_args() -> argparse.Namespace:
         help="Output HTML dashboard path.",
     )
     parser.add_argument(
-        "--pseudo-labels",
+        "--evaluation-manifest",
         type=Path,
-        default=DEFAULT_PSEUDO_LABELS_PATH,
-        help="Path to validation pseudo-labels.",
-    )
-    parser.add_argument(
-        "--val-pseudo-labels",
-        type=Path,
-        default=Path("artifacts/phase1/pseudo_labels/sam_pilot_800.json"),
-        help="Path to classic benchmark validation pseudo-labels (e.g. sam_pilot_800.json).",
+        required=True,
+        help="Audited images excluded from both stages of detector training.",
     )
     parser.add_argument(
         "--image-root",
         type=Path,
         default=DEFAULT_IMAGE_ROOT,
         help="Path to dataset output image root.",
-    )
-    parser.add_argument(
-        "--samples-per-cohort",
-        type=int,
-        default=35,
-        help="Number of images per cohort to embed (default: 35).",
     )
     parser.add_argument(
         "--device",
@@ -138,9 +124,17 @@ def generate_dashboard_html(
     hbb_summary: dict[str, Any],
     quad_summary: dict[str, Any],
     output_path: Path,
+    provenance: dict[str, Any] | None = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    provenance = provenance or {}
+    provenance_html = escape(json.dumps(provenance, indent=2))
+    checkpoint_labels = " · ".join(
+        f"{name}: {Path(info['path']).parent.parent.name}"
+        for name, info in provenance.get("checkpoints", {}).items()
+        if name.endswith("after")
+    )
     q_hist = quad_summary.get("history", [{}])
     q_base = q_hist[0] if q_hist else {}
     q_best = q_hist[-1] if q_hist else {}
@@ -186,9 +180,9 @@ def generate_dashboard_html(
         cohort_counts[s] = cohort_counts.get(s, 0) + 1
 
     cohort_labels = {
-        "ade20k": "ADE20K (Pillars & Bins)",
-        "open_images_subset": "Open Images (Road Assets)",
-        "roboflow_ev_parking": "PKLot Parking Bays",
+        "ade20k": "ADE20K Validation",
+        "open_images_subset": "Open Images Evaluation",
+        "roboflow_ev_parking": "PKLot Oblique Holdout",
         "bdd100k_images_100k": "BDD100k Driving",
         "coco_2017": "COCO General",
         "nuimages": "nuImages Multi-View",
@@ -206,7 +200,7 @@ def generate_dashboard_html(
         )
     filter_buttons_html = "\n    ".join(filter_buttons)
 
-    is_enriched = any(
+    is_enriched = provenance.get("cohort_size", 0) > 10000 or any(
         src in ("ade20k", "open_images_subset", "roboflow_ev_parking")
         for src in unique_sources
     )
@@ -300,11 +294,18 @@ def generate_dashboard_html(
     display: flex;
     flex-direction: column;
     gap: 14px;
-    background: var(--bg-card);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    background: rgba(19, 28, 46, 0.96);
+    backdrop-filter: blur(12px);
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 16px 20px;
     margin-bottom: 24px;
+    box-shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
   }}
   .controls-row {{
     display: flex;
@@ -355,10 +356,36 @@ def generate_dashboard_html(
     background: rgba(15, 23, 42, 0.6);
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
     font-size: 0.82rem;
     color: var(--text-secondary);
     border-bottom: 1px solid var(--border-color);
   }}
+  .img-card-metadata {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex: 1 1 260px;
+  }}
+  .image-view-btn {{
+    background: rgba(30, 41, 59, 0.9);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }}
+  .image-view-btn:hover {{ background: #334155; border-color: #64748b; }}
+  .image-view-btn[data-mode="gt"] {{ border-color: #10b981; color: #a7f3d0; }}
+  .image-view-btn[data-mode="hbb"] {{ border-color: #22d3ee; color: #a5f3fc; }}
+  .image-view-btn[data-mode="quad"] {{ border-color: #a855f7; color: #e9d5ff; }}
   .canvas-wrapper {{
     position: relative;
     width: 100%;
@@ -375,35 +402,29 @@ def generate_dashboard_html(
 <header>
   <h1><span>⚡</span> MobileNetV4 Two-Stage Pipeline: Master Comparison Dashboard</h1>
   <div class="subtitle">
-    Before Fine-Tuning (SAM Discovery 15-ep) vs After Fine-Tuning (Human GT 5-ep) &bull; Side-by-Side Quads and HBB
+    Before and after fine-tuning &bull; Images excluded from both detector training stages
+    <p>{escape(checkpoint_labels)}</p>
+    <p>Score 0 shows all exported predictions, up to 100 per model. NMS and the 1,000-candidate shortlist still apply.</p>
+    <p>Each image button cycles that card through Human GT, fine-tuned HBB, and fine-tuned quads. The controls remain visible while scrolling.</p>
+    <details><summary>Checkpoints and image exclusion audit</summary><pre>{provenance_html}</pre></details>
   </div>
 </header>
 
 <section class="metrics-grid">
   <div class="card" style="border-color: rgba(168, 85, 247, 0.4);">
-    <div class="label">Stage-2 Quad GT Recall@100@50</div>
+    <div class="label">Historical Stage-2 Quad GT Recall@100@50</div>
     <div class="val-main" style="color: var(--accent-purple);">{q_best_rec * 100:.2f}%</div>
     <div class="sub">Baseline: {q_base_rec * 100:.2f}% &rarr; <span style="color: var(--accent-green)">{(q_best_rec - q_base_rec) * 100:+.2f}% gain 🚀</span></div>
   </div>
   <div class="card" style="border-color: rgba(34, 211, 238, 0.4);">
-    <div class="label">Stage-2 HBB GT Recall@100@50</div>
+    <div class="label">Historical Stage-2 HBB GT Recall@100@50</div>
     <div class="val-main" style="color: var(--accent-cyan);">{h_best_rec * 100:.2f}%</div>
     <div class="sub">Baseline: {h_base_rec * 100:.2f}% &rarr; <span style="color: var(--accent-green)">{(h_best_rec - h_base_rec) * 100:+.2f}% gain 🎯</span></div>
-  </div>
-  <div class="card">
-    <div class="label">Quad Envelope Tightening</div>
-    <div class="val-main" style="color: var(--accent-purple);">0.2747</div>
-    <div class="sub">Corner L1 reduced from 0.3049 | GWD dropped to 0.1031</div>
-  </div>
-  <div class="card">
-    <div class="label">HBB Coordinate Loss</div>
-    <div class="val-main" style="color: var(--accent-cyan);">0.1757</div>
-    <div class="sub">LTRB L1 halved from 0.3557 (-50.6%)</div>
   </div>
 </section>
 
 <div class="table-card">
-  <h2>Benchmark Comparison: All 4 Pipeline Configurations</h2>
+  <h2>Historical training-validation metrics (not measured on the images below)</h2>
   <table>
     <thead>
       <tr>
@@ -426,7 +447,7 @@ def generate_dashboard_html(
         <td>{q_best_rec_10 * 100:.2f}%</td>
         <td>{q_best_rec_75 * 100:.2f}%</td>
         <td>{q_best_ap * 100:.2f}%</td>
-        <td>Tight rotated vertices, calibrated polygon IoU, fisheye curvature support</td>
+        <td>Quadrilateral proposals</td>
       </tr>
       <tr style="background: rgba(34, 211, 238, 0.08); font-weight: 600;">
         <td style="color: var(--accent-cyan);">🔬 Stage-2 HBB (Fine-Tuned)</td>
@@ -436,7 +457,7 @@ def generate_dashboard_html(
         <td>{h_best_rec_10 * 100:.2f}%</td>
         <td>{h_best_rec_75 * 100:.2f}%</td>
         <td>{h_best_ap * 100:.2f}%</td>
-        <td>Precise box envelopes, zero texture hallucinations, road context filtered</td>
+        <td>Axis-aligned proposals</td>
       </tr>
       <tr style="background: rgba(245, 158, 11, 0.05);">
         <td style="color: var(--accent-amber);">Stage-1 Quad (Baseline)</td>
@@ -482,13 +503,13 @@ def generate_dashboard_html(
     <div style="margin-left: auto; display: flex; align-items: center; gap: 16px;">
       <div style="display: flex; align-items: center; gap: 8px;">
         <span style="font-size: 0.85rem; color: var(--text-secondary);">Min Score:</span>
-        <input type="range" id="score-threshold" min="0.05" max="0.90" step="0.05" value="0.50">
-        <span id="score-val" style="font-weight: 700; color: var(--accent-purple); min-width: 32px;">0.50</span>
+        <input type="range" id="score-threshold" min="0" max="1" step="0.01" value="0.30">
+        <span id="score-val" style="font-weight: 700; color: var(--accent-purple); min-width: 32px;">0.30</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 0.85rem; color: var(--text-secondary);">Max Tops:</span>
-        <input type="range" id="max-proposals" min="5" max="35" step="5" value="20">
-        <span id="tops-val" style="font-weight: 700; color: var(--accent-cyan); min-width: 24px;">20</span>
+        <span style="font-size: 0.85rem; color: var(--text-secondary);">Max predictions:</span>
+        <input type="range" id="max-proposals" min="5" max="100" step="5" value="100">
+        <span id="tops-val" style="font-weight: 700; color: var(--accent-cyan); min-width: 24px;">100</span>
       </div>
     </div>
   </div>
@@ -504,10 +525,19 @@ def generate_dashboard_html(
 <script>
 const IMAGES = {json.dumps(images_data)};
 let activeCohort = 'all';
+const cardViewModes = ['gt', 'hbb', 'quad'];
+const cardViews = new Map();
+const cardViewLabels = {{
+  global: 'Combined layers',
+  gt: 'Human GT',
+  hbb: 'Fine-tuned HBB',
+  quad: 'Fine-tuned Quads',
+}};
 
-function drawQuad(ctx, quad, strokeStyle, lineWidth, isDashed = false) {{
+function drawQuad(ctx, quad, strokeStyle, fillStyle, lineWidth, isDashed = false) {{
   ctx.save();
   ctx.strokeStyle = strokeStyle;
+  ctx.fillStyle = fillStyle;
   ctx.lineWidth = lineWidth;
   if (isDashed) ctx.setLineDash([4, 4]);
   ctx.beginPath();
@@ -516,20 +546,42 @@ function drawQuad(ctx, quad, strokeStyle, lineWidth, isDashed = false) {{
     ctx.lineTo(quad[i][0], quad[i][1]);
   }}
   ctx.closePath();
+  if (fillStyle) ctx.fill();
   ctx.stroke();
   ctx.restore();
 }}
 
-function drawBox(ctx, box, strokeStyle, lineWidth, isDashed = false) {{
+function drawBox(ctx, box, strokeStyle, fillStyle, lineWidth, isDashed = false) {{
   ctx.save();
   ctx.strokeStyle = strokeStyle;
+  ctx.fillStyle = fillStyle;
   ctx.lineWidth = lineWidth;
   if (isDashed) ctx.setLineDash([4, 4]);
+  if (fillStyle) {{
+    ctx.fillRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
+  }}
   ctx.strokeRect(box[0], box[1], box[2] - box[0], box[3] - box[1]);
   ctx.restore();
 }}
 
+function cardKey(item) {{
+  return item.sha256 || `${{item.source_dataset}}:${{item.image_id}}:${{item.file_name}}`;
+}}
+
+function cycleCardView(item, button, redraw) {{
+  const key = cardKey(item);
+  const current = cardViews.get(key) || 'global';
+  const currentIndex = cardViewModes.indexOf(current);
+  const next = cardViewModes[(currentIndex + 1) % cardViewModes.length];
+  cardViews.set(key, next);
+  button.dataset.mode = next;
+  button.textContent = `Image view: ${{cardViewLabels[next]}} ↻`;
+  button.setAttribute('aria-label', `Cycle overlay for this image; currently ${{cardViewLabels[next]}}`);
+  redraw();
+}}
+
 function setPreset(mode) {{
+  cardViews.clear();
   document.querySelectorAll('.controls-row .preset-btn').forEach(b => b.classList.remove('active'));
   if (event && event.target) event.target.classList.add('active');
 
@@ -597,7 +649,19 @@ function renderCards() {{
 
     const header = document.createElement('div');
     header.className = 'img-card-header';
-    header.innerHTML = `<span><strong>${{item.source_dataset}}</strong> #${{item.image_id}}</span><span>${{item.camera_type}} &bull; ${{item.width}}x${{item.height}}</span>`;
+    const imageLabel = item.image_id < 0 ? item.file_name.split('/').pop() : `#${{item.image_id}}`;
+    const metadata = document.createElement('div');
+    metadata.className = 'img-card-metadata';
+    metadata.innerHTML = `<span><strong>${{item.source_dataset}}</strong> ${{imageLabel}}</span><span>${{item.camera_type}} &bull; ${{item.width}}x${{item.height}}</span>`;
+    const viewButton = document.createElement('button');
+    viewButton.type = 'button';
+    viewButton.className = 'image-view-btn';
+    const initialMode = cardViews.get(cardKey(item)) || 'global';
+    viewButton.dataset.mode = initialMode;
+    viewButton.textContent = `Image view: ${{cardViewLabels[initialMode]}} ↻`;
+    viewButton.setAttribute('aria-label', `Cycle overlay for this image; currently ${{cardViewLabels[initialMode]}}`);
+    header.appendChild(metadata);
+    header.appendChild(viewButton);
 
     const wrapper = document.createElement('div');
     wrapper.className = 'canvas-wrapper';
@@ -614,7 +678,6 @@ function renderCards() {{
       canvas.width = img.width;
       canvas.height = img.height;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
 
       const scaleX = img.width / item.width;
       const scaleY = img.height / item.height;
@@ -627,59 +690,69 @@ function renderCards() {{
         return [b[0] * scaleX, b[1] * scaleY, b[2] * scaleX, b[3] * scaleY];
       }}
 
-      // 1. SAM Discovered (Gray dashed)
-      if (showSam && item.sam_quads) {{
-        item.sam_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), '#9ca3af', 1.5, true));
-      }}
+      function drawCard() {{
+        const localMode = cardViews.get(cardKey(item)) || 'global';
+        const useGlobalLayers = localMode === 'global';
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
 
-      // 2. Human Ground Truth (Green solid)
-      if (showGt) {{
-        if (item.gt_quads && item.gt_quads.length > 0) {{
-          item.gt_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), '#10b981', 2.0));
-        }} else if (item.gt_boxes) {{
-          item.gt_boxes.forEach(b => drawBox(ctx, rescaleBox(b), '#10b981', 2.0));
+        // SAM Discovered (gray dashed)
+        if (useGlobalLayers && showSam && item.sam_quads) {{
+          item.sam_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(156, 163, 175, 0.65)', 'rgba(156, 163, 175, 0.06)', 1.5, true));
+        }}
+
+        // Human Ground Truth (green)
+        if ((useGlobalLayers && showGt) || localMode === 'gt') {{
+          if (item.gt_quads && item.gt_quads.length > 0) {{
+            item.gt_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(16, 185, 129, 0.82)', 'rgba(16, 185, 129, 0.10)', 2.0));
+          }} else if (item.gt_boxes) {{
+            item.gt_boxes.forEach(b => drawBox(ctx, rescaleBox(b), 'rgba(16, 185, 129, 0.82)', 'rgba(16, 185, 129, 0.10)', 2.0));
+          }}
+        }}
+
+        // Stage-1 Quad Baseline (amber dashed)
+        if (useGlobalLayers && showQuadBase && item.quad_before) {{
+          item.quad_before.slice(0, maxTops).forEach(p => {{
+            if (p.score >= scoreThresh) {{
+              drawQuad(ctx, rescaleQuad(p.quad), 'rgba(245, 158, 11, 0.65)', 'rgba(245, 158, 11, 0.05)', 1.8, true);
+            }}
+          }});
+        }}
+
+        // Stage-1 HBB Baseline (blue dashed)
+        if (useGlobalLayers && showHbbBase && item.hbb_before) {{
+          item.hbb_before.slice(0, maxTops).forEach(p => {{
+            if (p.score >= scoreThresh) {{
+              drawBox(ctx, rescaleBox(p.box), 'rgba(59, 130, 246, 0.65)', 'rgba(59, 130, 246, 0.05)', 1.8, true);
+            }}
+          }});
+        }}
+
+        // Stage-2 HBB Fine-Tuned (cyan)
+        if (((useGlobalLayers && showHbbFt) || localMode === 'hbb') && item.hbb_after) {{
+          item.hbb_after.slice(0, maxTops).forEach(p => {{
+            if (p.score >= scoreThresh) {{
+              drawBox(ctx, rescaleBox(p.box), 'rgba(34, 211, 238, 0.78)', 'rgba(34, 211, 238, 0.12)', 2.0);
+            }}
+          }});
+        }}
+
+        // Stage-2 Quad Fine-Tuned (purple + label)
+        if (((useGlobalLayers && showQuadFt) || localMode === 'quad') && item.quad_after) {{
+          item.quad_after.slice(0, maxTops).forEach(p => {{
+            if (p.score >= scoreThresh) {{
+              const rq = rescaleQuad(p.quad);
+              drawQuad(ctx, rq, 'rgba(192, 132, 252, 0.78)', 'rgba(192, 132, 252, 0.12)', 2.5);
+              ctx.fillStyle = 'rgba(233, 213, 255, 0.88)';
+              ctx.font = '11px sans-serif';
+              ctx.fillText(p.score.toFixed(2), rq[0][0] + 2, Math.max(12, rq[0][1] - 2));
+            }}
+          }});
         }}
       }}
 
-      // 3. Stage-1 Quad Baseline (Amber dashed)
-      if (showQuadBase && item.quad_before) {{
-        item.quad_before.slice(0, maxTops).forEach(p => {{
-          if (p.score >= scoreThresh) {{
-            drawQuad(ctx, rescaleQuad(p.quad), '#f59e0b', 1.8, true);
-          }}
-        }});
-      }}
-
-      // 4. Stage-1 HBB Baseline (Blue dashed)
-      if (showHbbBase && item.hbb_before) {{
-        item.hbb_before.slice(0, maxTops).forEach(p => {{
-          if (p.score >= scoreThresh) {{
-            drawBox(ctx, rescaleBox(p.box), '#3b82f6', 1.8, true);
-          }}
-        }});
-      }}
-
-      // 5. Stage-2 HBB Fine-Tuned (Cyan solid)
-      if (showHbbFt && item.hbb_after) {{
-        item.hbb_after.slice(0, maxTops).forEach(p => {{
-          if (p.score >= scoreThresh) {{
-            drawBox(ctx, rescaleBox(p.box), '#22d3ee', 2.0);
-          }}
-        }});
-      }}
-
-      // 6. Stage-2 Quad Fine-Tuned (Purple solid + label)
-      if (showQuadFt && item.quad_after) {{
-        item.quad_after.slice(0, maxTops).forEach(p => {{
-          if (p.score >= scoreThresh) {{
-            const rq = rescaleQuad(p.quad);
-            drawQuad(ctx, rq, '#c084fc', 2.5);
-            ctx.fillStyle = '#c084fc';
-            ctx.font = '11px sans-serif';
-            ctx.fillText(p.score.toFixed(2), rq[0][0] + 2, Math.max(12, rq[0][1] - 2));
-          }}
-        }});
-      }}
+      viewButton.addEventListener('click', () => cycleCardView(item, viewButton, drawCard));
+      drawCard();
     }};
   }});
 }}
@@ -723,109 +796,32 @@ def main() -> None:
         with open(args.quad_summary, encoding="utf-8") as f:
             quad_summary = json.load(f)
 
-    # 2. Load raw annotations metadata
-    ann_by_img_id: dict[int, dict[str, Any]] = {}
-
-    classic_val_dataset: SAMStudentDataset | None = None
-    if args.val_pseudo_labels and args.val_pseudo_labels.is_file():
-        print(
-            f"Loading classic benchmark validation cohort from {args.val_pseudo_labels}..."
-        )
-        with open(args.val_pseudo_labels, encoding="utf-8") as f:
-            classic_meta = json.load(f)
-
-        for img_rec in classic_meta.get("images", []):
-            iid = img_rec["image_id"]
-            gt_quads = [
-                a["quad"]
-                for a in img_rec.get("annotations", [])
-                if a.get("source") == "human_gt"
-                and a.get("is_positive")
-                and "quad" in a
-            ]
-            gt_boxes = [
-                a["bbox"]
-                for a in img_rec.get("annotations", [])
-                if a.get("source") == "human_gt"
-                and a.get("is_positive")
-                and "bbox" in a
-            ]
-            sam_quads = [
-                a["quad"]
-                for a in img_rec.get("annotations", [])
-                if a.get("source") == "sam_discovered"
-                and a.get("is_positive")
-                and "quad" in a
-            ]
-            ann_by_img_id[iid] = {
-                "gt_quads": gt_quads,
-                "gt_boxes": gt_boxes,
-                "sam": sam_quads,
+    selected_items, manifest = load_holdout(args.evaluation_manifest, args.image_root)
+    provenance = {
+        "checkpoints": {
+            name: {
+                "path": str(getattr(args, name)),
+                "sha256": file_sha256(getattr(args, name)),
             }
-
-        classic_val_dataset = SAMStudentDataset(
-            pseudo_labels_path=args.val_pseudo_labels,
-            image_root=args.image_root,
-            split="val",
-            val_ratio=0.20,
-            input_size=384,
-        )
-
-    # 3. Load Primary / Enriched Validation Dataset
-    is_sqlite = args.pseudo_labels.suffix in (".sqlite", ".db")
-    primary_val_dataset: SAMStudentDataset | None = None
-    if args.pseudo_labels.exists() and args.pseudo_labels != args.val_pseudo_labels:
-        if not is_sqlite:
-            with open(args.pseudo_labels, encoding="utf-8") as f:
-                val_meta = json.load(f)
-
-            for img_rec in val_meta.get("images", []):
-                iid = img_rec["image_id"]
-                if iid not in ann_by_img_id:
-                    gt_quads = [
-                        a["quad"]
-                        for a in img_rec.get("annotations", [])
-                        if a.get("source") == "human_gt"
-                        and a.get("is_positive")
-                        and "quad" in a
-                    ]
-                    gt_boxes = [
-                        a["bbox"]
-                        for a in img_rec.get("annotations", [])
-                        if a.get("source") == "human_gt"
-                        and a.get("is_positive")
-                        and "bbox" in a
-                    ]
-                    sam_quads = [
-                        a["quad"]
-                        for a in img_rec.get("annotations", [])
-                        if a.get("source") == "sam_discovered"
-                        and a.get("is_positive")
-                        and "quad" in a
-                    ]
-                    ann_by_img_id[iid] = {
-                        "gt_quads": gt_quads,
-                        "gt_boxes": gt_boxes,
-                        "sam": sam_quads,
-                    }
-
-        primary_val_dataset = SAMStudentDataset(
-            pseudo_labels_path=args.pseudo_labels,
-            image_root=args.image_root,
-            split="val",
-            val_ratio=0.20,
-            input_size=384,
-        )
-    elif classic_val_dataset is not None:
-        primary_val_dataset = classic_val_dataset
-    else:
-        primary_val_dataset = SAMStudentDataset(
-            pseudo_labels_path=args.pseudo_labels,
-            image_root=args.image_root,
-            split="val",
-            val_ratio=0.20,
-            input_size=384,
-        )
+            for name in ("hbb_before", "hbb_after", "quad_before", "quad_after")
+        },
+        "evaluation_manifest": str(args.evaluation_manifest),
+        "manifest_sha256": file_sha256(args.evaluation_manifest),
+        "excluded_training_images": len(manifest["excluded_training_images"]),
+        "excluded_validation_images": len(manifest["excluded_validation_images"]),
+        "training_overlap": 0,
+        "cohort_size": manifest["cohort_size"],
+        "audit": "Detector Stage-1/Stage-2 cohort and external validation inputs excluded by image ID where globally meaningful, resolved path and SHA-256. Near-duplicate scenes and ImageNet pretraining are not audited.",
+        "decoder": {"score_floor": 0.0, "pre_nms_top_k": 1000, "max_predictions": 100},
+    }
+    ann_by_img_id = {
+        row["image_id"]: {
+            "gt_quads": row["gt_quads"],
+            "gt_boxes": row["gt_boxes"],
+            "sam": [],
+        }
+        for _, row in selected_items
+    }
     strides = (4, 8, 16, 32)
 
     # 4. Load Models
@@ -841,6 +837,7 @@ def main() -> None:
         nms_mode="part_aware",
         part_scale_ratio=0.4,
         part_max_iou=0.65,
+        score_threshold=0.0,
     )
 
     model_hbb_before = StudentDetector(
@@ -880,6 +877,7 @@ def main() -> None:
         nms_mode="part_aware",
         part_scale_ratio=0.4,
         part_max_iou=0.65,
+        score_threshold=0.0,
     )
 
     ckpt_qb = (
@@ -920,145 +918,15 @@ def main() -> None:
         model_quad_after.load_state_dict(ckpt_qa["model_state_dict"])
         model_quad_after.eval()
 
-    # 5. Select balanced samples prioritizing classic validation benchmarks and enriching with new cohorts
-    samples_json = Path(
-        "/media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/roboflow/samples.json"
-    )
-    non_topdown_pklot_fn: set[str] = set()
-    if samples_json.is_file():
-        try:
-            with open(samples_json, encoding="utf-8") as f:
-                pk_data = json.load(f)
-            for s in pk_data.get("samples", []):
-                if s.get("source") in ("ufpr04", "ufpr05"):
-                    non_topdown_pklot_fn.add(
-                        "images/train/parking__" + s["filepath"].split("/")[-1]
-                    )
-        except Exception as exc:
-            print(
-                f"[Master Visualizer] Note: Failed to parse PKLot samples.json: {exc}. Falling back to date heuristic."
-            )
-
-    all_cohorts: set[str] = set()
-    classic_by_cohort: dict[str, list[int]] = {}
-    if classic_val_dataset is not None:
-        for idx, img_info in enumerate(classic_val_dataset.images):
-            src = img_info["source_dataset"]
-            all_cohorts.add(src)
-            classic_by_cohort.setdefault(src, []).append(idx)
-
-    primary_by_cohort: dict[str, list[int]] = {}
-    if primary_val_dataset is not None:
-        for idx, img_info in enumerate(primary_val_dataset.images):
-            src = img_info["source_dataset"]
-            all_cohorts.add(src)
-            primary_by_cohort.setdefault(src, []).append(idx)
-
-    rng = random.Random(42)
-    selected_items: list[tuple[Any, dict[str, Any]]] = []
-    for src in sorted(all_cohorts):
-        cohort_items: list[tuple[Any, dict[str, Any]]] = []
-        # First, include classic validation images if available
-        if src in classic_by_cohort and classic_val_dataset is not None:
-            for idx in classic_by_cohort[src][: args.samples_per_cohort]:
-                cohort_items.append(
-                    (classic_val_dataset[idx], classic_val_dataset.images[idx])
-                )
-
-        # If more images needed to reach samples_per_cohort, supplement from primary/enriched
-        if (
-            len(cohort_items) < args.samples_per_cohort
-            and src in primary_by_cohort
-            and primary_val_dataset is not None
-            and primary_val_dataset != classic_val_dataset
-        ):
-            needed = args.samples_per_cohort - len(cohort_items)
-            existing_ids = {rec["image_id"] for _, rec in cohort_items}
-            cand_indices = [
-                idx
-                for idx in primary_by_cohort[src]
-                if primary_val_dataset.images[idx]["image_id"] not in existing_ids
-            ]
-
-            if src == "roboflow_ev_parking":
-                # Filter strictly for non-overhead / perspective camera viewpoints (ufpr04 & ufpr05)
-                def is_perspective_parking(fn: str) -> bool:
-                    if non_topdown_pklot_fn:
-                        return fn in non_topdown_pklot_fn
-                    # Fallback heuristic: pucpr top-down camera was recorded in 2012-09 through 2012-11
-                    return not any(
-                        fn.startswith(f"images/train/parking__2012-{m:02d}")
-                        for m in (9, 10, 11)
-                    )
-
-                oblique_cands = [
-                    idx
-                    for idx in cand_indices
-                    if is_perspective_parking(
-                        primary_val_dataset.images[idx]["file_name"]
-                    )
-                ]
-                if oblique_cands:
-                    cand_indices = oblique_cands
-
-            # For all cohorts (including open_images_subset and ade20k), shuffle candidate indices
-            # to guarantee rich and diverse scene & class representation
-            rng.shuffle(cand_indices)
-            for idx in cand_indices[:needed]:
-                cohort_items.append(
-                    (primary_val_dataset[idx], primary_val_dataset.images[idx])
-                )
-
-        selected_items.extend(cohort_items)
-
-    if is_sqlite:
-        sqlite_img_ids = [
-            sample.image_id
-            for sample, _ in selected_items
-            if sample.image_id not in ann_by_img_id
-        ]
-        if sqlite_img_ids:
-            conn = sqlite3.connect(
-                f"file:{args.pseudo_labels}?mode=ro&immutable=1", uri=True
-            )
-            placeholders = ",".join("?" for _ in sqlite_img_ids)
-            rows = conn.execute(
-                f"""
-                SELECT image_id, bbox_x1, bbox_y1, bbox_x2, bbox_y2, quad_json, source, is_positive, is_suppressed
-                FROM annotations
-                WHERE image_id IN ({placeholders})
-                """,
-                sqlite_img_ids,
-            ).fetchall()
-            for r in rows:
-                iid = int(r[0])
-                bbox = [float(r[1]), float(r[2]), float(r[3]), float(r[4])]
-                quad = json.loads(r[5]) if r[5] else None
-                source = str(r[6])
-                is_pos = bool(r[7])
-                is_supp = bool(r[8])
-                if iid not in ann_by_img_id:
-                    ann_by_img_id[iid] = {"gt_quads": [], "gt_boxes": [], "sam": []}
-                if source == "human_gt" and is_pos and not is_supp:
-                    if quad:
-                        ann_by_img_id[iid]["gt_quads"].append(quad)
-                    ann_by_img_id[iid]["gt_boxes"].append(bbox)
-                elif source == "sam_discovered" and is_pos and not is_supp and quad:
-                    ann_by_img_id[iid]["sam"].append(quad)
-            conn.close()
-
-    for sample, _ in selected_items:
-        ann_by_img_id.setdefault(
-            sample.image_id, {"gt_quads": [], "gt_boxes": [], "sam": []}
-        )
-
     print(
-        f"Processing comparative proposals for {len(selected_items)} validation samples..."
+        f"Processing comparative proposals for {len(selected_items)} unseen evaluation samples..."
     )
     images_data: list[dict[str, Any]] = []
 
     with torch.no_grad():
-        for sample, rec in selected_items:
+        for sample_index, (sample, rec) in enumerate(selected_items):
+            if sample_index % 25 == 0:
+                print(f"Inference: {sample_index}/{len(selected_items)}", flush=True)
             img_tensor = sample.image.unsqueeze(0).to(device)
             orig_h, orig_w = sample.original_size
             scale, offset_x, offset_y = sample.transform
@@ -1129,32 +997,32 @@ def main() -> None:
             hbb_before_preds = [
                 {"box": b, "score": round(float(s), 4)}
                 for b, s in zip(
-                    unbox(det_hb.boxes)[:35],
-                    det_hb.scores.cpu().tolist()[:35],
+                    unbox(det_hb.boxes),
+                    det_hb.scores.cpu().tolist(),
                     strict=False,
                 )
             ]
             hbb_after_preds = [
                 {"box": b, "score": round(float(s), 4)}
                 for b, s in zip(
-                    unbox(det_ha.boxes)[:35],
-                    det_ha.scores.cpu().tolist()[:35],
+                    unbox(det_ha.boxes),
+                    det_ha.scores.cpu().tolist(),
                     strict=False,
                 )
             ]
             quad_before_preds = [
                 {"quad": q, "score": round(float(s), 4)}
                 for q, s in zip(
-                    unquad(det_qb.quads)[:35],
-                    det_qb.scores.cpu().tolist()[:35],
+                    unquad(det_qb.quads),
+                    det_qb.scores.cpu().tolist(),
                     strict=False,
                 )
             ]
             quad_after_preds = [
                 {"quad": q, "score": round(float(s), 4)}
                 for q, s in zip(
-                    unquad(det_qa.quads)[:35],
-                    det_qa.scores.cpu().tolist()[:35],
+                    unquad(det_qa.quads),
+                    det_qa.scores.cpu().tolist(),
                     strict=False,
                 )
             ]
@@ -1176,6 +1044,8 @@ def main() -> None:
                     "width": orig_w,
                     "height": orig_h,
                     "thumbnail": thumb_b64,
+                    "file_name": rec["file_name"],
+                    "sha256": rec["sha256"],
                     "gt_quads": anns["gt_quads"],
                     "gt_boxes": anns["gt_boxes"],
                     "sam_quads": anns["sam"],
@@ -1186,7 +1056,12 @@ def main() -> None:
                 }
             )
 
-    generate_dashboard_html(images_data, hbb_summary, quad_summary, args.output_html)
+    generate_dashboard_html(
+        images_data, hbb_summary, quad_summary, args.output_html, provenance
+    )
+    args.output_html.with_suffix(".audit.json").write_text(
+        json.dumps(provenance, indent=2)
+    )
 
 
 if __name__ == "__main__":

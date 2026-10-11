@@ -22,6 +22,7 @@ if hasattr(torch.multiprocessing, "set_sharing_strategy"):
     torch.multiprocessing.set_sharing_strategy("file_system")
 
 from student_detector.assigner import ATSSAssigner
+from student_detector.data_isolation import audit_training_isolation
 from student_detector.decoder import InferenceDecoder
 from student_detector.human_gt_data import (
     DEFAULT_GT_INDEX_PATH,
@@ -206,6 +207,18 @@ def parse_args() -> argparse.Namespace:
         help="Cohort size limit (default: 10000 for standard 10k dataset; set 0 for all DB images).",
     )
     parser.add_argument(
+        "--pipeline-val-ratio",
+        type=float,
+        default=0.10,
+        help="Pipeline-wide cohort fraction reserved from every training stage (default: 0.10).",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Seed for the shared pipeline train/validation split (default: 42).",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
@@ -291,14 +304,20 @@ def finetune() -> None:
 
     # 1. Datasets and Loaders
     print("Loading datasets...")
+    if not 0 < args.pipeline_val_ratio < 1:
+        raise ValueError("--pipeline-val-ratio must be between 0 and 1")
     cohort_size = args.cohort_size if args.cohort_size > 0 else None
+    has_external_validation = (
+        args.val_pseudo_labels.resolve() != args.cohort_db.resolve()
+    )
     if args.geometry == "hbb":
         train_dataset = HumanGTHBBDataset(
             cohort_db_path=args.cohort_db,
             gt_index_path=args.gt_index,
             image_root=args.image_root,
             split="train",
-            val_ratio=0.10,
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             cohort_size=cohort_size,
         )
@@ -307,15 +326,17 @@ def finetune() -> None:
             gt_index_path=args.gt_index,
             image_root=args.image_root,
             split="val",
-            val_ratio=0.10,
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             cohort_size=cohort_size,
         )
         val_sam_dataset = SAMStudentHBBDataset(
             pseudo_labels_path=args.val_pseudo_labels,
             image_root=args.image_root,
-            split="val",
-            val_ratio=0.20,
+            split="all" if has_external_validation else "val",
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
         )
         collate_fn = collate_proposal_samples
@@ -325,7 +346,8 @@ def finetune() -> None:
             gt_index_path=args.gt_index,
             image_root=args.image_root,
             split="train",
-            val_ratio=0.10,
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             cohort_size=cohort_size,
         )
@@ -334,19 +356,30 @@ def finetune() -> None:
             gt_index_path=args.gt_index,
             image_root=args.image_root,
             split="val",
-            val_ratio=0.10,
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
             cohort_size=cohort_size,
         )
         val_sam_dataset = SAMStudentDataset(
             pseudo_labels_path=args.val_pseudo_labels,
             image_root=args.image_root,
-            split="val",
-            val_ratio=0.20,
+            split="all" if has_external_validation else "val",
+            val_ratio=args.pipeline_val_ratio,
+            split_seed=args.split_seed,
             input_size=args.input_size,
         )
         collate_fn = collate_quad_proposal_samples
 
+    validation_sets = {"cohort": val_gt_dataset.images}
+    if has_external_validation:
+        validation_sets["external"] = val_sam_dataset.images
+    audit_training_isolation(
+        train_dataset.images,
+        validation_sets,
+        image_root=args.image_root,
+        identity_validation_sets={"cohort"},
+    )
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -630,7 +663,7 @@ def finetune() -> None:
         epoch_duration = time.time() - epoch_start_time
         avg_loss = epoch_loss / max(batch_count, 1)
 
-        # Validation (Full pass on Val GT 1000 images ~15s and SAM 160 images ~2s)
+        # Full pass over the reserved cohort and the external validation set.
         val_start_time = time.time()
         val_gt_metrics = run_eval(val_gt_loader)
         val_sam_metrics = run_eval(val_sam_loader)
@@ -736,6 +769,11 @@ def finetune() -> None:
         "epochs": args.epochs,
         "batch_size": args.batch_size,
         "input_size": args.input_size,
+        "pipeline_val_ratio": args.pipeline_val_ratio,
+        "split_seed": args.split_seed,
+        "training_images": len(train_dataset),
+        "reserved_cohort_validation_images": len(val_gt_dataset),
+        "external_validation_images": len(val_sam_dataset),
         "baseline_gt_recall_100_50": round(base_gt_rec, 4),
         "best_gt_recall_100_50": round(best_gt_recall, 4),
         "baseline_recall_100_50": round(base_gt_rec, 4),
