@@ -52,13 +52,21 @@ STAGE2_COHORT_QUOTAS: dict[str, int] = {
 }
 
 STAGE2_ENRICHED_COHORT_QUOTAS: dict[str, int] = {
-    "coco_2017": 2500,
-    "bdd100k_images_100k": 2000,
-    "nuimages": 1500,
+    "coco_2017": 3500,
+    "bdd100k_images_100k": 2500,
+    "nuimages": 2000,
     "woodscape_rgb_fisheye": 1500,
-    "ade20k": 2000,
+    "ade20k": 2500,
     "open_images_subset": 2000,
-    "roboflow_ev_parking": 2500,
+}
+
+STAGE2_8K_COHORT_QUOTAS: dict[str, int] = {
+    "coco_2017": 1600,
+    "bdd100k_images_100k": 1400,
+    "nuimages": 1200,
+    "woodscape_rgb_fisheye": 1000,
+    "ade20k": 1400,
+    "open_images_subset": 1400,
 }
 
 
@@ -69,11 +77,21 @@ def get_stage2_cohort_ids(
     """Return authoritative cohort image IDs matching the Stage-2 benchmark contract."""
     index_str = str(gt_index_path)
     is_enriched = "enriched" in index_str or (
-        target_count is not None and target_count > 10000
+        target_count is not None and target_count >= 8000
     )
-    quotas = dict(
-        STAGE2_ENRICHED_COHORT_QUOTAS if is_enriched else STAGE2_COHORT_QUOTAS
-    )
+    if is_enriched:
+        if target_count == 8000:
+            quotas = dict(STAGE2_8K_COHORT_QUOTAS)
+        elif target_count is not None and target_count != sum(STAGE2_ENRICHED_COHORT_QUOTAS.values()):
+            total_base = sum(STAGE2_ENRICHED_COHORT_QUOTAS.values())
+            quotas = {
+                k: max(1, int(round(v * target_count / total_base)))
+                for k, v in STAGE2_ENRICHED_COHORT_QUOTAS.items()
+            }
+        else:
+            quotas = dict(STAGE2_ENRICHED_COHORT_QUOTAS)
+    else:
+        quotas = dict(STAGE2_COHORT_QUOTAS)
     limit = target_count or sum(quotas.values())
 
     with sqlite3.connect(f"file:{gt_index_path}?mode=ro&immutable=1", uri=True) as conn:
@@ -185,7 +203,7 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         gt_index_path: Path | str = DEFAULT_GT_INDEX_PATH,
         image_root: Path | str = DEFAULT_IMAGE_ROOT,
         split: str = "train",
-        val_ratio: float = 0.20,
+        val_ratio: float = 0.10,
         split_seed: int = 42,
         input_size: int = 384,
         cohort_size: int | None = 10000,
@@ -357,7 +375,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         gt_index_path: Path | str = DEFAULT_GT_INDEX_PATH,
         image_root: Path | str = DEFAULT_IMAGE_ROOT,
         split: str = "train",
-        val_ratio: float = 0.20,
+        val_ratio: float = 0.10,
         split_seed: int = 42,
         input_size: int = 384,
         cohort_size: int | None = 10000,
@@ -558,6 +576,7 @@ __all__ = [
     "DEFAULT_ENRICHED_GT_INDEX_PATH",
     "STAGE2_COHORT_QUOTAS",
     "STAGE2_ENRICHED_COHORT_QUOTAS",
+    "STAGE2_8K_COHORT_QUOTAS",
     "HumanGTHBBDataset",
     "HumanGTQuadDataset",
     "collate_proposal_samples",

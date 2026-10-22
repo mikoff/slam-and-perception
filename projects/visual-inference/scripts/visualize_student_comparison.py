@@ -293,19 +293,20 @@ def generate_dashboard_html(
   .controls {{
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 12px;
     position: sticky;
-    top: 0;
-    z-index: 100;
-    max-height: calc(100vh - 16px);
+    top: 10px;
+    z-index: 1000;
+    max-height: calc(100vh - 20px);
     overflow-y: auto;
-    background: rgba(19, 28, 46, 0.96);
+    background: rgba(15, 23, 42, 0.95);
     backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border: 1px solid var(--border-color);
     border-radius: 8px;
-    padding: 16px 20px;
+    padding: 14px 20px;
     margin-bottom: 24px;
-    box-shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
   }}
   .controls-row {{
     display: flex;
@@ -525,10 +526,10 @@ def generate_dashboard_html(
 <script>
 const IMAGES = {json.dumps(images_data)};
 let activeCohort = 'all';
-const cardViewModes = ['gt', 'hbb', 'quad'];
+const cardViewModes = ['global', 'gt', 'hbb', 'quad'];
 const cardViews = new Map();
 const cardViewLabels = {{
-  global: 'Combined layers',
+  global: 'Combined',
   gt: 'Human GT',
   hbb: 'Fine-tuned HBB',
   quad: 'Fine-tuned Quads',
@@ -575,8 +576,8 @@ function cycleCardView(item, button, redraw) {{
   const next = cardViewModes[(currentIndex + 1) % cardViewModes.length];
   cardViews.set(key, next);
   button.dataset.mode = next;
-  button.textContent = `Image view: ${{cardViewLabels[next]}} ↻`;
-  button.setAttribute('aria-label', `Cycle overlay for this image; currently ${{cardViewLabels[next]}}`);
+  button.textContent = `Layer: ${{cardViewLabels[next]}} ↻`;
+  button.setAttribute('aria-label', `Cycle layer for this image; currently ${{cardViewLabels[next]}}`);
   redraw();
 }}
 
@@ -658,8 +659,8 @@ function renderCards() {{
     viewButton.className = 'image-view-btn';
     const initialMode = cardViews.get(cardKey(item)) || 'global';
     viewButton.dataset.mode = initialMode;
-    viewButton.textContent = `Image view: ${{cardViewLabels[initialMode]}} ↻`;
-    viewButton.setAttribute('aria-label', `Cycle overlay for this image; currently ${{cardViewLabels[initialMode]}}`);
+    viewButton.textContent = `Layer: ${{cardViewLabels[initialMode]}} ↻`;
+    viewButton.setAttribute('aria-label', `Cycle layer for this image; currently ${{cardViewLabels[initialMode]}}`);
     header.appendChild(metadata);
     header.appendChild(viewButton);
 
@@ -698,15 +699,15 @@ function renderCards() {{
 
         // SAM Discovered (gray dashed)
         if (useGlobalLayers && showSam && item.sam_quads) {{
-          item.sam_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(156, 163, 175, 0.65)', 'rgba(156, 163, 175, 0.06)', 1.5, true));
+          item.sam_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(156, 163, 175, 0.65)', 'rgba(156, 163, 175, 0.08)', 1.5, true));
         }}
 
         // Human Ground Truth (green)
         if ((useGlobalLayers && showGt) || localMode === 'gt') {{
           if (item.gt_quads && item.gt_quads.length > 0) {{
-            item.gt_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(16, 185, 129, 0.82)', 'rgba(16, 185, 129, 0.10)', 2.0));
+            item.gt_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(16, 185, 129, 0.90)', 'rgba(16, 185, 129, 0.20)', 2.0));
           }} else if (item.gt_boxes) {{
-            item.gt_boxes.forEach(b => drawBox(ctx, rescaleBox(b), 'rgba(16, 185, 129, 0.82)', 'rgba(16, 185, 129, 0.10)', 2.0));
+            item.gt_boxes.forEach(b => drawBox(ctx, rescaleBox(b), 'rgba(16, 185, 129, 0.90)', 'rgba(16, 185, 129, 0.20)', 2.0));
           }}
         }}
 
@@ -714,7 +715,7 @@ function renderCards() {{
         if (useGlobalLayers && showQuadBase && item.quad_before) {{
           item.quad_before.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
-              drawQuad(ctx, rescaleQuad(p.quad), 'rgba(245, 158, 11, 0.65)', 'rgba(245, 158, 11, 0.05)', 1.8, true);
+              drawQuad(ctx, rescaleQuad(p.quad), 'rgba(245, 158, 11, 0.70)', 'rgba(245, 158, 11, 0.12)', 1.8, true);
             }}
           }});
         }}
@@ -723,7 +724,7 @@ function renderCards() {{
         if (useGlobalLayers && showHbbBase && item.hbb_before) {{
           item.hbb_before.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
-              drawBox(ctx, rescaleBox(p.box), 'rgba(59, 130, 246, 0.65)', 'rgba(59, 130, 246, 0.05)', 1.8, true);
+              drawBox(ctx, rescaleBox(p.box), 'rgba(59, 130, 246, 0.70)', 'rgba(59, 130, 246, 0.12)', 1.8, true);
             }}
           }});
         }}
@@ -732,7 +733,7 @@ function renderCards() {{
         if (((useGlobalLayers && showHbbFt) || localMode === 'hbb') && item.hbb_after) {{
           item.hbb_after.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
-              drawBox(ctx, rescaleBox(p.box), 'rgba(34, 211, 238, 0.78)', 'rgba(34, 211, 238, 0.12)', 2.0);
+              drawBox(ctx, rescaleBox(p.box), 'rgba(34, 211, 238, 0.90)', 'rgba(34, 211, 238, 0.22)', 2.0);
             }}
           }});
         }}
@@ -742,8 +743,8 @@ function renderCards() {{
           item.quad_after.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
               const rq = rescaleQuad(p.quad);
-              drawQuad(ctx, rq, 'rgba(192, 132, 252, 0.78)', 'rgba(192, 132, 252, 0.12)', 2.5);
-              ctx.fillStyle = 'rgba(233, 213, 255, 0.88)';
+              drawQuad(ctx, rq, 'rgba(192, 132, 252, 0.90)', 'rgba(192, 132, 252, 0.22)', 2.0);
+              ctx.fillStyle = 'rgba(233, 213, 255, 0.90)';
               ctx.font = '11px sans-serif';
               ctx.fillText(p.score.toFixed(2), rq[0][0] + 2, Math.max(12, rq[0][1] - 2));
             }}

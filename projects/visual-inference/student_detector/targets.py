@@ -233,7 +233,10 @@ class TargetBuilder:
             if getattr(self.assigner, "assignment_mode", None) == "one_to_one":
                 box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
                 img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
-                valid_bound_boxes = boxes[box_areas < 0.25 * img_area]
+                # Keep interior anchors of all foreground objects (up to 95% image area)
+                # in the ignore mask so large foreground instances (e.g. close-up cars)
+                # are not penalized as background across their bodies.
+                valid_bound_boxes = boxes[box_areas < 0.95 * img_area]
                 ignored_points = ignored_points | (
                     points_inside_boxes(points, valid_bound_boxes) & ~positive
                 )

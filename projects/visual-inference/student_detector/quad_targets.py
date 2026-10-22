@@ -199,8 +199,9 @@ class QuadTargetBuilder:
                     + (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2])
                     + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
                 ).abs()
-                img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
-                valid_bound_quads = quads[shoelace < 0.25 * img_area]
+                # Keep interior anchors of all foreground quads (up to 95% image area)
+                # in the ignore mask so large foreground instances are not penalized.
+                valid_bound_quads = quads[shoelace < 0.95 * img_area]
                 ignored = ignored | (
                     points_inside_quads(points, valid_bound_quads)
                     & ~assignment.positive_mask

@@ -21,7 +21,6 @@ from PIL import Image
 
 from ingest_ade20k import ADE_TARGET_CLASSES, DEFAULT_ARCHIVE
 from ingest_open_images import DEFAULT_ARCHIVE_DIR, TARGET_MIDS
-from ingest_roboflow_ev_parking import DEFAULT_SAMPLES_JSON, HF_BASE_URL
 from student_detector.dashboard_holdout import (
     audit_records,
     file_sha256,
@@ -62,6 +61,18 @@ def main() -> None:
         default=Path("artifacts/phase1/pseudo_labels/sam_pilot_800.json"),
     )
     parser.add_argument("--samples-per-cohort", type=int, default=35)
+    parser.add_argument(
+        "--pipeline-val-ratio",
+        type=float,
+        default=0.10,
+        help="Pipeline-wide cohort fraction reserved from training stages.",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Seed for deterministic train/validation split.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--include-new-sources",
@@ -72,16 +83,22 @@ def main() -> None:
     if args.samples_per_cohort < 1:
         parser.error("--samples-per-cohort must be positive")
     print(
-        "Hashing the complete Stage-1 cohort (also excludes Stage-2 train/val)...",
+        f"Auditing Stage-1 cohort isolation (val_ratio={args.pipeline_val_ratio}, seed={args.split_seed})...",
         flush=True,
     )
-    training = training_inventory(args.gt_index, args.image_root, args.cohort_size)
+    training = training_inventory(
+        args.gt_index,
+        args.image_root,
+        args.cohort_size,
+        val_ratio=args.pipeline_val_ratio,
+        seed=args.split_seed,
+    )
     validation = validation_inventory(args.validation_pseudo_labels, args.image_root)
     banned_ids = {r["image_id"] for r in training}
     banned_hashes = {r["sha256"] for r in training}
     used_hashes: set[str] = set()
     used_names = {Path(r["file_name"]).name for r in training}
-    rng = random.Random(42)
+    rng = random.Random(args.split_seed)
     records: list[dict[str, Any]] = []
     counts: dict[str, int] = defaultdict(int)
     storage = DEFAULT_ARCHIVE_DIR.parent.parent / "evaluation/dashboard_holdout"
@@ -128,12 +145,40 @@ def main() -> None:
         return True
 
     with sqlite3.connect(f"file:{args.gt_index}?mode=ro", uri=True) as conn:
-        by_source: dict[str, list[tuple[int, str, str]]] = defaultdict(list)
-        for iid, name, source, camera in conn.execute(
+        from student_detector.human_gt_data import get_stage2_cohort_ids
+        from student_detector.sam_student_data import split_cohort_indices
+
+        target_cohort_ids = get_stage2_cohort_ids(args.gt_index, args.cohort_size)
+        rows = conn.execute(
             "SELECT image_id,file_name,source_dataset,camera_type FROM images ORDER BY image_id"
-        ):
-            if iid not in banned_ids:
-                by_source[source].append((iid, name, camera))
+        ).fetchall()
+
+        if args.pipeline_val_ratio > 0.0:
+            cohort_records = [
+                {
+                    "image_id": int(r[0]),
+                    "file_name": str(r[1]),
+                    "source_dataset": str(r[2]),
+                    "camera_type": str(r[3]),
+                }
+                for r in rows
+                if int(r[0]) in target_cohort_ids
+            ]
+            _, val_indices = split_cohort_indices(
+                cohort_records, val_ratio=args.pipeline_val_ratio, seed=args.split_seed
+            )
+            val_records = [cohort_records[i] for i in val_indices]
+            by_source: dict[str, list[tuple[int, str, str]]] = defaultdict(list)
+            for rec in val_records:
+                by_source[rec["source_dataset"]].append(
+                    (rec["image_id"], rec["file_name"], rec["camera_type"])
+                )
+        else:
+            by_source = defaultdict(list)
+            for iid, name, source, camera in rows:
+                if iid not in banned_ids:
+                    by_source[source].append((iid, name, camera))
+
         for source, candidates in sorted(by_source.items()):
             rng.shuffle(candidates)
             for iid, name, camera in candidates:
@@ -244,49 +289,19 @@ def main() -> None:
                 break
         print("open_images_subset", counts["open_images_subset"], flush=True)
 
-        samples = json.loads(DEFAULT_SAMPLES_JSON.read_text())["samples"]
-        candidates = [
-            r
-            for r in samples
-            if r.get("source") in ("ufpr04", "ufpr05")
-            and r.get("parking_spaces", {}).get("polylines")
-            and f"parking__{Path(r['filepath']).name}" not in used_names
-        ]
-        rng.shuffle(candidates)
-        failures = 0
-        for row in candidates:
-            path = storage / f"parking__{row['source']}__{Path(row['filepath']).name}"
-            try:
-                download(f"{HF_BASE_URL}/{row['filepath']}", path)
-            except (OSError, ValueError) as exc:
-                print(f"Download failed: {row['filepath']}: {exc}", flush=True)
-                failures += 1
-                if failures >= 10:
-                    raise RuntimeError("Too many PKLot download failures") from exc
-                continue
-            with Image.open(path) as image:
-                w, h = image.size
-            quads = [
-                [[p[0] * w, p[1] * h] for p in poly["points"][0]]
-                for poly in row["parking_spaces"]["polylines"]
-                if poly.get("points") and len(poly["points"][0]) == 4
-            ]
-            add(path, "roboflow_ev_parking", quads)
-            if counts["roboflow_ev_parking"] >= args.samples_per_cohort:
-                break
-        print("roboflow_ev_parking", counts["roboflow_ev_parking"], flush=True)
-
     audit_records(records, training + validation, args.image_root)
     manifest = dict(
         gt_index=str(args.gt_index.resolve()),
         cohort_size=args.cohort_size,
+        pipeline_val_ratio=args.pipeline_val_ratio,
+        split_seed=args.split_seed,
         excluded_training_images=training,
         validation_pseudo_labels=str(args.validation_pseudo_labels.resolve()),
         excluded_validation_images=validation,
         images=records,
         counts=dict(counts),
-        seed=42,
-        notes="Evaluation only; original training databases unchanged. Exact duplicates of detector training and validation inputs are excluded; near-duplicate scenes are not audited. ADE20K boxes are derived from semantic components; Open Images target annotations are partial.",
+        seed=args.split_seed,
+        notes="Dashboard evaluation cohort sampled from the 10% validation split.",
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2))

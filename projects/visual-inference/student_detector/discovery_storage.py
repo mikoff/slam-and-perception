@@ -208,7 +208,7 @@ def save_image_batch(
 def migrate_json_to_sqlite(
     json_path: Path | str,
     db_path: Path | str,
-    val_ratio: float = 0.20,
+    val_ratio: float = 0.10,
     split_seed: int = 42,
 ) -> tuple[int, int]:
     """Migrate an existing JSON pseudo-labels file into the SQLite database.

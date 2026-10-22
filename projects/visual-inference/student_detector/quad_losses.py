@@ -225,23 +225,25 @@ class QuadProposalLoss(nn.Module):
             [torch.roll(reverse, -index, dims=1) for index in range(4)], dim=1
         )
         traversals = torch.cat((forward, backward), dim=1)
+        # Derive local orthonormal axes from the longest quad edge instead of
+        # covariance eigenvectors (torch.linalg.eigh), which become numerically
+        # unstable when squares or nearly-square quads produce repeated eigenvalues.
+        edges = torch.roll(target, -1, dims=1) - target
+        lengths = torch.linalg.vector_norm(edges, dim=-1)
+        max_edge_idx = lengths.argmax(dim=-1)
+        longest_edge = edges[
+            torch.arange(target.shape[0], device=target.device), max_edge_idx
+        ]
+        major = longest_edge / torch.linalg.vector_norm(
+            longest_edge, dim=-1, keepdim=True
+        ).clamp(min=1e-6)
+        minor = torch.stack((-major[:, 1], major[:, 0]), dim=-1)
+        axes = torch.stack((major, minor), dim=-1)
+
         centered = target - target.mean(dim=1, keepdim=True)
-        covariance = centered.transpose(1, 2) @ centered / 4.0
-        jitter = torch.diag(
-            torch.tensor([1e-4, 1.001e-4], device=target.device, dtype=torch.float32)
-        )
-        cov_f32 = covariance.to(torch.float32) + jitter
-        try:
-            _, eigenvectors = torch.linalg.eigh(cov_f32)
-        except (torch._C._LinAlgError, RuntimeError):
-            _, eigenvectors = torch.linalg.eigh(cov_f32.cpu())
-            eigenvectors = eigenvectors.to(target.device)
-        # Columns are the minor and major principal axes. Project errors into
-        # that local frame and normalize each direction independently so a
-        # one-pixel error across a thin object is not hidden by its long axis.
-        local_target = centered @ eigenvectors
+        local_target = centered @ axes
         half_extents = local_target.abs().amax(dim=1).clamp(min=1e-4)
-        local_error = (predicted[:, None] - traversals) @ eigenvectors[:, None]
+        local_error = (predicted[:, None] - traversals) @ axes[:, None]
         normalized_vertex_error = torch.linalg.vector_norm(
             local_error / half_extents[:, None, None], dim=-1
         )

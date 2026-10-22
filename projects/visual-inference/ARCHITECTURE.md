@@ -14,7 +14,7 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
   - **Baseline (ATSS)**: `ATSSAssigner` and `QuadAssigner` with $k=4$, center prior radius 1.0.
   - **Recipe 2 (TAL)**: `TaskAlignedAssigner` and `QuadTaskAlignedAssigner` with 1-to-1 greedy bipartite matching and auxiliary 1-to-many alignment ($t = s^\alpha \times \text{IoU}^\beta$). Features **Scale-Gated FPN Specialization** enforcing canonical receptive field scale intervals (P2: $[0, 64]$ px, P3: $[32, 128]$ px, P4: $[64, 256]$ px, P5: $[128, \infty)$ px) to prevent macro-scene competition from overriding fine instance heads.
   - **Topological Container Suppression**: `suppress_container_boxes` and `suppress_container_quads` dynamically detect composite container proposals (enclosing $\ge 2$ children or 1 child with area $>15\%$ and $\ge 8\times$ child area) and downgrade them to ignore regions (`w=0`) rather than foreground targets.
-  - **TargetBuilder 1-to-1 Guard**: Restricts the 1-to-1 non-matched ignore mask to ground-truth objects $< 25\%$ image area, ensuring broad background expanses (road asphalt, sky) receive robust negative supervision.
+  - **TargetBuilder 1-to-1 Guard**: Restricts the 1-to-1 non-matched ignore mask to ground-truth objects $< 95\%$ image area, ensuring close-up foreground objects (e.g. cars taking 40–80% frame) are not penalized as negative background.
 - Loss Formulations:
   - **HBB (`ProposalLoss`)**: Quality Focal Loss on objectness + CIoU box loss + BCE centerness loss.
   - **Quad (`QuadProposalLoss`)**: Quality Focal Loss + Corner L1 loss + Gaussian Wasserstein Distance (GWD) loss + corner validity loss.
@@ -30,7 +30,7 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
   - Qualitative visualization defaults to **Part-Aware NMS (IoU threshold 0.45, duplicate limit 0.65)** to suppress adjacent anchor cluster duplicates from 1-to-1 ignore mask halos.
 - Pseudo-Label Storage & DataLoader:
   - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`. Full-scale dataset discovery (267.8k images) orchestrated with start/pause/resume daemon via `scripts/manage_sam_discovery.sh`.
-  - Authoritative human GT datasets: `HumanGTHBBDataset` and `HumanGTQuadDataset` in `student_detector/human_gt_data.py`. Enriched with ADE20K (2k img: 17.2k things/agents), Open Images V7 (2k img: 6.9k mobility & infrastructure assets), and PKLot (2.4k img: 153.8k oriented parking quads) via `quad_train_enriched.sqlite` (30.4M total annotations) and synced into `sam_discovery_enriched.sqlite` (3.85M human GT annotations) across the 14k curriculum (`STAGE2_ENRICHED_COHORT_QUOTAS`).
+  - Authoritative human GT datasets: `HumanGTHBBDataset` and `HumanGTQuadDataset` in `student_detector/human_gt_data.py`. Enriched with full ADE20K (16.8k img: 152.1k things/agents/structure) and balanced Open Images V7 (15.0k img: 41.3k vehicles & infrastructure assets), with rooftop PKLot purged (299.6k total images, 4.10M human GT annotations) in `quad_train_enriched.sqlite` and synchronized with `sam_discovery_enriched.sqlite`.
 
 # Active Design Patterns & Decisions
 
@@ -40,7 +40,7 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 - Hybrid supervision combines confirmed human GT (6,452 thing instances) with SAM novel discoveries (25,728 instances with stability >= 0.88).
 - Suppressed internal subparts (28,354 instances) and non-object stuff (`road_surface`) are assigned to ignore regions rather than hard negatives.
 - Post-processing decoders (`InferenceDecoder` for HBB, `QuadInferenceDecoder` for Quads) apply NMS outside the model graph.
-- Anisotropic diagonal jitter (`1e-4 * I`) and LAPACK CPU fallback in eigensolvers prevent cuSOLVER `LinAlgError` on degenerate or isotropic quad boxes.
+- Longest-edge orthonormal derivation for quad axes and scales eliminates `torch.linalg.eigh` eigensolver instability on square or near-square quads with repeated eigenvalues.
 - Mixed precision: FP16 autocast with `GradScaler` on CUDA, consuming ~3.48 GB VRAM at batch size 32.
 - Vectorized Target Building: `ATSSAssigner`, `TargetBuilder`, `TaskAlignedAssigner`, and `QuadTaskAlignedAssigner` are fully tensorized, avoiding CPU-GPU sync stalls ($9.5\times$ TargetBuilder acceleration).
 - Multi-worker multiprocessing: Uses `torch.multiprocessing.set_sharing_strategy("file_system")` to prevent Linux IPC file descriptor exhaustion with SQLite multi-worker DataLoaders.
@@ -49,7 +49,7 @@ This project owns class-agnostic proposal-object contracts, SAM-based open-world
 
 - **Letterbox Invariants & Level Masks**: Images are transformed into a square $384 \times 384$ canvas with aspect-preserving letterboxing (`sample.transform = (scale, off_x, off_y)`). When running inference, `level_masks` sampled from `sample.valid_mask` via `point_validity_from_pixel_mask` MUST be passed to `InferenceDecoder` so padding cells are masked to $-\infty$. When projecting boxes back to original image space, coordinates must be un-letterboxed: `boxes[:, 0::2] = ((boxes[:, 0::2] - off_x) / scale).clamp(0, orig_w)` and `boxes[:, 1::2] = ((boxes[:, 1::2] - off_y) / scale).clamp(0, orig_h)`. Never multiply letterboxed coordinates by crude aspect ratios.
 - Stride-8 (P3) models drop small objects (<16px); student models must maintain P2 (stride 4).
-- PyTorch CUDA eigensolvers (`linalg.eigh`) fail to converge when symmetric 2x2 covariance matrices have repeated eigenvalues without jitter.
+- Non-finite loss values trigger immediate training abort via fail-fast `torch.isfinite` check before backward pass.
 - Suppressed SAM subparts must remain in ignore masks; treating them as background penalties penalizes detector predictions of whole objects.
 - `sample.original_size` is `(height, width)`. When calculating scale and unletterboxing, unpack as `orig_h, orig_w`.
 - Image files are read from dataset storage at `/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/`.

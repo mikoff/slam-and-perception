@@ -38,8 +38,8 @@ def test_sam_student_dataset_initialization_and_shapes() -> None:
     train_ds = SAMStudentDataset(split="train")
     val_ds = SAMStudentDataset(split="val")
 
-    assert len(train_ds) == 640
-    assert len(val_ds) == 160
+    assert len(train_ds) == 720
+    assert len(val_ds) == 80
     assert train_ds.total_novel > 0
     assert train_ds.total_gt > 0
 
@@ -78,8 +78,8 @@ def test_sam_student_hbb_dataset_initialization_and_shapes() -> None:
     train_ds = SAMStudentHBBDataset(split="train")
     val_ds = SAMStudentHBBDataset(split="val")
 
-    assert len(train_ds) == 640
-    assert len(val_ds) == 160
+    assert len(train_ds) == 720
+    assert len(val_ds) == 80
     assert train_ds.total_novel > 0
     assert train_ds.total_gt > 0
 

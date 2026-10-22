@@ -74,40 +74,19 @@ class QuadAssigner:
     def _object_scales(self, quads: Tensor) -> Tensor:
         if self.scale_measure == "area":
             return torch.sqrt(quad_area(quads).clamp(min=1e-6))
-        centers = quad_centroid(quads)
-        centered = quads - centers[:, None, :]
-        covariance = centered.transpose(1, 2) @ centered / 4.0
-        jitter = torch.diag(
-            torch.tensor([1e-4, 1.001e-4], device=quads.device, dtype=torch.float32)
-        )
-        cov_f32 = covariance.to(torch.float32) + jitter
-        try:
-            _, axes = torch.linalg.eigh(cov_f32)
-        except (torch._C._LinAlgError, RuntimeError):
-            _, axes = torch.linalg.eigh(cov_f32.cpu())
-            axes = axes.to(quads.device)
-        projected = centered @ axes
-        return (
-            (projected.amax(dim=1) - projected.amin(dim=1)).amax(dim=1).clamp(min=1e-6)
-        )
+        # Longest edge measure
+        edges = torch.roll(quads, -1, dims=1) - quads
+        lengths = torch.linalg.vector_norm(edges, dim=-1)
+        return lengths.amax(dim=1).clamp(min=1e-6)
 
     def _center_quality_many(self, points: Tensor, quads: Tensor) -> Tensor:
         centers = quad_centroid(quads)
         centered = quads - centers[:, None, :]
-        covariance = centered.transpose(1, 2) @ centered / 4.0
-        jitter = torch.diag(
-            torch.tensor([1e-4, 1.001e-4], device=quads.device, dtype=torch.float32)
-        )
-        cov_f32 = covariance.to(torch.float32) + jitter
-        try:
-            eigenvalues, eigenvectors = torch.linalg.eigh(cov_f32)
-        except (torch._C._LinAlgError, RuntimeError):
-            eigenvalues, eigenvectors = torch.linalg.eigh(cov_f32.cpu())
-            eigenvalues = eigenvalues.to(quads.device)
-            eigenvectors = eigenvectors.to(quads.device)
-        major_indices = eigenvalues.argmax(dim=1)
-        major = eigenvectors[
-            torch.arange(quads.shape[0], device=quads.device), :, major_indices
+        edges = torch.roll(quads, -1, dims=1) - quads
+        lengths = torch.linalg.vector_norm(edges, dim=-1)
+        max_edge_idx = lengths.argmax(dim=-1)
+        major = edges[
+            torch.arange(quads.shape[0], device=quads.device), max_edge_idx
         ]
         major = major / torch.linalg.vector_norm(major, dim=1, keepdim=True).clamp(
             min=1e-6

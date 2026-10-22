@@ -275,40 +275,52 @@ def main() -> None:
                     total_annotations,
                 )
     else:
-        # Prioritize images containing high-value rare infrastructure classes
-        class_priority = {
-            "parking_meter": 1,
-            "fire_hydrant": 2,
-            "waste_container": 3,
-            "golf_cart": 4,
-            "cart": 5,
-            "wheelchair": 6,
-            "stop_sign": 7,
-            "traffic_light": 8,
-            "street_light": 9,
-            "traffic_sign": 10,
-            "billboard": 11,
-            "suitcase": 12,
-            "luggage_and_bags": 13,
-            "bench": 14,
-            "license_plate": 20,
-        }
+        # Balanced quota sampling across rare infrastructure, specialty vehicles, and cars
+        import random
+        from collections import defaultdict
 
-        def image_priority_score(img_id: str) -> tuple[int, int]:
-            anns = annotations_by_image[img_id]
-            min_prio = min(
-                class_priority.get(TARGET_MIDS.get(r.get("LabelName", ""), ""), 99)
-                for r in anns
-            )
-            unique_classes = len(
-                set(TARGET_MIDS.get(r.get("LabelName", ""), "") for r in anns)
-            )
-            return (min_prio, -unique_classes)
+        class_to_images: dict[str, list[str]] = defaultdict(list)
+        for img_id, anns in annotations_by_image.items():
+            classes_in_img = set(TARGET_MIDS[r["LabelName"]] for r in anns)
+            for c in classes_in_img:
+                class_to_images[c].append(img_id)
 
-        sorted_image_ids = sorted(annotations_by_image.keys(), key=image_priority_score)
-        selected_image_ids = sorted_image_ids[: args.limit]
+        rng = random.Random(42)
+        for c in class_to_images:
+            rng.shuffle(class_to_images[c])
+
+        selected_set: set[str] = set()
+
+        # 1. Rare infrastructure classes: include all available candidates
+        rare_classes = [
+            "parking_meter", "fire_hydrant", "waste_container", "golf_cart", "cart",
+            "wheelchair", "stop_sign", "traffic_light", "street_light", "traffic_sign",
+            "billboard", "suitcase", "luggage_and_bags", "bench",
+        ]
+        for c in rare_classes:
+            for img_id in class_to_images[c]:
+                selected_set.add(img_id)
+
+        # 2. Specialty vehicles & 2-wheelers (up to 800 each)
+        for c in ["bus", "truck", "van", "motorcycle", "bicycle"]:
+            for img_id in class_to_images[c][:800]:
+                selected_set.add(img_id)
+
+        # 3. License plate & person (up to 1,500 each)
+        for c in ["license_plate", "person"]:
+            for img_id in class_to_images[c][:1500]:
+                if len(selected_set) < args.limit:
+                    selected_set.add(img_id)
+
+        # 4. Fill remaining with cars and natural road traffic
+        car_candidates = [img for img in class_to_images["car"] if img not in selected_set]
+        rng.shuffle(car_candidates)
+        needed = max(0, args.limit - len(selected_set))
+        selected_set.update(car_candidates[:needed])
+
+        selected_image_ids = sorted(selected_set)
         logger.info(
-            "Selected %d candidate images prioritizing rare infrastructure (target limit: %d).",
+            "Selected %d candidate images via balanced quota sampling (target limit: %d).",
             len(selected_image_ids),
             args.limit,
         )

@@ -533,9 +533,11 @@ def fit_quad_from_points(points: Tensor) -> Tensor:
         raise ValueError("points contain non-finite coordinates")
     center = value.mean(dim=0)
     centered = value - center
-    covariance = centered.transpose(0, 1) @ centered / max(value.shape[0] - 1, 1)
-    eigenvalues, eigenvectors = torch.linalg.eigh(covariance.to(torch.float32))
-    major = eigenvectors[:, torch.argmax(eigenvalues)]
+    diffs = value[None, :, :] - value[:, None, :]
+    dists = torch.linalg.vector_norm(diffs, dim=-1)
+    max_idx = torch.argmax(dists)
+    i, j = max_idx // value.shape[0], max_idx % value.shape[0]
+    major = diffs[i, j]
     major = major / torch.linalg.vector_norm(major).clamp(min=_EPS)
     minor = torch.stack((-major[1], major[0]))
     projected = torch.stack((centered @ major, centered @ minor), dim=1)

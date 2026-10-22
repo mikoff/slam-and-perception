@@ -240,7 +240,8 @@ def select_cohort_image_ids(
             STAGE2_COHORT_WEIGHTS if count > 800 else DEFAULT_COHORT_WEIGHTS
         )
     elif all_images or count > 800 or count <= 0:
-        db_path = dataset_root / "indexes/quad_train.sqlite"
+        enriched_path = dataset_root / "indexes/quad_train_enriched.sqlite"
+        db_path = enriched_path if enriched_path.is_file() else (dataset_root / "indexes/quad_train.sqlite")
         weights = source_weights or STAGE2_COHORT_WEIGHTS
     else:
         db_path = dataset_root / "indexes/quad_val.sqlite"
@@ -250,6 +251,13 @@ def select_cohort_image_ids(
         rows = connection.execute(
             "SELECT image_id, source_dataset FROM images ORDER BY row_index"
         ).fetchall()
+
+    if all_images:
+        selected_ids = [int(r[0]) for r in rows]
+        selected_tuples = [(str(r[1]), int(r[0])) for r in rows]
+        identity = json.dumps(selected_tuples, separators=(",", ":")).encode("utf-8")
+        computed_sha = hashlib.sha256(identity).hexdigest()
+        return selected_ids, computed_sha
 
     is_enriched = "enriched" in str(db_path) or (count is not None and count > 10000)
     if is_enriched and not all_images:

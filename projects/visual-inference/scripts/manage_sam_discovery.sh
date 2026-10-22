@@ -116,7 +116,7 @@ cmd_start() {
         if [ "${TOTAL_IMAGES}" -le 14000 ]; then
             EXTRA_ARGS="--index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
         else
-            EXTRA_ARGS="--all-images --output-db ${DB_FILE}"
+            EXTRA_ARGS="--all-images --index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --output-db ${DB_FILE}"
         fi
     fi
     setsid .venv/bin/python3 -u scripts/run_sam_pilot_discovery.py \
@@ -305,7 +305,7 @@ cmd_run() {
         if [ "${TOTAL_IMAGES}" -le 14000 ]; then
             EXTRA_ARGS="--index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
         else
-            EXTRA_ARGS="--all-images --output-db ${DB_FILE}"
+            EXTRA_ARGS="--all-images --index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --output-db ${DB_FILE}"
         fi
     fi
     echo "Starting SAM Discovery interactively in foreground..."

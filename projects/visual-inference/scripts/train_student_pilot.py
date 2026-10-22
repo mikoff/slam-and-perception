@@ -674,6 +674,12 @@ def train() -> None:
                         sub1 = loss_output.quality.item()
                         sub2 = loss_output.corner.item()
 
+            if not torch.isfinite(loss_total):
+                raise RuntimeError(
+                    f"[Train Student Pilot] Non-finite loss encountered at epoch {epoch}, batch {batch_count}: "
+                    f"loss={loss_total.item()} (sub1={sub1}, sub2={sub2}). Aborting immediately!"
+                )
+
             scaler.scale(loss_total).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)

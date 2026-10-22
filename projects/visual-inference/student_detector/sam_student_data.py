@@ -67,7 +67,7 @@ CAMERA_TYPES: dict[str, str] = {
 
 def split_cohort_indices(
     images: list[dict[str, Any]],
-    val_ratio: float = 0.20,
+    val_ratio: float = 0.10,
     seed: int = 42,
 ) -> tuple[list[int], list[int]]:
     """Deterministically partition images into train and val splits stratified by source_dataset.
@@ -453,7 +453,7 @@ class SAMStudentDataset(Dataset[QuadProposalSample]):
         pseudo_labels_path: Path | str = DEFAULT_PSEUDO_LABELS_PATH,
         image_root: Path | str = DEFAULT_IMAGE_ROOT,
         split: str = "train",
-        val_ratio: float = 0.20,
+        val_ratio: float = 0.10,
         split_seed: int = 42,
         input_size: int = 384,
         min_stability: float = 0.80,
@@ -629,7 +629,7 @@ class SAMStudentHBBDataset(Dataset[ProposalSample]):
         pseudo_labels_path: Path | str = DEFAULT_PSEUDO_LABELS_PATH,
         image_root: Path | str = DEFAULT_IMAGE_ROOT,
         split: str = "train",
-        val_ratio: float = 0.20,
+        val_ratio: float = 0.10,
         split_seed: int = 42,
         input_size: int = 384,
         min_stability: float = 0.80,

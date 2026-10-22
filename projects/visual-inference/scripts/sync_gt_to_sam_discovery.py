@@ -79,6 +79,19 @@ def main() -> None:
             (args.min_image_id,),
         )
 
+    # 2b. Synchronize image records to maintain referential integrity
+    logger.info("Syncing image metadata records from GT DB...")
+    gt_images = gt_conn.execute(
+        "SELECT image_id, file_name, source_dataset, width, height FROM images WHERE image_id >= ?",
+        (args.min_image_id,),
+    ).fetchall()
+    with sam_conn:
+        sam_conn.executemany(
+            "INSERT OR REPLACE INTO images (image_id, file_name, source_dataset, width, height, split) VALUES (?, ?, ?, ?, ?, 'train')",
+            gt_images,
+        )
+    logger.info("Synchronized %d image records in SAM DB.", len(gt_images))
+
     # 3. Stream updated annotations from GT DB
     logger.info("Reading updated annotations from GT DB...")
     gt_cur = gt_conn.cursor()
@@ -149,9 +162,8 @@ def main() -> None:
     # 4. Verification queries
     logger.info("=== Sync Complete. Verifying SAM DB Stats ===")
     for dataset, min_id, max_id in [
-        ("ade20k", 500000, 501999),
-        ("open_images_subset", 600000, 601998),
-        ("roboflow_ev_parking", 700000, 702429),
+        ("ade20k", 500000, 599999),
+        ("open_images_subset", 600000, 699999),
     ]:
         row = sam_conn.execute(
             """

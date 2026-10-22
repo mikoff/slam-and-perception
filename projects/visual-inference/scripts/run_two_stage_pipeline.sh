@@ -30,12 +30,19 @@ VALIDATION_PSEUDO_LABELS="${VALIDATION_PSEUDO_LABELS:-artifacts/phase1/pseudo_la
 PIPELINE_VAL_RATIO="${PIPELINE_VAL_RATIO:-0.10}"
 PIPELINE_SPLIT_SEED="${PIPELINE_SPLIT_SEED:-42}"
 COHORT_TAG="10k"
+STAGE1_EPOCHS="${STAGE1_EPOCHS:-10}"
+STAGE2_EPOCHS="${STAGE2_EPOCHS:-10}"
+VAL_INTERVAL="${VAL_INTERVAL:-10}"
 
 if [ "${STAGE}" = "stage1_enriched" ] || [ "${STAGE}" = "stage2_enriched" ] || [ "${STAGE}" = "all_enriched" ] || [ "${STAGE}" = "dashboard_enriched" ]; then
     COHORT_SIZE=14000
     GT_INDEX="/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
     PSEUDO_LABELS_DB="artifacts/pseudo_labels/sam_discovery_enriched.sqlite"
     COHORT_TAG="14k"
+elif [ "${COHORT_SIZE}" -eq 8000 ]; then
+    COHORT_TAG="8k"
+    GT_INDEX="/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
+    PSEUDO_LABELS_DB="artifacts/pseudo_labels/sam_discovery_enriched.sqlite"
 elif [ "${COHORT_SIZE}" -gt 10000 ]; then
     COHORT_TAG="14k"
     PSEUDO_LABELS_DB="artifacts/pseudo_labels/sam_discovery_enriched.sqlite"
@@ -76,8 +83,19 @@ backup_artifacts() {
 }
 
 run_isolation_audit() {
-    local AUDIT_PATH="artifacts/training_isolation_${COHORT_TAG}.json"
-    local DASHBOARD_MANIFEST="${EVALUATION_MANIFEST:-artifacts/dashboard_holdout_${COHORT_TAG}.json}"
+    local AUDIT_PATH="artifacts/training_isolation_${COHORT_TAG}${TAG_SUFFIX}.json"
+    local DASHBOARD_MANIFEST="${EVALUATION_MANIFEST:-artifacts/dashboard_holdout_${COHORT_TAG}${TAG_SUFFIX}.json}"
+    if [ ! -f "${DASHBOARD_MANIFEST}" ]; then
+        echo ""
+        echo ">>> [PREFLIGHT] Preparing validation holdout manifest for dashboard: ${DASHBOARD_MANIFEST}..."
+        uv run python scripts/prepare_dashboard_holdout.py \
+            --gt-index "${GT_INDEX}" \
+            --cohort-size "${COHORT_SIZE}" \
+            --samples-per-cohort "${SAMPLES_PER_COHORT:-35}" \
+            --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+            --split-seed "${PIPELINE_SPLIT_SEED}" \
+            --output "${DASHBOARD_MANIFEST}"
+    fi
     local DASHBOARD_ARGS=()
     if [ -f "${DASHBOARD_MANIFEST}" ]; then
         DASHBOARD_ARGS+=(--dashboard-manifest "${DASHBOARD_MANIFEST}")
@@ -100,11 +118,12 @@ run_stage1_hbb() {
     local SUFFIX=""
     if [ "${RECIPE}" = "recipe2" ]; then SUFFIX="_recipe2"; fi
     echo ""
-    echo ">>> [STAGE 1] Discovery Pre-Training (HBB) (15 Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE})..."
+    echo ">>> [STAGE 1] Discovery Pre-Training (HBB) (${STAGE1_EPOCHS} Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE}, Val Interval: ${VAL_INTERVAL})..."
     uv run python scripts/train_student_pilot.py \
         --geometry hbb \
         --recipe "${RECIPE}" \
-        --epochs 15 \
+        --epochs "${STAGE1_EPOCHS}" \
+        --val-interval "${VAL_INTERVAL}" \
         --batch-size "${BATCH_SIZE}" \
         --lr 0.0020 \
         --cohort-size "${COHORT_SIZE}" \
@@ -122,11 +141,12 @@ run_stage1_quad() {
     local SUFFIX=""
     if [ "${RECIPE}" = "recipe2" ]; then SUFFIX="_recipe2"; fi
     echo ""
-    echo ">>> [STAGE 1] Discovery Pre-Training (QUAD) (15 Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE})..."
+    echo ">>> [STAGE 1] Discovery Pre-Training (QUAD) (${STAGE1_EPOCHS} Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE}, Val Interval: ${VAL_INTERVAL})..."
     uv run python scripts/train_student_pilot.py \
         --geometry quad \
         --recipe "${RECIPE}" \
-        --epochs 15 \
+        --epochs "${STAGE1_EPOCHS}" \
+        --val-interval "${VAL_INTERVAL}" \
         --batch-size "${BATCH_SIZE}" \
         --lr 0.0020 \
         --cohort-size "${COHORT_SIZE}" \
@@ -147,8 +167,11 @@ run_stage2_hbb() {
     if [ ! -f "${INIT_CKPT}" ] && [ -f "artifacts/train_${COHORT_TAG}_hbb/checkpoints/mobilenetv4_p2_hbb${SUFFIX}_best.pt" ]; then
         INIT_CKPT="artifacts/train_${COHORT_TAG}_hbb/checkpoints/mobilenetv4_p2_hbb${SUFFIX}_best.pt"
     fi
+    if [ ! -f "${INIT_CKPT}" ] && [ -f "artifacts/train_10k_hbb/checkpoints/mobilenetv4_p2_hbb_best.pt" ]; then
+        INIT_CKPT="artifacts/train_10k_hbb/checkpoints/mobilenetv4_p2_hbb_best.pt"
+    fi
     echo ""
-    echo ">>> [STAGE 2] Human GT Fine-Tuning (HBB) (5 Epochs with L1+CIoU Tightening from ${INIT_CKPT})..."
+    echo ">>> [STAGE 2] Human GT Fine-Tuning (HBB) (${STAGE2_EPOCHS} Epochs with L1+CIoU Tightening from ${INIT_CKPT}, Val Interval: ${VAL_INTERVAL})..."
     uv run python scripts/finetune_student_gt.py \
         --geometry hbb \
         --init-checkpoint "${INIT_CKPT}" \
@@ -158,7 +181,8 @@ run_stage2_hbb() {
         --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
         --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${FINETUNE_HBB_DIR}" \
-        --epochs 5 \
+        --epochs "${STAGE2_EPOCHS}" \
+        --val-interval "${VAL_INTERVAL}" \
         --cohort-size "${COHORT_SIZE}" \
         --batch-size "${BATCH_SIZE}" \
         --lr 3e-4 \
@@ -176,8 +200,11 @@ run_stage2_quad() {
     if [ ! -f "${INIT_CKPT}" ] && [ -f "artifacts/train_${COHORT_TAG}_quad/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt" ]; then
         INIT_CKPT="artifacts/train_${COHORT_TAG}_quad/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt"
     fi
+    if [ ! -f "${INIT_CKPT}" ] && [ -f "artifacts/train_10k_quad/checkpoints/mobilenetv4_p2_quad_best.pt" ]; then
+        INIT_CKPT="artifacts/train_10k_quad/checkpoints/mobilenetv4_p2_quad_best.pt"
+    fi
     echo ""
-    echo ">>> [STAGE 2] Human GT Fine-Tuning (QUAD) (5 Epochs with Min-8 L1 + GWD from ${INIT_CKPT})..."
+    echo ">>> [STAGE 2] Human GT Fine-Tuning (QUAD) (${STAGE2_EPOCHS} Epochs with Min-8 L1 + GWD from ${INIT_CKPT}, Val Interval: ${VAL_INTERVAL})..."
     uv run python scripts/finetune_student_gt.py \
         --geometry quad \
         --init-checkpoint "${INIT_CKPT}" \
@@ -187,7 +214,8 @@ run_stage2_quad() {
         --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
         --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${FINETUNE_QUAD_DIR}" \
-        --epochs 5 \
+        --epochs "${STAGE2_EPOCHS}" \
+        --val-interval "${VAL_INTERVAL}" \
         --cohort-size "${COHORT_SIZE}" \
         --batch-size "${BATCH_SIZE}" \
         --lr 3e-4 \
@@ -205,21 +233,25 @@ run_dashboard() {
     if [ ! -f "${HBB_BEFORE}" ] && [ -f "artifacts/train_${COHORT_TAG}_hbb/checkpoints/mobilenetv4_p2_hbb${SUFFIX}_best.pt" ]; then
         HBB_BEFORE="artifacts/train_${COHORT_TAG}_hbb/checkpoints/mobilenetv4_p2_hbb${SUFFIX}_best.pt"
     fi
+    if [ ! -f "${HBB_BEFORE}" ] && [ -f "artifacts/train_10k_hbb/checkpoints/mobilenetv4_p2_hbb_best.pt" ]; then
+        HBB_BEFORE="artifacts/train_10k_hbb/checkpoints/mobilenetv4_p2_hbb_best.pt"
+    fi
     local QUAD_BEFORE="${TRAIN_QUAD_DIR}/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt"
     if [ ! -f "${QUAD_BEFORE}" ] && [ -f "artifacts/train_${COHORT_TAG}_quad/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt" ]; then
         QUAD_BEFORE="artifacts/train_${COHORT_TAG}_quad/checkpoints/mobilenetv4_p2_quad${SUFFIX}_best.pt"
     fi
+    if [ ! -f "${QUAD_BEFORE}" ] && [ -f "artifacts/train_10k_quad/checkpoints/mobilenetv4_p2_quad_best.pt" ]; then
+        QUAD_BEFORE="artifacts/train_10k_quad/checkpoints/mobilenetv4_p2_quad_best.pt"
+    fi
     echo ""
-    local EVAL_MANIFEST="${EVALUATION_MANIFEST:-artifacts/dashboard_holdout_${COHORT_TAG}.json}"
+    local EVAL_MANIFEST="${EVALUATION_MANIFEST:-artifacts/dashboard_holdout_${COHORT_TAG}${TAG_SUFFIX}.json}"
     if [ ! -f "${EVAL_MANIFEST}" ]; then
-        local HOLDOUT_ARGS=()
-        if [ "${COHORT_TAG}" = "14k" ]; then
-            HOLDOUT_ARGS+=(--include-new-sources)
-        fi
         uv run python scripts/prepare_dashboard_holdout.py \
             --gt-index "${GT_INDEX}" --cohort-size "${COHORT_SIZE}" \
             --samples-per-cohort "${SAMPLES_PER_COHORT:-35}" \
-            --output "${EVAL_MANIFEST}" "${HOLDOUT_ARGS[@]}"
+            --pipeline-val-ratio "${PIPELINE_VAL_RATIO}" \
+            --split-seed "${PIPELINE_SPLIT_SEED}" \
+            --output "${EVAL_MANIFEST}"
     fi
     echo ">>> [DASHBOARD] Generating comparison on audited unseen images..."
     uv run python scripts/visualize_student_comparison.py \

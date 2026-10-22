@@ -189,6 +189,12 @@ def parse_args() -> argparse.Namespace:
         help="Part-aware NMS maximum duplicate IoU threshold (default: 0.65).",
     )
     parser.add_argument(
+        "--val-interval",
+        type=int,
+        default=1,
+        help="Epoch interval for validation evaluation (default: 1; set to match epochs for final-only evaluation).",
+    )
+    parser.add_argument(
         "--max-val-batches",
         type=int,
         default=4,
@@ -548,43 +554,50 @@ def finetune() -> None:
         )
 
     # 5. Evaluate Baseline (Epoch 0 - Before Fine-Tuning)
-    print("\n[Baseline Evaluation - Before Fine-Tuning]")
-    base_start = time.time()
-    val_base_gt = run_eval(val_gt_loader)
-    val_base_sam = run_eval(val_sam_loader)
-    base_gt_m = extract_metrics(val_base_gt)
-    base_sam_m = extract_metrics(val_base_sam)
-    base_gt_rec = base_gt_m["recall_100_50"]
-    base_sam_rec = base_sam_m["recall_100_50"]
+    history: list[dict[str, Any]] = []
+    if args.val_interval < args.epochs:
+        print("\n[Baseline Evaluation - Before Fine-Tuning]")
+        base_start = time.time()
+        val_base_gt = run_eval(val_gt_loader)
+        val_base_sam = run_eval(val_sam_loader)
+        base_gt_m = extract_metrics(val_base_gt)
+        base_sam_m = extract_metrics(val_base_sam)
+        base_gt_rec = base_gt_m["recall_100_50"]
+        base_sam_rec = base_sam_m["recall_100_50"]
 
-    print(
-        f"Baseline ({time.time() - base_start:.1f}s) | "
-        f"GT Recall@100@50: {base_gt_rec * 100:.2f}% | "
-        f"GT Recall@100@75: {base_gt_m['recall_100_75'] * 100:.2f}% | "
-        f"GT AP/AR@50: {base_gt_m['ap_50'] * 100:.2f}% | "
-        f"SAM Retention: {base_sam_rec * 100:.2f}%"
-    )
-    print(
-        f"  GT Size: Small={base_gt_m['recall_size_small'] * 100:.1f}%, Med={base_gt_m['recall_size_medium'] * 100:.1f}%, "
-        f"Lrg={base_gt_m['recall_size_large'] * 100:.1f}%"
-    )
-    print(
-        f"  GT Domain: General={base_gt_m['recall_domain_general'] * 100:.1f}%, Auto={base_gt_m['recall_domain_automotive'] * 100:.1f}%, "
-        f"Fisheye={base_gt_m['recall_domain_fisheye'] * 100:.1f}%"
-    )
-
-    history: list[dict[str, Any]] = [
-        {
-            "epoch": 0,
-            "stage": "baseline_before_finetune",
-            "gt_recall_10_50": round(base_gt_m["recall_10_50"], 4),
-            "gt_recall_100_50": round(base_gt_rec, 4),
-            "gt_recall_100_75": round(base_gt_m["recall_100_75"], 4),
-            "gt_ap_50": round(base_gt_m["ap_50"], 4),
-            "sam_recall_100_50": round(base_sam_rec, 4),
-            **base_gt_m,
-        }
-    ]
+        print(
+            f"Baseline ({time.time() - base_start:.1f}s) | "
+            f"GT Recall@100@50: {base_gt_rec * 100:.2f}% | "
+            f"GT Recall@100@75: {base_gt_m['recall_100_75'] * 100:.2f}% | "
+            f"GT AP/AR@50: {base_gt_m['ap_50'] * 100:.2f}% | "
+            f"SAM Retention: {base_sam_rec * 100:.2f}%"
+        )
+        print(
+            f"  GT Size: Small={base_gt_m['recall_size_small'] * 100:.1f}%, Med={base_gt_m['recall_size_medium'] * 100:.1f}%, "
+            f"Lrg={base_gt_m['recall_size_large'] * 100:.1f}%"
+        )
+        print(
+            f"  GT Domain: General={base_gt_m['recall_domain_general'] * 100:.1f}%, Auto={base_gt_m['recall_domain_automotive'] * 100:.1f}%, "
+            f"Fisheye={base_gt_m['recall_domain_fisheye'] * 100:.1f}%"
+        )
+        history.append(
+            {
+                "epoch": 0,
+                "stage": "baseline_before_finetune",
+                "gt_recall_10_50": round(base_gt_m["recall_10_50"], 4),
+                "gt_recall_100_50": round(base_gt_rec, 4),
+                "gt_recall_100_75": round(base_gt_m["recall_100_75"], 4),
+                "gt_ap_50": round(base_gt_m["ap_50"], 4),
+                "sam_recall_100_50": round(base_sam_rec, 4),
+                **base_gt_m,
+            }
+        )
+    else:
+        print(
+            f"\n[Baseline Evaluation Skipped (val_interval={args.val_interval} >= epochs={args.epochs}) - Final metrics evaluated strictly on Epoch {args.epochs}]"
+        )
+        base_gt_rec = 0.0
+        base_sam_rec = 0.0
 
     best_gt_recall = base_gt_rec
     total_start_time = time.time()
@@ -636,6 +649,12 @@ def finetune() -> None:
 
                 loss_total = loss_output.total
 
+            if not torch.isfinite(loss_total):
+                raise RuntimeError(
+                    f"[Finetune Student GT] Non-finite loss encountered at epoch {epoch}, batch {batch_count}: "
+                    f"loss={loss_total.item()}. Aborting immediately!"
+                )
+
             scaler.scale(loss_total).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
@@ -663,53 +682,87 @@ def finetune() -> None:
         epoch_duration = time.time() - epoch_start_time
         avg_loss = epoch_loss / max(batch_count, 1)
 
-        # Full pass over the reserved cohort and the external validation set.
-        val_start_time = time.time()
-        val_gt_metrics = run_eval(val_gt_loader)
-        val_sam_metrics = run_eval(val_sam_loader)
-        val_m = extract_metrics(val_gt_metrics)
-        sam_m = extract_metrics(val_sam_metrics)
-        rec_100_50 = val_m["recall_100_50"]
-        sam_rec = sam_m["recall_100_50"]
-        val_duration = time.time() - val_start_time
+        should_validate = (epoch % args.val_interval == 0 or epoch == args.epochs)
+        if should_validate:
+            # Full pass over the reserved cohort and the external validation set.
+            val_start_time = time.time()
+            val_gt_metrics = run_eval(val_gt_loader)
+            val_sam_metrics = run_eval(val_sam_loader)
+            val_m = extract_metrics(val_gt_metrics)
+            sam_m = extract_metrics(val_sam_metrics)
+            rec_100_50 = val_m["recall_100_50"]
+            sam_rec = sam_m["recall_100_50"]
+            val_duration = time.time() - val_start_time
 
-        gain_str = (
-            f" ({(rec_100_50 - base_gt_rec) * 100:+.2f}%)"
-            if rec_100_50 != base_gt_rec
-            else ""
-        )
-        print(
-            f"Epoch {epoch:02d} Complete in {epoch_duration:.1f}s | Train Loss: {avg_loss:.4f} | "
-            f"GT Recall@100@50: {rec_100_50 * 100:.2f}%{gain_str} | "
-            f"GT Recall@100@75: {val_m['recall_100_75'] * 100:.2f}% | "
-            f"SAM Retention: {sam_rec * 100:.2f}%"
-        )
-        print(
-            f"     GT Size: Small={val_m['recall_size_small'] * 100:.1f}%, Med={val_m['recall_size_medium'] * 100:.1f}%, "
-            f"Lrg={val_m['recall_size_large'] * 100:.1f}%"
-        )
-        print(
-            f"     GT Domain: General={val_m['recall_domain_general'] * 100:.1f}%, Auto={val_m['recall_domain_automotive'] * 100:.1f}%, "
-            f"Fisheye={val_m['recall_domain_fisheye'] * 100:.1f}%"
-        )
+            gain_str = (
+                f" ({(rec_100_50 - base_gt_rec) * 100:+.2f}%)"
+                if rec_100_50 != base_gt_rec
+                else ""
+            )
+            print(
+                f"Epoch {epoch:02d} Complete in {epoch_duration:.1f}s | Train Loss: {avg_loss:.4f} | "
+                f"GT Recall@100@50: {rec_100_50 * 100:.2f}%{gain_str} | "
+                f"GT Recall@100@75: {val_m['recall_100_75'] * 100:.2f}% | "
+                f"SAM Retention: {sam_rec * 100:.2f}%"
+            )
+            print(
+                f"     GT Size: Small={val_m['recall_size_small'] * 100:.1f}%, Med={val_m['recall_size_medium'] * 100:.1f}%, "
+                f"Lrg={val_m['recall_size_large'] * 100:.1f}%"
+            )
+            print(
+                f"     GT Domain: General={val_m['recall_domain_general'] * 100:.1f}%, Auto={val_m['recall_domain_automotive'] * 100:.1f}%, "
+                f"Fisheye={val_m['recall_domain_fisheye'] * 100:.1f}%"
+            )
 
-        epoch_record = {
-            "epoch": epoch,
-            "duration_seconds": round(epoch_duration, 2),
-            "lr": round(scheduler.get_last_lr()[0], 6),
-            "train_loss": round(avg_loss, 4),
-            "val_duration_seconds": round(val_duration, 2),
-            "gt_recall_10_50": round(val_m["recall_10_50"], 4),
-            "gt_recall_100_50": round(rec_100_50, 4),
-            "gt_recall_100_75": round(val_m["recall_100_75"], 4),
-            "gt_ap_50": round(val_m["ap_50"], 4),
-            "sam_recall_100_50": round(sam_rec, 4),
-            **val_m,
-        }
-        history.append(epoch_record)
+            epoch_record = {
+                "epoch": epoch,
+                "duration_seconds": round(epoch_duration, 2),
+                "lr": round(scheduler.get_last_lr()[0], 6),
+                "train_loss": round(avg_loss, 4),
+                "val_duration_seconds": round(val_duration, 2),
+                "gt_recall_10_50": round(val_m["recall_10_50"], 4),
+                "gt_recall_100_50": round(rec_100_50, 4),
+                "gt_recall_100_75": round(val_m["recall_100_75"], 4),
+                "gt_ap_50": round(val_m["ap_50"], 4),
+                "sam_recall_100_50": round(sam_rec, 4),
+                **val_m,
+            }
+            history.append(epoch_record)
 
-        if rec_100_50 > best_gt_recall:
-            best_gt_recall = rec_100_50
+            if rec_100_50 > best_gt_recall:
+                best_gt_recall = rec_100_50
+                best_path = (
+                    checkpoints_dir / f"mobilenetv4_p2_{args.geometry}_finetune_best.pt"
+                )
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "geometry": args.geometry,
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "strides": strides,
+                        "recall_100_50": best_gt_recall,
+                        "gt_recall_100_50": best_gt_recall,
+                        "recall_100_75": val_m["recall_100_75"],
+                        "ap_50": val_m["ap_50"],
+                        "sam_recall_100_50": sam_rec,
+                    },
+                    best_path,
+                )
+                print(
+                    f"     *** New Best Fine-Tuned Model Saved ({best_gt_recall * 100:.2f}% GT Recall@100@50) -> {best_path.name} ***"
+                )
+        else:
+            print(
+                f"Epoch {epoch:02d} Complete in {epoch_duration:.1f}s | Train Loss: {avg_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.6f} (Validation skipped, val_interval={args.val_interval})"
+            )
+            epoch_record = {
+                "epoch": epoch,
+                "duration_seconds": round(epoch_duration, 2),
+                "lr": round(scheduler.get_last_lr()[0], 6),
+                "train_loss": round(avg_loss, 4),
+            }
+            history.append(epoch_record)
             best_path = (
                 checkpoints_dir / f"mobilenetv4_p2_{args.geometry}_finetune_best.pt"
             )
@@ -722,14 +775,8 @@ def finetune() -> None:
                     "strides": strides,
                     "recall_100_50": best_gt_recall,
                     "gt_recall_100_50": best_gt_recall,
-                    "recall_100_75": val_m["recall_100_75"],
-                    "ap_50": val_m["ap_50"],
-                    "sam_recall_100_50": sam_rec,
                 },
                 best_path,
-            )
-            print(
-                f"     *** New Best Fine-Tuned Model Saved ({best_gt_recall * 100:.2f}% GT Recall@100@50) -> {best_path.name} ***"
             )
 
     last_path = checkpoints_dir / f"mobilenetv4_p2_{args.geometry}_finetune_last.pt"
