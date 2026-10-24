@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to pre-trained student checkpoint to fine-tune (defaults to best Stage-1 checkpoint).",
     )
     parser.add_argument(
+        "--from-scratch",
+        action="store_true",
+        help="Train from scratch (ImageNet-pretrained MobileNetV4 backbone, fresh FPN and detection heads).",
+    )
+    parser.add_argument(
         "--cohort-db",
         type=Path,
         default=DEFAULT_PSEUDO_LABELS_DB,
@@ -290,7 +295,7 @@ def finetune() -> None:
         cohort_tag = f"{args.cohort_size // 1000}k" if args.cohort_size > 0 else "full"
         args.output_dir = Path(f"artifacts/finetune_{cohort_tag}_{args.geometry}")
     if args.centerness_alpha is None:
-        args.centerness_alpha = 1.0 if args.geometry == "hbb" else 0.0
+        args.centerness_alpha = 0.25 if args.geometry == "hbb" else 0.0
 
     print(
         f"[{datetime.now().strftime('%H:%M:%S')}] Starting Stage-2 Human GT Fine-Tuning ({args.geometry.upper()})"
@@ -417,31 +422,55 @@ def finetune() -> None:
     )
 
     # 2. Model Initialization & Pre-trained Weights Loading
-    if not args.init_checkpoint.exists():
-        raise FileNotFoundError(f"Initial checkpoint not found: {args.init_checkpoint}")
-
-    print(f"Loading weights from {args.init_checkpoint}...")
-    ckpt = torch.load(args.init_checkpoint, map_location=device)
-    has_aux = any("aux_head" in k for k in ckpt["model_state_dict"].keys())
-
-    if args.geometry == "hbb":
-        model = StudentDetector(
-            pretrained_backbone=False,
-            neck_type="lite",
-            strides=strides,
-            fpn_channels=96,
-            dual_head=has_aux,
-        ).to(device)
+    if args.from_scratch:
+        print(
+            "Initializing model from scratch (ImageNet-pretrained MobileNetV4 backbone)..."
+        )
+        has_aux = False
+        if args.geometry == "hbb":
+            model = StudentDetector(
+                pretrained_backbone=True,
+                neck_type="lite",
+                strides=strides,
+                fpn_channels=96,
+                dual_head=False,
+            ).to(device)
+        else:
+            model = QuadProposalDetector(
+                pretrained_backbone=True,
+                neck_type="lite",
+                strides=strides,
+                fpn_channels=96,
+                dual_head=False,
+            ).to(device)
     else:
-        model = QuadProposalDetector(
-            pretrained_backbone=False,
-            neck_type="lite",
-            strides=strides,
-            fpn_channels=96,
-            dual_head=has_aux,
-        ).to(device)
+        if not args.init_checkpoint.exists():
+            raise FileNotFoundError(
+                f"Initial checkpoint not found: {args.init_checkpoint}"
+            )
 
-    model.load_state_dict(ckpt["model_state_dict"])
+        print(f"Loading weights from {args.init_checkpoint}...")
+        ckpt = torch.load(args.init_checkpoint, map_location=device)
+        has_aux = any("aux_head" in k for k in ckpt["model_state_dict"].keys())
+
+        if args.geometry == "hbb":
+            model = StudentDetector(
+                pretrained_backbone=False,
+                neck_type="lite",
+                strides=strides,
+                fpn_channels=96,
+                dual_head=has_aux,
+            ).to(device)
+        else:
+            model = QuadProposalDetector(
+                pretrained_backbone=False,
+                neck_type="lite",
+                strides=strides,
+                fpn_channels=96,
+                dual_head=has_aux,
+            ).to(device)
+
+        model.load_state_dict(ckpt["model_state_dict"])
 
     # 3. Assigner, Target Builder, Loss & Decoders
     if args.geometry == "hbb":
@@ -479,10 +508,11 @@ def finetune() -> None:
         assigner = QuadAssigner(
             strides=strides,
             top_k=4,
-            eligible_levels=1,
+            eligible_levels=2,
         )
         target_builder = QuadTargetBuilder(
-            assigner, weak_negative_weight=args.weak_negative_weight
+            assigner,
+            weak_negative_weight=args.weak_negative_weight,
         )
         criterion = QuadProposalLoss(
             strides=strides,
@@ -506,14 +536,38 @@ def finetune() -> None:
         val_fn = validate_quad
 
     # 4. Optimizer and Schedule
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-5
-    )
+    if args.from_scratch:
+        opt_params = [
+            {"params": model.backbone.parameters(), "lr": args.lr * 0.2},
+            {"params": model.fpn.parameters(), "lr": args.lr},
+            {"params": model.head.parameters(), "lr": args.lr},
+        ]
+        optimizer = torch.optim.AdamW(
+            opt_params,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+        )
+        warmup_epochs = 1
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=0.2, end_factor=1.0, total_iters=warmup_epochs
+        )
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(args.epochs - warmup_epochs, 1), eta_min=1e-5
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs],
+        )
+    else:
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=1e-5
+        )
     scaler = torch.amp.GradScaler(device.type, enabled=(device.type == "cuda"))
 
     # Helper for validation with batch limits
@@ -682,7 +736,7 @@ def finetune() -> None:
         epoch_duration = time.time() - epoch_start_time
         avg_loss = epoch_loss / max(batch_count, 1)
 
-        should_validate = (epoch % args.val_interval == 0 or epoch == args.epochs)
+        should_validate = epoch % args.val_interval == 0 or epoch == args.epochs
         if should_validate:
             # Full pass over the reserved cohort and the external validation set.
             val_start_time = time.time()

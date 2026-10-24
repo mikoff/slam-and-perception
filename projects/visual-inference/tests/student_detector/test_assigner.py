@@ -51,3 +51,26 @@ def test_invalid_locations_are_never_assigned():
     )
     assert not assignment.positive_mask[: 48 * 48].any()
     assert assignment.positive_mask.any()
+
+
+def test_atss_assigns_tall_vertical_pillars_and_columns() -> None:
+    p2_shapes = ((96, 96), (48, 48), (24, 24), (12, 12))
+    assigner = ATSSAssigner(
+        strides=(4, 8, 16, 32),
+        prior_sizes=(32, 64, 128, 256),
+        top_k=4,
+        center_radius=1.0,
+    )
+    boxes = torch.tensor(
+        [
+            [61.0, 40.0, 71.0, 280.0],   # Narrow pillar (10x240)
+            [100.0, 30.0, 120.0, 280.0], # Tall column (20x250)
+        ]
+    )
+    assignment = assigner.assign(boxes, p2_shapes, (384, 384))
+    assert (assignment.matched_gt_indices == 0).sum().item() >= 4
+    assert (assignment.matched_gt_indices == 1).sum().item() >= 6
+    # Column (20x250) should route to P4 and P5 (levels 2 and 3)
+    assert assignment.positive_counts_per_level[2].item() >= 4
+    assert assignment.positive_counts_per_level[3].item() >= 4
+

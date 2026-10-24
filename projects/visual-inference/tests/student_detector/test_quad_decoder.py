@@ -219,3 +219,26 @@ def test_polygon_nms_part_aware_configurable_part_max_iou() -> None:
         part_max_iou=0.80,
     )
     assert keep_relaxed.tolist() == [0, 1]
+
+
+def test_quad_decoder_clamps_partially_out_of_bounds_quads() -> None:
+    quality = (
+        torch.tensor([[[[5.0]]]]),
+        torch.full((1, 1, 1, 1), -10.0),
+        torch.full((1, 1, 1, 1), -10.0),
+    )
+    # Grid point at (4.0, 4.0) with stride 8: top corners at y = -2.0 (slightly OOB),
+    # bottom corners at y = 34.0 (slightly OOB on 32x32 image).
+    overhanging = torch.tensor(
+        [-0.25, -0.75, 0.25, -0.75, 0.25, 3.75, -0.25, 3.75]
+    ).view(1, 8, 1, 1)
+    offsets = (
+        overhanging,
+        torch.zeros((1, 8, 1, 1)),
+        torch.zeros((1, 8, 1, 1)),
+    )
+    output = QuadDetectorOutput(quality, offsets)
+    det = QuadInferenceDecoder(pre_nms_top_k=5, max_proposals=2)(output, (32, 32))[0]
+    assert det.quads.shape == (1, 4, 2)
+    assert (det.quads[..., 0] >= 0.0).all() and (det.quads[..., 0] <= 32.0).all()
+    assert (det.quads[..., 1] >= 0.0).all() and (det.quads[..., 1] <= 32.0).all()

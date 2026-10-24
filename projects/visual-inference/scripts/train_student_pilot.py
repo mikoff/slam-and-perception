@@ -418,6 +418,7 @@ def train() -> None:
             objectness_loss="quality_focal",
             box_loss="ciou",
             box_weight=2.0,
+            ltrb_weight=0.5,
             centerness_weight=1.0,
             objectness_normalization="num_positives",
         )
@@ -481,19 +482,23 @@ def train() -> None:
                 else None
             )
         else:
-            # P2 Baseline: Tightened Quad ATSS (top_k=4, eligible_levels=1)
+            # P2 Baseline: Quad ATSS (top_k=4, eligible_levels=2)
             assigner = QuadAssigner(
                 strides=strides,
                 top_k=4,
-                eligible_levels=1,
+                eligible_levels=2,
             )
-            target_builder = QuadTargetBuilder(assigner, weak_negative_weight=0.15)
+            target_builder = QuadTargetBuilder(
+                assigner,
+                weak_negative_weight=0.15,
+            )
             target_builder_aux = None
             decoder_free = None
             criterion = QuadProposalLoss(
                 strides=strides,
                 quality_weight=1.0,
                 corner_weight=2.0,
+                gwd_weight=2.0,
                 validity_weight=0.05,
                 quality_target_mode="blend",
                 quality_blend=0.8,

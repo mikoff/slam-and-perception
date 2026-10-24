@@ -32,7 +32,8 @@ PIPELINE_SPLIT_SEED="${PIPELINE_SPLIT_SEED:-42}"
 COHORT_TAG="10k"
 STAGE1_EPOCHS="${STAGE1_EPOCHS:-10}"
 STAGE2_EPOCHS="${STAGE2_EPOCHS:-10}"
-VAL_INTERVAL="${VAL_INTERVAL:-10}"
+STAGE1_VAL_INTERVAL="${STAGE1_VAL_INTERVAL:-${VAL_INTERVAL:-${STAGE1_EPOCHS}}}"
+STAGE2_VAL_INTERVAL="${STAGE2_VAL_INTERVAL:-${VAL_INTERVAL:-${STAGE2_EPOCHS}}}"
 
 if [ "${STAGE}" = "stage1_enriched" ] || [ "${STAGE}" = "stage2_enriched" ] || [ "${STAGE}" = "all_enriched" ] || [ "${STAGE}" = "dashboard_enriched" ]; then
     COHORT_SIZE=14000
@@ -118,12 +119,12 @@ run_stage1_hbb() {
     local SUFFIX=""
     if [ "${RECIPE}" = "recipe2" ]; then SUFFIX="_recipe2"; fi
     echo ""
-    echo ">>> [STAGE 1] Discovery Pre-Training (HBB) (${STAGE1_EPOCHS} Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE}, Val Interval: ${VAL_INTERVAL})..."
+    echo ">>> [STAGE 1] Discovery Pre-Training (HBB) (${STAGE1_EPOCHS} Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE}, Val Interval: ${STAGE1_VAL_INTERVAL})..."
     uv run python scripts/train_student_pilot.py \
         --geometry hbb \
         --recipe "${RECIPE}" \
         --epochs "${STAGE1_EPOCHS}" \
-        --val-interval "${VAL_INTERVAL}" \
+        --val-interval "${STAGE1_VAL_INTERVAL}" \
         --batch-size "${BATCH_SIZE}" \
         --lr 0.0020 \
         --cohort-size "${COHORT_SIZE}" \
@@ -141,12 +142,12 @@ run_stage1_quad() {
     local SUFFIX=""
     if [ "${RECIPE}" = "recipe2" ]; then SUFFIX="_recipe2"; fi
     echo ""
-    echo ">>> [STAGE 1] Discovery Pre-Training (QUAD) (${STAGE1_EPOCHS} Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE}, Val Interval: ${VAL_INTERVAL})..."
+    echo ">>> [STAGE 1] Discovery Pre-Training (QUAD) (${STAGE1_EPOCHS} Epochs on ${COHORT_SIZE} SAM Dataset, Recipe: ${RECIPE}, Val Interval: ${STAGE1_VAL_INTERVAL})..."
     uv run python scripts/train_student_pilot.py \
         --geometry quad \
         --recipe "${RECIPE}" \
         --epochs "${STAGE1_EPOCHS}" \
-        --val-interval "${VAL_INTERVAL}" \
+        --val-interval "${STAGE1_VAL_INTERVAL}" \
         --batch-size "${BATCH_SIZE}" \
         --lr 0.0020 \
         --cohort-size "${COHORT_SIZE}" \
@@ -170,11 +171,15 @@ run_stage2_hbb() {
     if [ ! -f "${INIT_CKPT}" ] && [ -f "artifacts/train_10k_hbb/checkpoints/mobilenetv4_p2_hbb_best.pt" ]; then
         INIT_CKPT="artifacts/train_10k_hbb/checkpoints/mobilenetv4_p2_hbb_best.pt"
     fi
+    local SCRATCH_ARGS=(--init-checkpoint "${INIT_CKPT}" --lr 3e-4)
+    if [ "${FROM_SCRATCH:-0}" = "1" ]; then
+        SCRATCH_ARGS=(--from-scratch --lr 1.5e-3)
+    fi
     echo ""
-    echo ">>> [STAGE 2] Human GT Fine-Tuning (HBB) (${STAGE2_EPOCHS} Epochs with L1+CIoU Tightening from ${INIT_CKPT}, Val Interval: ${VAL_INTERVAL})..."
+    echo ">>> [STAGE 2] Human GT Training (HBB) (${STAGE2_EPOCHS} Epochs, Scratch=${FROM_SCRATCH:-0}, Val Interval: ${STAGE2_VAL_INTERVAL})..."
     uv run python scripts/finetune_student_gt.py \
         --geometry hbb \
-        --init-checkpoint "${INIT_CKPT}" \
+        "${SCRATCH_ARGS[@]}" \
         --cohort-db "${PSEUDO_LABELS_DB}" \
         --gt-index "${GT_INDEX}" \
         --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
@@ -182,10 +187,9 @@ run_stage2_hbb() {
         --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${FINETUNE_HBB_DIR}" \
         --epochs "${STAGE2_EPOCHS}" \
-        --val-interval "${VAL_INTERVAL}" \
+        --val-interval "${STAGE2_VAL_INTERVAL}" \
         --cohort-size "${COHORT_SIZE}" \
         --batch-size "${BATCH_SIZE}" \
-        --lr 3e-4 \
         --box-weight 2.0 \
         --ltrb-weight 0.5 \
         --weak-negative-weight 0.15 \
@@ -203,11 +207,15 @@ run_stage2_quad() {
     if [ ! -f "${INIT_CKPT}" ] && [ -f "artifacts/train_10k_quad/checkpoints/mobilenetv4_p2_quad_best.pt" ]; then
         INIT_CKPT="artifacts/train_10k_quad/checkpoints/mobilenetv4_p2_quad_best.pt"
     fi
+    local SCRATCH_ARGS=(--init-checkpoint "${INIT_CKPT}" --lr 3e-4)
+    if [ "${FROM_SCRATCH:-0}" = "1" ]; then
+        SCRATCH_ARGS=(--from-scratch --lr 1.5e-3)
+    fi
     echo ""
-    echo ">>> [STAGE 2] Human GT Fine-Tuning (QUAD) (${STAGE2_EPOCHS} Epochs with Min-8 L1 + GWD from ${INIT_CKPT}, Val Interval: ${VAL_INTERVAL})..."
+    echo ">>> [STAGE 2] Human GT Training (QUAD) (${STAGE2_EPOCHS} Epochs, Scratch=${FROM_SCRATCH:-0}, Val Interval: ${STAGE2_VAL_INTERVAL})..."
     uv run python scripts/finetune_student_gt.py \
         --geometry quad \
-        --init-checkpoint "${INIT_CKPT}" \
+        "${SCRATCH_ARGS[@]}" \
         --cohort-db "${PSEUDO_LABELS_DB}" \
         --gt-index "${GT_INDEX}" \
         --val-pseudo-labels "${VALIDATION_PSEUDO_LABELS}" \
@@ -215,10 +223,9 @@ run_stage2_quad() {
         --split-seed "${PIPELINE_SPLIT_SEED}" \
         --output-dir "${FINETUNE_QUAD_DIR}" \
         --epochs "${STAGE2_EPOCHS}" \
-        --val-interval "${VAL_INTERVAL}" \
+        --val-interval "${STAGE2_VAL_INTERVAL}" \
         --cohort-size "${COHORT_SIZE}" \
         --batch-size "${BATCH_SIZE}" \
-        --lr 3e-4 \
         --corner-weight 2.0 \
         --gwd-weight 2.0 \
         --weak-negative-weight 0.15 \

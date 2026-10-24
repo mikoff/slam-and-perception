@@ -111,11 +111,13 @@ class QuadTargetBuilder:
         assigner: QuadAssigner | QuadTaskAlignedAssigner,
         *,
         weak_negative_weight: float = 0.0,
+        ignore_unmatched_gt_interior: bool = False,
     ) -> None:
         if not 0 <= weak_negative_weight <= 1:
             raise ValueError("weak_negative_weight must be in [0, 1]")
         self.assigner = assigner
         self.weak_negative_weight = weak_negative_weight
+        self.ignore_unmatched_gt_interior = ignore_unmatched_gt_interior
         self._grid_cache: dict[
             tuple[tuple[tuple[int, int], ...], torch.device],
             tuple[Tensor, Sequence[slice]],
@@ -132,7 +134,10 @@ class QuadTargetBuilder:
         cache_key = (tuple(feature_shapes), device)
         if cache_key not in self._grid_cache:
             self._grid_cache[cache_key] = make_grid_points(
-                feature_shapes, self.assigner.strides, device=device, dtype=torch.float32
+                feature_shapes,
+                self.assigner.strides,
+                device=device,
+                dtype=torch.float32,
             )
         points, level_slices = self._grid_cache[cache_key]
         pred_quality_b: Tensor | None = None
@@ -190,15 +195,22 @@ class QuadTargetBuilder:
                     (ignore_quads, quads[assignment.unrepresentable_gt_indices])
                 )
             ignored = points_inside_quads(points, ignore_quads)
-            if getattr(self.assigner, "assignment_mode", None) == "one_to_one":
+            if (
+                self.ignore_unmatched_gt_interior
+                or getattr(self.assigner, "assignment_mode", None) == "one_to_one"
+            ) and quads.numel() > 0:
+                img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
                 x = quads[:, :, 0]
                 y = quads[:, :, 1]
-                shoelace = 0.5 * (
-                    (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
-                    + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
-                    + (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2])
-                    + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
-                ).abs()
+                shoelace = (
+                    0.5
+                    * (
+                        (x[:, 0] * y[:, 1] - x[:, 1] * y[:, 0])
+                        + (x[:, 1] * y[:, 2] - x[:, 2] * y[:, 1])
+                        + (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2])
+                        + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
+                    ).abs()
+                )
                 # Keep interior anchors of all foreground quads (up to 95% image area)
                 # in the ignore mask so large foreground instances are not penalized.
                 valid_bound_quads = quads[shoelace < 0.95 * img_area]

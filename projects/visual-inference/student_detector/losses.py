@@ -244,12 +244,20 @@ class ProposalLoss(nn.Module):
             for level_slice, stride in zip(level_slices, self.strides, strict=True):
                 location_strides[level_slice] = stride
             batch_strides = location_strides.view(1, -1, 1)
+            target_ltrb = targets.box_distances.float()
+            span_x = (target_ltrb[..., 0] + target_ltrb[..., 2]).clamp(min=1.0)
+            span_y = (target_ltrb[..., 1] + target_ltrb[..., 3]).clamp(min=1.0)
+            geom_scale = torch.sqrt(span_x * span_y)
+            wx = (geom_scale / span_x).clamp(min=0.5, max=2.0)
+            wy = (geom_scale / span_y).clamp(min=0.5, max=2.0)
+            axis_weights = torch.stack((wx, wy, wx, wy), dim=-1)
+            axis_weights = axis_weights / axis_weights.mean(dim=-1, keepdim=True)
             component_losses = functional.smooth_l1_loss(
                 predicted_distances.float() / batch_strides,
-                targets.box_distances.float() / batch_strides,
+                target_ltrb / batch_strides,
                 reduction="none",
             )
-            ltrb_location_losses = component_losses.mean(dim=2)
+            ltrb_location_losses = (component_losses * axis_weights).mean(dim=2)
             (
                 ltrb_loss_per_image,
                 ltrb_weight_sums,
@@ -324,7 +332,23 @@ class ProposalLoss(nn.Module):
             weighted_mask = targets.objectness_weights * mask_float
             weight_sums = weighted_mask.sum(dim=1).detach()
             if self.objectness_normalization == "num_positives":
-                norm = positive_float.sum(dim=1).clamp(min=1.0).to(dtype=detached_quality.dtype)
+                pos_norm = (
+                    positive_float.sum(dim=1)
+                    .clamp(min=1.0)
+                    .to(dtype=detached_quality.dtype)
+                )
+                if state == "positive":
+                    norm = pos_norm
+                else:
+                    # Floor background normalization by grid size / 16 so sparsely annotated
+                    # images (e.g. ADE20K facades or OpenImages with 1-3 GT boxes) do not
+                    # receive 50x-200x stronger negative penalties that erase unannotated
+                    # windows and pillars, while keeping 16x stronger background suppression
+                    # than per_state_mean.
+                    bg_floor = (
+                        counts.clamp(min=1).to(dtype=detached_quality.dtype) / 16.0
+                    ).clamp(min=1.0)
+                    norm = torch.maximum(pos_norm, bg_floor)
                 effective = (classification_losses * weighted_mask).sum(dim=1) / norm
             else:
                 # Preserve weak-region coefficients: normalize by point count, not

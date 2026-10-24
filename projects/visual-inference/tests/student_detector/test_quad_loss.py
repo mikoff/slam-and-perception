@@ -159,3 +159,41 @@ def test_corner_quality_proxy_is_sensitive_to_thin_minor_axis_error() -> None:
     major_quality = QuadProposalLoss._corner_quality_proxy(major_error, target)
     minor_quality = QuadProposalLoss._corner_quality_proxy(minor_error, target)
     assert minor_quality < major_quality
+
+
+def test_quad_target_builder_ignores_unmatched_gt_interior() -> None:
+    shapes = ((8, 8), (4, 4), (2, 2))
+    sample = _sample()
+    default_targets = QuadTargetBuilder(
+        QuadAssigner(top_k=1, eligible_levels=1),
+        ignore_unmatched_gt_interior=False,
+    )([sample], shapes, device=torch.device("cpu"))
+    guarded_targets = QuadTargetBuilder(
+        QuadAssigner(top_k=1, eligible_levels=1),
+        ignore_unmatched_gt_interior=True,
+    )([sample], shapes, device=torch.device("cpu"))
+    assert (
+        guarded_targets.trusted_background_mask.sum()
+        < default_targets.trusted_background_mask.sum()
+    )
+
+
+def test_corner_loss_preserves_horizontal_gradient_on_tall_vertical_quad() -> None:
+    loss = QuadProposalLoss()
+    # One square quad (4x4) and one tall slender quad (1x12) in stride units
+    target = torch.tensor(
+        [
+            [-2.0, -2.0, 2.0, -2.0, 2.0, 2.0, -2.0, 2.0],
+            [-0.5, -6.0, 0.5, -6.0, 0.5, 6.0, -0.5, 6.0],
+        ]
+    )
+    positive = torch.tensor([True, True])
+    x_shift = torch.tensor([0.2, 0.0] * 4)
+    y_shift = torch.tensor([0.0, 0.2] * 4)
+    loss_x = loss._corner_loss(
+        target + torch.stack([torch.zeros(8), x_shift]), target, positive
+    )
+    loss_y = loss._corner_loss(
+        target + torch.stack([torch.zeros(8), y_shift]), target, positive
+    )
+    assert loss_x > loss_y

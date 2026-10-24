@@ -406,7 +406,7 @@ def generate_dashboard_html(
     Before and after fine-tuning &bull; Images excluded from both detector training stages
     <p>{escape(checkpoint_labels)}</p>
     <p>Score 0 shows all exported predictions, up to 100 per model. NMS and the 1,000-candidate shortlist still apply.</p>
-    <p>Each image button cycles that card through Human GT, fine-tuned HBB, and fine-tuned quads. The controls remain visible while scrolling.</p>
+    <p>Each image button cycles that card through Human GT, fine-tuned HBB, and fine-tuned quads. Hover any region and scroll the mouse wheel to hide all other boxes and cycle through the active-layer detections directly under the cursor.</p>
     <details><summary>Checkpoints and image exclusion audit</summary><pre>{provenance_html}</pre></details>
   </div>
 </header>
@@ -565,6 +565,47 @@ function drawBox(ctx, box, strokeStyle, fillStyle, lineWidth, isDashed = false) 
   ctx.restore();
 }}
 
+function pointToSegmentDistSq(px, py, x1, y1, x2, y2) {{
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return (px - x1) * (px - x1) + (py - y1) * (py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  return (px - projX) * (px - projX) + (py - projY) * (py - projY);
+}}
+
+function pointInBox(px, py, box, pad = 3.0) {{
+  return px >= box[0] - pad && px <= box[2] + pad && py >= box[1] - pad && py <= box[3] + pad;
+}}
+
+function pointInQuad(px, py, quad, pad = 3.0) {{
+  let inside = false;
+  for (let i = 0, j = quad.length - 1; i < quad.length; j = i++) {{
+    const xi = quad[i][0], yi = quad[i][1];
+    const xj = quad[j][0], yj = quad[j][1];
+    const intersect = ((yi > py) !== (yj > py)) &&
+      (px < (xj - xi) * (py - yi) / ((yj - yi) || 1e-7) + xi);
+    if (intersect) inside = !inside;
+    if (pointToSegmentDistSq(px, py, xi, yi, xj, yj) <= pad * pad) return true;
+  }}
+  return inside;
+}}
+
+function boxArea(box) {{
+  return Math.max(1, (box[2] - box[0]) * (box[3] - box[1]));
+}}
+
+function quadArea(quad) {{
+  let area = 0;
+  for (let i = 0, j = quad.length - 1; i < quad.length; j = i++) {{
+    area += (quad[j][0] + quad[i][0]) * (quad[j][1] - quad[i][1]);
+  }}
+  return Math.max(1, Math.abs(area) * 0.5);
+}}
+
 function cardKey(item) {{
   return item.sha256 || `${{item.source_dataset}}:${{item.image_id}}:${{item.file_name}}`;
 }}
@@ -691,68 +732,287 @@ function renderCards() {{
         return [b[0] * scaleX, b[1] * scaleY, b[2] * scaleX, b[3] * scaleY];
       }}
 
-      function drawCard() {{
+      let spotlightActive = false;
+      let spotlightHits = [];
+      let spotlightIndex = 0;
+      let anchorX = null;
+      let anchorY = null;
+
+      function getActiveShapes() {{
         const localMode = cardViews.get(cardKey(item)) || 'global';
         const useGlobalLayers = localMode === 'global';
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
+        const shapes = [];
 
-        // SAM Discovered (gray dashed)
         if (useGlobalLayers && showSam && item.sam_quads) {{
-          item.sam_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(156, 163, 175, 0.65)', 'rgba(156, 163, 175, 0.08)', 1.5, true));
+          item.sam_quads.forEach(q => {{
+            const rq = rescaleQuad(q);
+            shapes.push({{
+              kind: 'quad',
+              geom: rq,
+              area: quadArea(rq),
+              layer: 'SAM Discovered',
+              score: null,
+              stroke: 'rgba(156, 163, 175, 0.65)',
+              fill: 'rgba(156, 163, 175, 0.08)',
+              lineWidth: 1.5,
+              dashed: true,
+              labelColor: 'rgba(229, 231, 235, 0.95)',
+              showLabel: false,
+            }});
+          }});
         }}
 
-        // Human Ground Truth (green)
         if ((useGlobalLayers && showGt) || localMode === 'gt') {{
           if (item.gt_quads && item.gt_quads.length > 0) {{
-            item.gt_quads.forEach(q => drawQuad(ctx, rescaleQuad(q), 'rgba(16, 185, 129, 0.90)', 'rgba(16, 185, 129, 0.20)', 2.0));
+            item.gt_quads.forEach(q => {{
+              const rq = rescaleQuad(q);
+              shapes.push({{
+                kind: 'quad',
+                geom: rq,
+                area: quadArea(rq),
+                layer: 'Human GT',
+                score: null,
+                stroke: 'rgba(16, 185, 129, 0.90)',
+                fill: 'rgba(16, 185, 129, 0.20)',
+                lineWidth: 2.0,
+                dashed: false,
+                labelColor: 'rgba(167, 243, 208, 0.95)',
+                showLabel: false,
+              }});
+            }});
           }} else if (item.gt_boxes) {{
-            item.gt_boxes.forEach(b => drawBox(ctx, rescaleBox(b), 'rgba(16, 185, 129, 0.90)', 'rgba(16, 185, 129, 0.20)', 2.0));
+            item.gt_boxes.forEach(b => {{
+              const raw = Array.isArray(b) ? b : b.box;
+              const rb = rescaleBox(raw);
+              shapes.push({{
+                kind: 'box',
+                geom: rb,
+                area: boxArea(rb),
+                layer: 'Human GT',
+                score: null,
+                stroke: 'rgba(16, 185, 129, 0.90)',
+                fill: 'rgba(16, 185, 129, 0.20)',
+                lineWidth: 2.0,
+                dashed: false,
+                labelColor: 'rgba(167, 243, 208, 0.95)',
+                showLabel: false,
+              }});
+            }});
           }}
         }}
 
-        // Stage-1 Quad Baseline (amber dashed)
         if (useGlobalLayers && showQuadBase && item.quad_before) {{
           item.quad_before.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
-              drawQuad(ctx, rescaleQuad(p.quad), 'rgba(245, 158, 11, 0.70)', 'rgba(245, 158, 11, 0.12)', 1.8, true);
+              const rq = rescaleQuad(p.quad);
+              shapes.push({{
+                kind: 'quad',
+                geom: rq,
+                area: quadArea(rq),
+                layer: 'Quad Baseline',
+                score: p.score,
+                stroke: 'rgba(245, 158, 11, 0.70)',
+                fill: 'rgba(245, 158, 11, 0.12)',
+                lineWidth: 1.8,
+                dashed: true,
+                labelColor: 'rgba(253, 230, 138, 0.95)',
+                showLabel: false,
+              }});
             }}
           }});
         }}
 
-        // Stage-1 HBB Baseline (blue dashed)
         if (useGlobalLayers && showHbbBase && item.hbb_before) {{
           item.hbb_before.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
-              drawBox(ctx, rescaleBox(p.box), 'rgba(59, 130, 246, 0.70)', 'rgba(59, 130, 246, 0.12)', 1.8, true);
+              const rb = rescaleBox(p.box);
+              shapes.push({{
+                kind: 'box',
+                geom: rb,
+                area: boxArea(rb),
+                layer: 'HBB Baseline',
+                score: p.score,
+                stroke: 'rgba(59, 130, 246, 0.70)',
+                fill: 'rgba(59, 130, 246, 0.12)',
+                lineWidth: 1.8,
+                dashed: true,
+                labelColor: 'rgba(191, 219, 254, 0.95)',
+                showLabel: false,
+              }});
             }}
           }});
         }}
 
-        // Stage-2 HBB Fine-Tuned (cyan)
         if (((useGlobalLayers && showHbbFt) || localMode === 'hbb') && item.hbb_after) {{
           item.hbb_after.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
-              drawBox(ctx, rescaleBox(p.box), 'rgba(34, 211, 238, 0.90)', 'rgba(34, 211, 238, 0.22)', 2.0);
+              const rb = rescaleBox(p.box);
+              shapes.push({{
+                kind: 'box',
+                geom: rb,
+                area: boxArea(rb),
+                layer: 'Fine-tuned HBB',
+                score: p.score,
+                stroke: 'rgba(34, 211, 238, 0.90)',
+                fill: 'rgba(34, 211, 238, 0.22)',
+                lineWidth: 2.0,
+                dashed: false,
+                labelColor: 'rgba(165, 243, 252, 0.95)',
+                showLabel: false,
+              }});
             }}
           }});
         }}
 
-        // Stage-2 Quad Fine-Tuned (purple + label)
         if (((useGlobalLayers && showQuadFt) || localMode === 'quad') && item.quad_after) {{
           item.quad_after.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
               const rq = rescaleQuad(p.quad);
-              drawQuad(ctx, rq, 'rgba(192, 132, 252, 0.90)', 'rgba(192, 132, 252, 0.22)', 2.0);
-              ctx.fillStyle = 'rgba(233, 213, 255, 0.90)';
-              ctx.font = '11px sans-serif';
-              ctx.fillText(p.score.toFixed(2), rq[0][0] + 2, Math.max(12, rq[0][1] - 2));
+              shapes.push({{
+                kind: 'quad',
+                geom: rq,
+                area: quadArea(rq),
+                layer: 'Fine-tuned Quad',
+                score: p.score,
+                stroke: 'rgba(192, 132, 252, 0.90)',
+                fill: 'rgba(192, 132, 252, 0.22)',
+                lineWidth: 2.0,
+                dashed: false,
+                labelColor: 'rgba(233, 213, 255, 0.95)',
+                showLabel: true,
+              }});
             }}
           }});
         }}
+
+        return shapes;
       }}
 
-      viewButton.addEventListener('click', () => cycleCardView(item, viewButton, drawCard));
+      function renderShape(s, forceHighlight = false) {{
+        const lw = forceHighlight ? Math.max(s.lineWidth, 2.6) : s.lineWidth;
+        if (s.kind === 'quad') {{
+          drawQuad(ctx, s.geom, s.stroke, s.fill, lw, s.dashed);
+          if (s.showLabel || forceHighlight) {{
+            const txt = forceHighlight
+              ? `${{s.layer}}${{s.score !== null ? ' ' + s.score.toFixed(2) : ''}}`
+              : (s.score !== null ? s.score.toFixed(2) : '');
+            if (txt) {{
+              ctx.fillStyle = s.labelColor;
+              ctx.font = forceHighlight ? 'bold 12px sans-serif' : '11px sans-serif';
+              ctx.fillText(txt, s.geom[0][0] + 2, Math.max(12, s.geom[0][1] - 3));
+            }}
+          }}
+        }} else {{
+          drawBox(ctx, s.geom, s.stroke, s.fill, lw, s.dashed);
+          if (forceHighlight) {{
+            const txt = `${{s.layer}}${{s.score !== null ? ' ' + s.score.toFixed(2) : ''}}`;
+            ctx.fillStyle = s.labelColor;
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(txt, s.geom[0] + 2, Math.max(12, s.geom[1] - 3));
+          }}
+        }}
+      }}
+
+      function drawCard() {{
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+
+        if (spotlightActive && spotlightHits.length > 0) {{
+          const s = spotlightHits[spotlightIndex % spotlightHits.length];
+          renderShape(s, true);
+
+          const hudText = `🎯 [${{spotlightIndex + 1}}/${{spotlightHits.length}}] ${{s.layer}}${{s.score !== null ? ' (' + s.score.toFixed(2) + ')' : ''}} — Scroll: cycle • Click/Leave: show all`;
+          ctx.save();
+          ctx.font = 'bold 12px sans-serif';
+          const padX = 8, padY = 5;
+          const tw = ctx.measureText(hudText).width;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.86)';
+          ctx.fillRect(8, 8, tw + padX * 2, 24);
+          ctx.strokeStyle = s.stroke;
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(8, 8, tw + padX * 2, 24);
+          ctx.fillStyle = '#f8fafc';
+          ctx.fillText(hudText, 8 + padX, 8 + 16);
+          ctx.restore();
+          return;
+        }}
+
+        const shapes = getActiveShapes();
+        shapes.forEach(s => renderShape(s, false));
+      }}
+
+      function canvasCoords(evt) {{
+        const rect = canvas.getBoundingClientRect();
+        const cx = (evt.clientX - rect.left) * (canvas.width / Math.max(rect.width, 1));
+        const cy = (evt.clientY - rect.top) * (canvas.height / Math.max(rect.height, 1));
+        return [cx, cy];
+      }}
+
+      function computeHitsAt(cx, cy) {{
+        const shapes = getActiveShapes();
+        const hits = shapes.filter(s =>
+          s.kind === 'quad' ? pointInQuad(cx, cy, s.geom) : pointInBox(cx, cy, s.geom)
+        );
+        hits.sort((a, b) => a.area - b.area);
+        return hits;
+      }}
+
+      canvas.addEventListener('wheel', (evt) => {{
+        const [cx, cy] = canvasCoords(evt);
+        const movedFar = anchorX === null || anchorY === null || Math.hypot(cx - anchorX, cy - anchorY) > 8;
+        if (!spotlightActive || movedFar) {{
+          const hits = computeHitsAt(cx, cy);
+          if (hits.length === 0) {{
+            if (spotlightActive) {{
+              spotlightActive = false;
+              spotlightHits = [];
+              drawCard();
+            }}
+            return;
+          }}
+          evt.preventDefault();
+          anchorX = cx;
+          anchorY = cy;
+          spotlightHits = hits;
+          spotlightIndex = 0;
+          spotlightActive = true;
+          drawCard();
+          return;
+        }}
+
+        evt.preventDefault();
+        const step = evt.deltaY >= 0 ? 1 : -1;
+        spotlightIndex = (spotlightIndex + step + spotlightHits.length) % spotlightHits.length;
+        drawCard();
+      }}, {{ passive: false }});
+
+      canvas.addEventListener('click', () => {{
+        if (spotlightActive) {{
+          spotlightActive = false;
+          spotlightHits = [];
+          anchorX = null;
+          anchorY = null;
+          drawCard();
+        }}
+      }});
+
+      canvas.addEventListener('mouseleave', () => {{
+        if (spotlightActive) {{
+          spotlightActive = false;
+          spotlightHits = [];
+          anchorX = null;
+          anchorY = null;
+          drawCard();
+        }}
+      }});
+
+      viewButton.addEventListener('click', () => {{
+        spotlightActive = false;
+        spotlightHits = [];
+        anchorX = null;
+        anchorY = null;
+        cycleCardView(item, viewButton, drawCard);
+      }});
       drawCard();
     }};
   }});
@@ -834,7 +1094,7 @@ def main() -> None:
         nms_iou_threshold=0.45,
         max_detections=100,
         score_mode="objectness_x_centerness",
-        centerness_alpha=1.0,
+        centerness_alpha=0.25,
         nms_mode="part_aware",
         part_scale_ratio=0.4,
         part_max_iou=0.65,

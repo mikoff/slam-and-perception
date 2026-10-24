@@ -122,26 +122,26 @@ class QuadProposalLoss(nn.Module):
             [torch.roll(reverse, -index, dims=1) for index in range(4)], dim=1
         )
         traversals = torch.cat((forward, backward), dim=1).reshape(-1, 8, 8)
-        errors = functional.smooth_l1_loss(
-            predicted[positive].float().unsqueeze(1).expand(-1, 8, -1),
-            traversals.float(),
-            reduction="none",
-            beta=self.corner_smooth_l1_beta,
-        ).mean(dim=2)
-        min_errors = errors.min(dim=1).values
-
-        # Scale loss inverse to GT diagonal length (in stride units) to balance
-        # gradients between small and large objects.
+        # Scale x and y coordinate errors independently by inverse per-axis GT span
+        # so tall/slender objects (e.g. persons, pillars, trees where H >> W) retain
+        # strong horizontal localization gradients instead of being crushed by diagonal length.
         xmin = target_quads[..., 0].amin(dim=1)
         xmax = target_quads[..., 0].amax(dim=1)
         ymin = target_quads[..., 1].amin(dim=1)
         ymax = target_quads[..., 1].amax(dim=1)
-        gt_diag = torch.sqrt((xmax - xmin).square() + (ymax - ymin).square()).clamp(
-            min=1.0
+        span_x = (xmax - xmin).clamp(min=1.0)
+        span_y = (ymax - ymin).clamp(min=1.0)
+        wx = (span_x.median() / span_x).clamp(0.5, 2.0)
+        wy = (span_y.median() / span_y).clamp(0.5, 2.0)
+        axis_weights = torch.stack((wx, wy), dim=-1).repeat(1, 4).unsqueeze(1)
+        raw_errors = functional.smooth_l1_loss(
+            predicted[positive].float().unsqueeze(1).expand(-1, 8, -1),
+            traversals.float(),
+            reduction="none",
+            beta=self.corner_smooth_l1_beta,
         )
-        # Normalize weights so mean weight stays close to 1.0
-        diag_weights = (gt_diag.median() / gt_diag).clamp(0.2, 5.0)
-        return (min_errors * diag_weights).mean()
+        min_errors = (raw_errors * axis_weights).mean(dim=2).min(dim=1).values
+        return min_errors.mean()
 
     def _validity_loss(self, quads: Tensor, positive: Tensor) -> Tensor:
         if not positive.any():
@@ -184,9 +184,12 @@ class QuadProposalLoss(nn.Module):
             target_covariance = target_centered.transpose(1, 2) @ target_centered / 4.0
 
             pred_trace = pred_covariance.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
-            target_trace = target_covariance.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+            target_var = target_covariance.diagonal(dim1=-2, dim2=-1).clamp(min=1e-4)
+            target_trace = target_var.sum(dim=-1)
             scale = target_trace.clamp(min=1e-4)
-            center_distance = (pred_center - target_center).square().sum(dim=-1) / scale
+            center_distance = ((pred_center - target_center).square() / target_var).sum(
+                dim=-1
+            ) * 0.5
 
             covariance_product_trace = (
                 pred_covariance * target_covariance.transpose(-1, -2)
@@ -295,9 +298,13 @@ class QuadProposalLoss(nn.Module):
                 torch.autocast(device_type=selected_pred.device.type, enabled=False),
             ):
                 if self.geometry_quality_target == "exact_iou":
-                    geometry_quality = aligned_quad_iou(
+                    exact_iou = aligned_quad_iou(
                         selected_pred.float(), selected_target.float()
                     )
+                    proxy_quality = self._corner_quality_proxy(
+                        selected_pred.float(), selected_target.float()
+                    )
+                    geometry_quality = torch.maximum(exact_iou, 0.5 * proxy_quality)
                 else:
                     geometry_quality = self._corner_quality_proxy(
                         selected_pred.float(), selected_target.float()

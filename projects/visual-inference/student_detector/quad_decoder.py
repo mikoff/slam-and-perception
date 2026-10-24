@@ -197,13 +197,11 @@ class QuadInferenceDecoder:
             decoded = decoded_all[batch, selected_indices]
             selected_levels = point_levels[selected_indices]
             selected_locations = point_locations[selected_indices]
-            in_bounds = (
-                (decoded[..., 0] >= 0).all(dim=1)
-                & (decoded[..., 0] <= width).all(dim=1)
-                & (decoded[..., 1] >= 0).all(dim=1)
-                & (decoded[..., 1] <= height).all(dim=1)
-            )
-            valid = quad_validity(decoded) & in_bounds
+            finite_coords = torch.isfinite(decoded).all(dim=(1, 2))
+            decoded = decoded.clone()
+            decoded[..., 0].clamp_(min=0, max=width)
+            decoded[..., 1].clamp_(min=0, max=height)
+            valid = finite_coords & quad_validity(decoded)
             invalid_count = int((~valid).sum().item())
             decoded = decoded[valid]
             selected_scores = selected_scores[valid]
