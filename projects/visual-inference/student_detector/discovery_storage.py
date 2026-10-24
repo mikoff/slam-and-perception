@@ -93,10 +93,16 @@ def init_discovery_db(db_path: Path | str) -> sqlite3.Connection:
     return conn
 
 
-def get_processed_image_ids(db_path: Path | str) -> set[int]:
+def get_processed_image_ids(
+    db_path: Path | str,
+    require_sam_discovered: bool = False,
+) -> set[int]:
     """Retrieve the set of image IDs already committed to the database.
 
     /// @param db_path File path to SQLite database.
+    /// @param require_sam_discovered If True, only count images that have at least
+    ///     one ``source = 'sam_discovered'`` annotation row (excluding images
+    ///     pre-populated with human GT only).
     /// @return Set of processed image IDs.
     """
     path = Path(db_path).resolve()
@@ -104,7 +110,12 @@ def get_processed_image_ids(db_path: Path | str) -> set[int]:
         return set()
 
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
-        rows = conn.execute("SELECT image_id FROM images").fetchall()
+        if require_sam_discovered:
+            rows = conn.execute(
+                "SELECT DISTINCT image_id FROM annotations WHERE source = 'sam_discovered'"
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT image_id FROM images").fetchall()
         return {int(r[0]) for r in rows}
 
 
@@ -191,6 +202,10 @@ def save_image_batch(
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             img_rows,
+        )
+        conn.executemany(
+            "DELETE FROM annotations WHERE image_id = ?",
+            [(r[0],) for r in img_rows],
         )
         conn.executemany(
             """

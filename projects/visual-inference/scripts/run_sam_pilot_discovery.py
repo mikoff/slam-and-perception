@@ -867,9 +867,9 @@ def main() -> None:
 
     if db_path is not None:
         sqlite_conn = init_discovery_db(db_path)
-        processed_ids = get_processed_image_ids(db_path)
+        processed_ids = get_processed_image_ids(db_path, require_sam_discovered=True)
         print(
-            f"Resuming from SQLite: Found {len(processed_ids)} already processed images in {db_path}."
+            f"Resuming from SQLite: Found {len(processed_ids)} SAM-processed images in {db_path}."
         )
 
     if json_path is not None and json_path.exists():
@@ -891,8 +891,9 @@ def main() -> None:
         print(f"Restricted to first {len(remaining_ids)} remaining images by --max-images flag.")
 
     total_target = len(cohort_ids)
+    completed_in_cohort = total_target - len(remaining_ids)
     print(f"Total target cohort:     {total_target} images")
-    print(f"Already completed:       {len(processed_ids)} images")
+    print(f"Already completed:       {completed_in_cohort} in cohort ({len(processed_ids)} total in DB)")
     print(f"Pending to process:      {len(remaining_ids)} images")
 
     if not remaining_ids:
@@ -981,9 +982,9 @@ def main() -> None:
             total_human_gts += res["metrics"]["human_gt_count"]
 
             # Progress reporting
-            num_done = len(processed_ids)
+            num_done = completed_in_cohort + num_processed_this_run
             fps = num_processed_this_run / max(time.time() - start_time, 1e-4)
-            eta_sec = (total_target - num_done) / max(fps, 1e-4)
+            eta_sec = max(0, len(remaining_ids) - num_processed_this_run) / max(fps, 1e-4)
 
             print(
                 f"[{num_done:06d}/{total_target:06d}] "
