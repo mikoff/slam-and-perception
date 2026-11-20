@@ -21,11 +21,17 @@ import torch
 from student_detector.dashboard_holdout import file_sha256, load_holdout
 from student_detector.decoder import InferenceDecoder
 from student_detector.model import QuadProposalDetector, StudentDetector
+from student_detector.ontology import DISTRACTOR_CATEGORIES
+from student_detector.open_vocab_heads import (
+    DenseAnchorSemanticHead,
+    RoIPooledSemanticHead,
+)
 from student_detector.quad_decoder import QuadInferenceDecoder
 from student_detector.sam_student_data import (
     DEFAULT_IMAGE_ROOT,
 )
 from student_detector.targets import point_validity_from_pixel_mask
+from student_detector.vocabulary import VocabularyBank
 
 
 def parse_args() -> argparse.Namespace:
@@ -91,6 +97,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_IMAGE_ROOT,
         help="Path to dataset output image root.",
+    )
+    parser.add_argument(
+        "--vocabulary-path",
+        type=Path,
+        default=Path("artifacts/sota_open_vocab/vocabulary_bank_37classes.pt"),
+        help="Path to frozen SigLIP VocabularyBank for Option A / Option B semantic tags.",
     )
     parser.add_argument(
         "--device",
@@ -407,6 +419,7 @@ def generate_dashboard_html(
     <p>{escape(checkpoint_labels)}</p>
     <p>Score 0 shows all exported predictions, up to 100 per model. NMS and the 1,000-candidate shortlist still apply.</p>
     <p>Each image button cycles that card through Human GT, fine-tuned HBB, and fine-tuned quads. Hover any region and scroll the mouse wheel to hide all other boxes and cycle through the active-layer detections directly under the cursor.</p>
+    <p>🏷️ <strong>Semantic Calibration:</strong> Confidence percentages use Categorical Softmax over the 37-class open vocabulary bank (raw SigLIP binary sigmoids with bias -12.93 require cos &ge; 0.11 for 50% absolute probability, which drops to &sim;0% on small crops even when the relative class prediction is correct).</p>
     <details><summary>Checkpoints and image exclusion audit</summary><pre>{provenance_html}</pre></details>
   </div>
 </header>
@@ -487,16 +500,18 @@ def generate_dashboard_html(
 <div class="controls">
   <div class="controls-row">
     <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">View Presets:</span>
-    <button class="preset-btn active" onclick="setPreset('side_by_side')">🌟 Quads vs HBB (Side-to-Side)</button>
+    <button class="preset-btn active" onclick="setPreset('quad_only')">💎 Quad Only (Clean)</button>
+    <button class="preset-btn" onclick="setPreset('hbb_only')">🔬 HBB Only (Clean)</button>
+    <button class="preset-btn" onclick="setPreset('side_by_side')">🌟 Quads vs HBB</button>
     <button class="preset-btn" onclick="setPreset('quad_audit')">💎 Quad Audit (Before vs After)</button>
     <button class="preset-btn" onclick="setPreset('hbb_audit')">🔬 HBB Audit (Before vs After)</button>
-    <button class="preset-btn" onclick="setPreset('all')">🔮 All 4 Models</button>
+    <button class="preset-btn" onclick="setPreset('all')">🔮 All + Human GT</button>
   </div>
   
   <div class="controls-row" style="border-top: 1px solid var(--border-color); padding-top: 10px;">
-    <label><input type="checkbox" id="show-gt" checked> <span class="badge badge-gt">Human Ground Truth</span></label>
+    <label><input type="checkbox" id="show-gt"> <span class="badge badge-gt">Human Ground Truth</span></label>
     <label><input type="checkbox" id="show-quad-ft" checked> <span class="badge badge-quad-ft">Quad (Fine-Tuned)</span></label>
-    <label><input type="checkbox" id="show-hbb-ft" checked> <span class="badge badge-hbb-ft">HBB (Fine-Tuned)</span></label>
+    <label><input type="checkbox" id="show-hbb-ft"> <span class="badge badge-hbb-ft">HBB (Fine-Tuned)</span></label>
     <label><input type="checkbox" id="show-quad-base"> <span class="badge badge-quad-base">Quad (Baseline)</span></label>
     <label><input type="checkbox" id="show-hbb-base"> <span class="badge badge-hbb-base">HBB (Baseline)</span></label>
     <label><input type="checkbox" id="show-sam"> <span class="badge badge-sam">SAM Discovered</span></label>
@@ -513,6 +528,49 @@ def generate_dashboard_html(
         <span id="tops-val" style="font-weight: 700; color: var(--accent-cyan); min-width: 24px;">100</span>
       </div>
     </div>
+  </div>
+
+  <div class="controls-row" style="border-top: 1px solid var(--border-color); padding-top: 10px;">
+    <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Classifier Source:</span>
+    <label><input type="radio" name="classifier-source" value="student" checked> <span class="badge" style="background:#581c87; color:#e9d5ff; border:1px solid #a855f7;">⚡ Option A+B / Student</span></label>
+    <label><input type="radio" name="classifier-source" value="option_a"> <span class="badge" style="background:#14532d; color:#bbf7d0; border:1px solid #22c55e;">🚀 Option A (Dense Single-Stage)</span></label>
+    <label><input type="radio" name="classifier-source" value="option_b"> <span class="badge" style="background:#1e3a8a; color:#bfdbfe; border:1px solid #3b82f6;">🎯 Option B (Focal+Context RoI)</span></label>
+    <label><input type="radio" name="classifier-source" value="teacher"> <span class="badge" style="background:#083344; color:#a5f3fc; border:1px solid #22d3ee;">🎓 SigLIP Teacher</span></label>
+  </div>
+
+  <div class="controls-row" style="border-top: 1px solid var(--border-color); padding-top: 10px;">
+    <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Open-Vocabulary Filter:</span>
+    <label>
+      <span style="font-size: 0.85rem; color: var(--text-secondary);">Class:</span>
+      <select id="category-filter" style="background:#1e293b; border:1px solid var(--border-color); color:#fff; padding:5px 12px; border-radius:6px; font-size:0.85rem; font-weight:600;">
+        <option value="all">🌟 All Categories</option>
+        <option value="car">🚗 Car</option>
+        <option value="pedestrian">🚶 Pedestrian / Person</option>
+        <option value="cyclist">🚴 Cyclist / Bike</option>
+        <option value="traffic_sign">🛑 Traffic Sign</option>
+        <option value="signboard">🪧 Signboard</option>
+        <option value="traffic_light">🚦 Traffic Light</option>
+        <option value="tree">🌳 Tree</option>
+        <option value="pillar">🏛️ Pillar / Column</option>
+        <option value="window">🪟 Window</option>
+        <option value="door">🚪 Door</option>
+        <option value="building">🏢 Building</option>
+        <option value="pole">💈 Pole</option>
+        <option value="street_light">💡 Street Light</option>
+        <option value="fence">🚧 Fence</option>
+        <option value="chair">🪑 Chair</option>
+        <option value="table">🍽️ Table</option>
+        <option value="cabinet">🗄️ Cabinet</option>
+        <option value="bench">🪑 Bench</option>
+        <option value="stroller">👶 Stroller</option>
+        <option value="wheelchair">🧑‍🦽 Wheelchair</option>
+        <option value="traffic_cone">🚧 Traffic Cone / Barrier</option>
+        <option value="distractor_only">⚠️ Distractors / Background Only</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="hide-distractors"> <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid #ef4444;">🛡️ Hide Distractor Proposals</span></label>
+    <label><input type="checkbox" id="match-alternatives"> <span style="font-size: 0.85rem; color: var(--text-secondary); cursor: pointer;">🔍 Include Top-3 Alternatives</span></label>
+    <input type="text" id="category-search" placeholder="Search class (e.g. pillar, car, tree)..." style="background:#1e293b; border:1px solid var(--border-color); color:#fff; padding:5px 12px; border-radius:6px; font-size:0.85rem; min-width: 200px;">
   </div>
 
   <div class="controls-row" style="border-top: 1px solid var(--border-color); padding-top: 10px;">
@@ -625,7 +683,7 @@ function cycleCardView(item, button, redraw) {{
 function setPreset(mode) {{
   cardViews.clear();
   document.querySelectorAll('.controls-row .preset-btn').forEach(b => b.classList.remove('active'));
-  if (event && event.target) event.target.classList.add('active');
+  if (typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
 
   const showGt = document.getElementById('show-gt');
   const showQuadFt = document.getElementById('show-quad-ft');
@@ -634,25 +692,40 @@ function setPreset(mode) {{
   const showHbbBase = document.getElementById('show-hbb-base');
   const showSam = document.getElementById('show-sam');
 
-  showGt.checked = true;
   showSam.checked = false;
 
-  if (mode === 'side_by_side') {{
+  if (mode === 'quad_only') {{
+    showGt.checked = false;
+    showQuadFt.checked = true;
+    showHbbFt.checked = false;
+    showQuadBase.checked = false;
+    showHbbBase.checked = false;
+  }} else if (mode === 'hbb_only') {{
+    showGt.checked = false;
+    showQuadFt.checked = false;
+    showHbbFt.checked = true;
+    showQuadBase.checked = false;
+    showHbbBase.checked = false;
+  }} else if (mode === 'side_by_side') {{
+    showGt.checked = false;
     showQuadFt.checked = true;
     showHbbFt.checked = true;
     showQuadBase.checked = false;
     showHbbBase.checked = false;
   }} else if (mode === 'quad_audit') {{
+    showGt.checked = true;
     showQuadFt.checked = true;
     showQuadBase.checked = true;
     showHbbFt.checked = false;
     showHbbBase.checked = false;
   }} else if (mode === 'hbb_audit') {{
+    showGt.checked = true;
     showHbbFt.checked = true;
     showHbbBase.checked = true;
     showQuadFt.checked = false;
     showQuadBase.checked = false;
   }} else if (mode === 'all') {{
+    showGt.checked = true;
     showQuadFt.checked = true;
     showHbbFt.checked = true;
     showQuadBase.checked = true;
@@ -801,7 +874,11 @@ function renderCards() {{
           }}
         }}
 
-        if (useGlobalLayers && showQuadBase && item.quad_before) {{
+        const catFilterVal = document.getElementById('category-filter') ? document.getElementById('category-filter').value : 'all';
+        const queryVal = document.getElementById('category-search') ? document.getElementById('category-search').value.trim() : '';
+        const isCatFilterActive = catFilterVal !== 'all' || queryVal !== '';
+
+        if (useGlobalLayers && showQuadBase && !isCatFilterActive && item.quad_before) {{
           item.quad_before.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
               const rq = rescaleQuad(p.quad);
@@ -822,7 +899,7 @@ function renderCards() {{
           }});
         }}
 
-        if (useGlobalLayers && showHbbBase && item.hbb_before) {{
+        if (useGlobalLayers && showHbbBase && !isCatFilterActive && item.hbb_before) {{
           item.hbb_before.slice(0, maxTops).forEach(p => {{
             if (p.score >= scoreThresh) {{
               const rb = rescaleBox(p.box);
@@ -843,10 +920,105 @@ function renderCards() {{
           }});
         }}
 
+        const CATEGORY_ALIASES = {{
+          pedestrian: ['pedestrian', 'person'],
+          person: ['pedestrian', 'person'],
+          car: ['car', 'truck', 'bus'],
+          truck: ['truck', 'car'],
+          bus: ['bus', 'car'],
+          cyclist: ['cyclist', 'bicycle', 'motorcycle'],
+          bicycle: ['bicycle', 'cyclist'],
+          motorcycle: ['motorcycle', 'cyclist'],
+          traffic_cone: ['traffic_cone', 'construction_barrier'],
+          pillar: ['pillar', 'column'],
+          building: ['building', 'building_wall'],
+          tree: ['tree', 'vegetation'],
+        }};
+
+        const clfSourceEl = document.querySelector('input[name="classifier-source"]:checked');
+        const clfSource = clfSourceEl ? clfSourceEl.value : 'student';
+
+        function getActiveMeta(p) {{
+          if (clfSource === 'option_a' && p.opt_a_label) {{
+            return {{
+              source: 'Student',
+              label: p.opt_a_label,
+              prob: p.opt_a_prob,
+              top3: p.opt_a_top3 || [],
+              is_distractor: Boolean(p.opt_a_is_distractor),
+            }};
+          }}
+          if (clfSource === 'option_b' && p.opt_b_label) {{
+            return {{
+              source: 'Student',
+              label: p.opt_b_label,
+              prob: p.opt_b_prob,
+              top3: p.opt_b_top3 || [],
+              is_distractor: Boolean(p.opt_b_is_distractor),
+            }};
+          }}
+          const isStu = clfSource !== 'teacher' && p.stu_label;
+          return {{
+            source: isStu ? 'Student' : 'Teacher',
+            label: isStu ? p.stu_label : p.label,
+            prob: isStu ? p.stu_prob : p.sem_prob,
+            top3: isStu ? (p.stu_top3 || []) : (p.top3 || []),
+            is_distractor: isStu ? Boolean(p.stu_is_distractor) : Boolean(p.is_distractor),
+          }};
+        }}
+
+        function passCategoryFilter(p) {{
+          p._matchedAlt = null;
+          const meta = getActiveMeta(p);
+          const hideDist = document.getElementById('hide-distractors') ? document.getElementById('hide-distractors').checked : false;
+          if (hideDist && meta.is_distractor) return false;
+          const catFilter = document.getElementById('category-filter') ? document.getElementById('category-filter').value : 'all';
+          const query = document.getElementById('category-search') ? document.getElementById('category-search').value.trim().toLowerCase() : '';
+          const matchAlt = document.getElementById('match-alternatives') ? document.getElementById('match-alternatives').checked : false;
+
+          const lbl = (meta.label || '').toLowerCase();
+          const top3Cats = (meta.top3 || []).map(x => x[0].toLowerCase());
+
+          function matchTarget(target) {{
+            const allowed = CATEGORY_ALIASES[target] || [target];
+            if (allowed.includes(lbl)) return true;
+            if (matchAlt) {{
+              const found = allowed.find(c => top3Cats.includes(c));
+              if (found) {{
+                const altItem = (meta.top3 || []).find(x => x[0].toLowerCase() === found);
+                p._matchedAlt = altItem ? `${{altItem[0]}} ${{Math.round(altItem[1]*100)}}%` : found;
+                return true;
+              }}
+            }}
+            return false;
+          }}
+
+          if (catFilter === 'distractor_only') {{
+            return meta.is_distractor;
+          }}
+          if (catFilter !== 'all') {{
+            if (!matchTarget(catFilter)) return false;
+          }}
+          if (query) {{
+            const matchesPrimary = lbl.includes(query) || (CATEGORY_ALIASES[query] && CATEGORY_ALIASES[query].includes(lbl));
+            let matchesSecondary = false;
+            if (matchAlt) {{
+              const found = (meta.top3 || []).find(x => x[0].toLowerCase().includes(query));
+              if (found) {{
+                matchesSecondary = true;
+                p._matchedAlt = `${{found[0]}} ${{Math.round(found[1]*100)}}%`;
+              }}
+            }}
+            if (!matchesPrimary && !matchesSecondary) return false;
+          }}
+          return true;
+        }}
+
         if (((useGlobalLayers && showHbbFt) || localMode === 'hbb') && item.hbb_after) {{
           item.hbb_after.slice(0, maxTops).forEach(p => {{
-            if (p.score >= scoreThresh) {{
+            if (p.score >= scoreThresh && passCategoryFilter(p)) {{
               const rb = rescaleBox(p.box);
+              const meta = getActiveMeta(p);
               shapes.push({{
                 kind: 'box',
                 geom: rb,
@@ -859,6 +1031,17 @@ function renderCards() {{
                 dashed: false,
                 labelColor: 'rgba(165, 243, 252, 0.95)',
                 showLabel: false,
+                label: meta.label,
+                sem_prob: meta.prob,
+                top3: meta.top3,
+                source: meta.source,
+                stu_label: p.stu_label,
+                stu_prob: p.stu_prob,
+                stu_joint: p.stu_joint,
+                tea_label: p.label,
+                tea_prob: p.sem_prob,
+                matchedAlt: p._matchedAlt,
+                is_distractor: meta.is_distractor,
               }});
             }}
           }});
@@ -866,8 +1049,9 @@ function renderCards() {{
 
         if (((useGlobalLayers && showQuadFt) || localMode === 'quad') && item.quad_after) {{
           item.quad_after.slice(0, maxTops).forEach(p => {{
-            if (p.score >= scoreThresh) {{
+            if (p.score >= scoreThresh && passCategoryFilter(p)) {{
               const rq = rescaleQuad(p.quad);
+              const meta = getActiveMeta(p);
               shapes.push({{
                 kind: 'quad',
                 geom: rq,
@@ -880,6 +1064,17 @@ function renderCards() {{
                 dashed: false,
                 labelColor: 'rgba(233, 213, 255, 0.95)',
                 showLabel: true,
+                label: meta.label,
+                sem_prob: meta.prob,
+                top3: meta.top3,
+                source: meta.source,
+                stu_label: p.stu_label,
+                stu_prob: p.stu_prob,
+                stu_joint: p.stu_joint,
+                tea_label: p.label,
+                tea_prob: p.sem_prob,
+                matchedAlt: p._matchedAlt,
+                is_distractor: meta.is_distractor,
               }});
             }}
           }});
@@ -890,12 +1085,14 @@ function renderCards() {{
 
       function renderShape(s, forceHighlight = false) {{
         const lw = forceHighlight ? Math.max(s.lineWidth, 2.6) : s.lineWidth;
+        const icon = s.source === 'Student' ? '⚡ ' : '🎓 ';
+        const semTag = s.label ? `${{icon}}${{s.label}} (${{Math.round((s.sem_prob || 0) * 100)}}%)${{s.matchedAlt ? ' [alt: ' + s.matchedAlt + ']' : ''}}` : '';
         if (s.kind === 'quad') {{
           drawQuad(ctx, s.geom, s.stroke, s.fill, lw, s.dashed);
-          if (s.showLabel || forceHighlight) {{
+          if (s.showLabel || forceHighlight || s.label) {{
             const txt = forceHighlight
-              ? `${{s.layer}}${{s.score !== null ? ' ' + s.score.toFixed(2) : ''}}`
-              : (s.score !== null ? s.score.toFixed(2) : '');
+              ? `${{s.layer}}${{s.score !== null ? ' ' + s.score.toFixed(2) : ''}}${{semTag ? ' • ' + semTag : ''}}`
+              : [semTag, s.score !== null ? 'obj ' + s.score.toFixed(2) : ''].filter(Boolean).join(' | ');
             if (txt) {{
               ctx.fillStyle = s.labelColor;
               ctx.font = forceHighlight ? 'bold 12px sans-serif' : '11px sans-serif';
@@ -904,10 +1101,12 @@ function renderCards() {{
           }}
         }} else {{
           drawBox(ctx, s.geom, s.stroke, s.fill, lw, s.dashed);
-          if (forceHighlight) {{
-            const txt = `${{s.layer}}${{s.score !== null ? ' ' + s.score.toFixed(2) : ''}}`;
+          if (forceHighlight || s.label) {{
+            const txt = forceHighlight
+              ? `${{s.layer}}${{s.score !== null ? ' ' + s.score.toFixed(2) : ''}}${{semTag ? ' • ' + semTag : ''}}`
+              : [semTag, s.score !== null ? 'obj ' + s.score.toFixed(2) : ''].filter(Boolean).join(' | ');
             ctx.fillStyle = s.labelColor;
-            ctx.font = 'bold 12px sans-serif';
+            ctx.font = forceHighlight ? 'bold 12px sans-serif' : '11px sans-serif';
             ctx.fillText(txt, s.geom[0] + 2, Math.max(12, s.geom[1] - 3));
           }}
         }}
@@ -921,7 +1120,11 @@ function renderCards() {{
           const s = spotlightHits[spotlightIndex % spotlightHits.length];
           renderShape(s, true);
 
-          const hudText = `🎯 [${{spotlightIndex + 1}}/${{spotlightHits.length}}] ${{s.layer}}${{s.score !== null ? ' (' + s.score.toFixed(2) + ')' : ''}} — Scroll: cycle • Click/Leave: show all`;
+          const stuInfo = s.stu_label ? `⚡ Student: ${{s.stu_label}} (cls ${{Math.round((s.stu_prob || 0) * 100)}}%, joint ${{(s.stu_joint || 0).toFixed(2)}})` : '';
+          const teaInfo = s.tea_label ? `🎓 Teacher: ${{s.tea_label}} (${{Math.round((s.tea_prob || 0) * 100)}}%)` : '';
+          const semTag = stuInfo && teaInfo ? ` | ${{stuInfo}} • ${{teaInfo}}` : (stuInfo ? ` | ${{stuInfo}}` : (teaInfo ? ` | ${{teaInfo}}` : ''));
+          const top3Str = s.top3 && s.top3.length > 1 ? ' [alt: ' + s.top3.slice(1).map(x => x[0] + ' ' + Math.round(x[1]*100) + '%').join(', ') + ']' : '';
+          const hudText = `🎯 [${{spotlightIndex + 1}}/${{spotlightHits.length}}] ${{s.layer}}${{s.score !== null ? ' (' + s.score.toFixed(2) + ')' : ''}}${{semTag}}${{top3Str}} — Scroll: cycle • Click/Leave: show all`;
           ctx.save();
           ctx.font = 'bold 12px sans-serif';
           const padX = 8, padY = 5;
@@ -1022,6 +1225,18 @@ function renderCards() {{
   document.getElementById(id).addEventListener('change', renderCards);
 }});
 
+['category-filter', 'hide-distractors', 'match-alternatives'].forEach(id => {{
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', renderCards);
+}});
+
+document.querySelectorAll('input[name="classifier-source"]').forEach(el => {{
+  el.addEventListener('change', renderCards);
+}});
+
+const searchEl = document.getElementById('category-search');
+if (searchEl) searchEl.addEventListener('input', renderCards);
+
 document.getElementById('score-threshold').addEventListener('input', (e) => {{
   document.getElementById('score-val').textContent = parseFloat(e.target.value).toFixed(2);
   renderCards();
@@ -1085,10 +1300,123 @@ def main() -> None:
     }
     strides = (4, 8, 16, 32)
 
+    def _load_detector_and_heads(
+        ckpt_path: Path,
+        geom: str,
+    ) -> tuple[
+        StudentDetector | QuadProposalDetector,
+        DenseAnchorSemanticHead | None,
+        RoIPooledSemanticHead | None,
+        bool,
+    ]:
+        ckpt_d = (
+            torch.load(ckpt_path, map_location=device, weights_only=False)
+            if ckpt_path.exists()
+            else {}
+        )
+        state = ckpt_d.get("model_state_dict", {})
+        det_cfg = ckpt_d.get("detector_config", {})
+        is_sota = bool(det_cfg) or ("head_a_state_dict" in ckpt_d)
+        has_aux = bool(det_cfg.get("dual_head", any("aux_head" in k for k in state)))
+        has_3dmf = bool(
+            det_cfg.get("use_3dmf", any("filter_3dmf" in k for k in state))
+        )
+        neck_t = str(
+            det_cfg.get(
+                "neck_type",
+                "pan" if any("down_convs" in k for k in state) else "lite",
+            )
+        )
+        fpn_ch = int(det_cfg.get("fpn_channels", 128 if neck_t == "pan" else 96))
+        det_cls = StudentDetector if geom == "hbb" else QuadProposalDetector
+        det_model = det_cls(
+            pretrained_backbone=False,
+            neck_type=neck_t,
+            strides=strides,
+            fpn_channels=fpn_ch,
+            dual_head=has_aux,
+            use_3dmf=has_3dmf,
+        ).to(device)
+        if state:
+            det_model.load_state_dict(state)
+            det_model.eval()
+
+        ha: DenseAnchorSemanticHead | None = None
+        hb: RoIPooledSemanticHead | None = None
+        if "head_a_config" in ckpt_d and "head_a_state_dict" in ckpt_d:
+            ha = DenseAnchorSemanticHead.from_config(ckpt_d["head_a_config"]).to(device)
+            ha.load_state_dict(ckpt_d["head_a_state_dict"])
+            ha.eval()
+        if "head_b_config" in ckpt_d and "head_b_state_dict" in ckpt_d:
+            hb = RoIPooledSemanticHead.from_config(ckpt_d["head_b_config"]).to(device)
+            hb.load_state_dict(ckpt_d["head_b_state_dict"])
+            hb.eval()
+        return det_model, ha, hb, is_sota
+
+    def _attach_sota_semantics(
+        preds: list[dict[str, Any]],
+        feats: tuple[torch.Tensor, ...],
+        det_obj: Any,
+        ha: DenseAnchorSemanticHead | None,
+        hb: RoIPooledSemanticHead | None,
+        vocab: VocabularyBank | None,
+    ) -> None:
+        if not preds or vocab is None or (ha is None and hb is None):
+            return
+        txt = vocab.embeddings.to(device)
+        distractor_set = set(DISTRACTOR_CATEGORIES)
+        n_p = len(preds)
+        probs_a: torch.Tensor | None = None
+        probs_b: torch.Tensor | None = None
+        if ha is not None and det_obj.flat_indices is not None and det_obj.flat_indices.numel() == n_p:
+            b_idx = torch.zeros_like(det_obj.flat_indices)
+            za = ha.forward_indexed(feats, b_idx, det_obj.flat_indices)
+            _, probs_a = ha.classify_embeddings(za, txt)
+        if hb is not None and det_obj.boxes.shape[0] == n_p:
+            zb = hb(feats, [det_obj.boxes], image_shapes=[(384, 384)])
+            _, probs_b = hb.classify_embeddings(zb, txt)
+
+        probs_ab: torch.Tensor | None = None
+        if probs_a is not None and probs_b is not None:
+            probs_ab = 0.5 * (probs_a + probs_b)
+        elif probs_a is not None:
+            probs_ab = probs_a
+        elif probs_b is not None:
+            probs_ab = probs_b
+
+        def _pack(prob_row: torch.Tensor, prefix: str, target_dict: dict[str, Any]) -> None:
+            k_top = min(3, int(prob_row.numel()))
+            vals, idxs = prob_row.topk(k_top)
+            lbl = vocab.categories[int(idxs[0].item())]
+            pr = round(float(vals[0].item()), 3)
+            target_dict[f"{prefix}_label"] = lbl
+            target_dict[f"{prefix}_prob"] = pr
+            target_dict[f"{prefix}_is_distractor"] = lbl in distractor_set
+            target_dict[f"{prefix}_top3"] = [
+                [vocab.categories[int(idxs[k].item())], round(float(vals[k].item()), 3)]
+                for k in range(k_top)
+            ]
+
+        for idx_p, pred_d in enumerate(preds):
+            if probs_a is not None:
+                _pack(probs_a[idx_p], "opt_a", pred_d)
+            if probs_b is not None:
+                _pack(probs_b[idx_p], "opt_b", pred_d)
+            if probs_ab is not None:
+                _pack(probs_ab[idx_p], "stu", pred_d)
+                pred_d["stu_joint"] = round(
+                    float(pred_d["score"]) * float(pred_d["stu_prob"]), 4
+                )
+
     # 4. Load Models
     print("Loading models for comparative inference...")
-    # HBB Models
-    hbb_decoder = InferenceDecoder(
+    vocab_bank = (
+        VocabularyBank.load(args.vocabulary_path, device=device)
+        if args.vocabulary_path.exists()
+        else None
+    )
+
+    hbb_legacy_decoder = InferenceDecoder(
         strides=strides,
         top_k=1000,
         nms_iou_threshold=0.45,
@@ -1100,36 +1428,16 @@ def main() -> None:
         part_max_iou=0.65,
         score_threshold=0.0,
     )
-
-    model_hbb_before = StudentDetector(
-        pretrained_backbone=False,
-        neck_type="lite",
+    hbb_sota_decoder = InferenceDecoder(
         strides=strides,
-        fpn_channels=96,
-    ).to(device)
-    if args.hbb_before.exists():
-        ckpt = torch.load(args.hbb_before, map_location=device)
-        model_hbb_before.load_state_dict(ckpt["model_state_dict"])
-        model_hbb_before.eval()
-
-    model_hbb_after = StudentDetector(
-        pretrained_backbone=False,
-        neck_type="lite",
-        strides=strides,
-        fpn_channels=96,
-    ).to(device)
-    if args.hbb_after.exists():
-        ckpt = torch.load(args.hbb_after, map_location=device)
-        model_hbb_after.load_state_dict(ckpt["model_state_dict"])
-        model_hbb_after.eval()
-    else:
-        print(
-            f"\n[Master Visualizer] ⚠️ WARNING: HBB fine-tuned checkpoint NOT found: {args.hbb_after}\n"
-            f"                     Stage-2 HBB fine-tuning has not been run yet. HBB after boxes will be empty.\n"
-        )
-
-    # Quad Models
-    quad_decoder = QuadInferenceDecoder(
+        top_k=500,
+        nms_iou_threshold=0.50,
+        max_detections=100,
+        score_mode="objectness",
+        nms_mode="containment_aware",
+        score_threshold=0.05,
+    )
+    quad_legacy_decoder = QuadInferenceDecoder(
         strides=strides,
         pre_nms_top_k=1000,
         nms_iou_threshold=0.45,
@@ -1140,44 +1448,33 @@ def main() -> None:
         part_max_iou=0.65,
         score_threshold=0.0,
     )
-
-    ckpt_qb = (
-        torch.load(args.quad_before, map_location=device)
-        if args.quad_before.exists()
-        else {}
-    )
-    has_aux_qb = any(
-        "aux_head" in k for k in ckpt_qb.get("model_state_dict", {}).keys()
-    )
-    model_quad_before = QuadProposalDetector(
-        pretrained_backbone=False,
-        neck_type="lite",
+    quad_sota_decoder = QuadInferenceDecoder(
         strides=strides,
-        fpn_channels=96,
-        dual_head=has_aux_qb,
-    ).to(device)
-    if ckpt_qb:
-        model_quad_before.load_state_dict(ckpt_qb["model_state_dict"])
-        model_quad_before.eval()
+        pre_nms_top_k=500,
+        nms_iou_threshold=0.50,
+        max_proposals=100,
+        centerness_alpha=0.0,
+        nms_mode="containment_aware",
+        score_threshold=0.05,
+    )
 
-    ckpt_qa = (
-        torch.load(args.quad_after, map_location=device)
-        if args.quad_after.exists()
-        else {}
+    model_hbb_before, _, _, is_sota_hb = _load_detector_and_heads(args.hbb_before, "hbb")
+    model_hbb_after, ha_hbb, hb_hbb, is_sota_ha = _load_detector_and_heads(
+        args.hbb_after, "hbb"
     )
-    has_aux_qa = any(
-        "aux_head" in k for k in ckpt_qa.get("model_state_dict", {}).keys()
+    if not args.hbb_after.exists():
+        print(
+            f"\n[Master Visualizer] ⚠️ WARNING: HBB fine-tuned checkpoint NOT found: {args.hbb_after}\n"
+        )
+    model_quad_before, _, _, is_sota_qb = _load_detector_and_heads(args.quad_before, "quad")
+    model_quad_after, ha_quad, hb_quad, is_sota_qa = _load_detector_and_heads(
+        args.quad_after, "quad"
     )
-    model_quad_after = QuadProposalDetector(
-        pretrained_backbone=False,
-        neck_type="lite",
-        strides=strides,
-        fpn_channels=96,
-        dual_head=has_aux_qa,
-    ).to(device)
-    if ckpt_qa:
-        model_quad_after.load_state_dict(ckpt_qa["model_state_dict"])
-        model_quad_after.eval()
+
+    dec_hb = hbb_sota_decoder if is_sota_hb else hbb_legacy_decoder
+    dec_ha = hbb_sota_decoder if is_sota_ha else hbb_legacy_decoder
+    dec_qb = quad_sota_decoder if is_sota_qb else quad_legacy_decoder
+    dec_qa = quad_sota_decoder if is_sota_qa else quad_legacy_decoder
 
     print(
         f"Processing comparative proposals for {len(selected_items)} unseen evaluation samples..."
@@ -1192,46 +1489,45 @@ def main() -> None:
             orig_h, orig_w = sample.original_size
             scale, offset_x, offset_y = sample.transform
 
-            # Run inference for all 4 models with validity level masks
             # 1. HBB Before
-            out_hb = model_hbb_before(img_tensor)
-            sh_hb = tuple((t.shape[-2], t.shape[-1]) for t in out_hb.objectness)
+            feats_hb = model_hbb_before.forward_features(img_tensor)
+            out_hb = model_hbb_before.head(feats_hb)
+            sh_hb = tuple((t.shape[-2], t.shape[-1]) for t in out_hb.objectness)  # type: ignore[union-attr]
             _, vlvl_hb = point_validity_from_pixel_mask(
                 sample.valid_mask.to(device), sh_hb, strides
             )
             lmasks_hb = tuple(vl.unsqueeze(0) for vl in vlvl_hb)
-            det_hb = hbb_decoder(out_hb, (384, 384), lmasks_hb)[0]
+            det_hb = dec_hb(out_hb, (384, 384), lmasks_hb)[0]  # type: ignore[arg-type]
 
             # 2. HBB After
-            out_ha = model_hbb_after(img_tensor)
-            sh_ha = tuple((t.shape[-2], t.shape[-1]) for t in out_ha.objectness)
+            feats_ha = model_hbb_after.forward_features(img_tensor)
+            out_ha = model_hbb_after.head(feats_ha)
+            sh_ha = tuple((t.shape[-2], t.shape[-1]) for t in out_ha.objectness)  # type: ignore[union-attr]
             _, vlvl_ha = point_validity_from_pixel_mask(
                 sample.valid_mask.to(device), sh_ha, strides
             )
             lmasks_ha = tuple(vl.unsqueeze(0) for vl in vlvl_ha)
-            det_ha = hbb_decoder(out_ha, (384, 384), lmasks_ha)[0]
+            det_ha = dec_ha(out_ha, (384, 384), lmasks_ha)[0]  # type: ignore[arg-type]
 
             # 3. Quad Before
-            out_qb = model_quad_before(img_tensor)
-            if has_aux_qb and isinstance(out_qb, tuple):
-                out_qb = out_qb[0]
-            sh_qb = tuple((t.shape[-2], t.shape[-1]) for t in out_qb.quality)
+            feats_qb = model_quad_before.forward_features(img_tensor)
+            out_qb = model_quad_before.head(feats_qb)
+            sh_qb = tuple((t.shape[-2], t.shape[-1]) for t in out_qb.quality)  # type: ignore[union-attr]
             _, vlvl_qb = point_validity_from_pixel_mask(
                 sample.valid_mask.to(device), sh_qb, strides
             )
             lmasks_qb = tuple(vl.unsqueeze(0) for vl in vlvl_qb)
-            det_qb = quad_decoder(out_qb, (384, 384), lmasks_qb)[0]
+            det_qb = dec_qb(out_qb, (384, 384), lmasks_qb)[0]  # type: ignore[arg-type]
 
             # 4. Quad After
-            out_qa = model_quad_after(img_tensor)
-            if has_aux_qa and isinstance(out_qa, tuple):
-                out_qa = out_qa[0]
-            sh_qa = tuple((t.shape[-2], t.shape[-1]) for t in out_qa.quality)
+            feats_qa = model_quad_after.forward_features(img_tensor)
+            out_qa = model_quad_after.head(feats_qa)
+            sh_qa = tuple((t.shape[-2], t.shape[-1]) for t in out_qa.quality)  # type: ignore[union-attr]
             _, vlvl_qa = point_validity_from_pixel_mask(
                 sample.valid_mask.to(device), sh_qa, strides
             )
             lmasks_qa = tuple(vl.unsqueeze(0) for vl in vlvl_qa)
-            det_qa = quad_decoder(out_qa, (384, 384), lmasks_qa)[0]
+            det_qa = dec_qa(out_qa, (384, 384), lmasks_qa)[0]  # type: ignore[arg-type]
 
             # Invert coordinates to native image pixels
             def unbox(boxes: torch.Tensor) -> list[list[float]]:
@@ -1287,6 +1583,13 @@ def main() -> None:
                     strict=False,
                 )
             ]
+
+            _attach_sota_semantics(
+                hbb_after_preds, feats_ha, det_ha, ha_hbb, hb_hbb, vocab_bank
+            )
+            _attach_sota_semantics(
+                quad_after_preds, feats_qa, det_qa, ha_quad, hb_quad, vocab_bank
+            )
 
             img_path = args.image_root / rec["file_name"]
             if not img_path.exists():

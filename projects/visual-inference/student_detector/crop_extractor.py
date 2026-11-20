@@ -6,13 +6,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from PIL import Image
-import torch
 from torch import Tensor
-import torchvision.transforms.functional as TF
 
-from .rectification import extract_rectified_patches
-
-CropMode = Literal["axis_aligned", "rectified"]
+CropMode = Literal["axis_aligned"]
 
 
 @dataclass(frozen=True)
@@ -72,9 +68,7 @@ def extract_object_crop(
     target_w, target_h = policy.target_size
 
     # Check if geometry is quad or bbox
-    is_bbox = False
     if isinstance(geometry, (tuple, list)) and len(geometry) == 4 and not isinstance(geometry[0], (list, tuple)):
-        is_bbox = True
         x1, y1, x2, y2 = (float(geometry[0]), float(geometry[1]), float(geometry[2]), float(geometry[3]))
     else:
         x1, y1, x2, y2 = _quad_to_bbox(geometry)
@@ -93,30 +87,6 @@ def extract_object_crop(
             context_margin=policy.context_margin,
             crop_mode=policy.mode,
         )
-
-    if policy.mode == "rectified" and not is_bbox:
-        # Projective rectification
-        quad_t = torch.tensor(geometry, dtype=torch.float32).reshape(1, 4, 2)
-        img_t = TF.to_tensor(image.convert("RGB"))  # [3, H, W]
-        try:
-            patch = extract_rectified_patches(
-                img_t,
-                quad_t,
-                output_size=policy.target_size,
-            )
-            # patch is [1, 3, target_h, target_w]
-            patch_img = TF.to_pil_image(patch.squeeze(0).clamp(0, 1))
-            return ExtractedCrop(
-                image=patch_img,
-                is_valid=True,
-                bounding_box=(x1, y1, x2, y2),
-                original_size=(img_w, img_h),
-                context_margin=0.0,
-                crop_mode="rectified",
-            )
-        except Exception:
-            # Fall back to axis_aligned if homography solve fails
-            pass
 
     # Axis aligned crop with context margin
     pad_w = box_w * policy.context_margin

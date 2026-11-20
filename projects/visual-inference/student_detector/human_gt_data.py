@@ -296,6 +296,17 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
             )
         return self._connection
 
+    def _get_category_column(self, conn: sqlite3.Connection) -> str | None:
+        if not hasattr(self, "_cat_column_name"):
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(annotations)").fetchall()]
+            if "category_name" in cols:
+                self._cat_column_name: str | None = "category_name"
+            elif "category" in cols:
+                self._cat_column_name = "category"
+            else:
+                self._cat_column_name = None
+        return self._cat_column_name
+
     def __len__(self) -> int:
         return len(self.images)
 
@@ -309,23 +320,32 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         conn = self._get_connection()
 
         img_id = record["image_id"]
+        cat_col = self._get_category_column(conn)
+        cat_sql = f", {cat_col}" if cat_col else ""
         ann_rows = conn.execute(
-            """
-            SELECT x1, y1, x2, y2, ignore_region
+            f"""
+            SELECT x1, y1, x2, y2, ignore_region{cat_sql}
             FROM annotations
             WHERE image_id = ?
+            ORDER BY rowid
             """,
             (img_id,),
         ).fetchall()
 
         positive_boxes: list[list[float]] = []
         ignore_boxes: list[list[float]] = []
+        trusted_background_boxes: list[list[float]] = []
+        positive_categories: list[str] = []
 
         for r in ann_rows:
             bbox = [float(r[0]), float(r[1]), float(r[2]), float(r[3])]
             ign = int(r[4])
             if ign == 0:
                 positive_boxes.append(bbox)
+                cat_val = str(r[5]) if len(r) > 5 and r[5] else "unknown"
+                positive_categories.append(cat_val)
+            elif ign == 2:
+                trusted_background_boxes.append(bbox)
             else:
                 ignore_boxes.append(bbox)
 
@@ -337,13 +357,17 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
             image,
             _boxes_tensor(positive_boxes),
             _boxes_tensor(ignore_boxes),
+            _boxes_tensor(trusted_background_boxes),
             seed=seed,
+            return_metadata=True,
         )
 
         source_dataset = record["source_dataset"]
         domain = SOURCE_DOMAINS.get(source_dataset, "general")
         camera_type = CAMERA_TYPES.get(source_dataset, "pinhole")
         background_supervision = bool(transformed[3].numel())
+        retained: tuple[int, ...] = transformed[7]
+        horizontal_flip = bool(transformed[8])
 
         return ProposalSample(
             image=transformed[0],
@@ -359,6 +383,10 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
             transform=transformed[5],
             trusted_background_boxes=transformed[3],
             hard_negative_focus_boxes=transformed[6],
+            file_name=str(record["file_name"]),
+            category_names=tuple(positive_categories[idx] for idx in retained),
+            gt_indices=retained,
+            horizontal_flip=horizontal_flip,
         )
 
 
@@ -380,10 +408,10 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         input_size: int = 384,
         cohort_size: int | None = 10000,
         augmentation: AugmentationConfig | None = None,
-        regular_min_side: float = 8.0,
-        thin_major_axis_min: float = 8.0,
-        thin_aspect_ratio_min: float = 3.0,
-        thin_area: float = 16.0,
+        regular_min_side: float = 2.0,
+        thin_major_axis_min: float = 4.0,
+        thin_aspect_ratio_min: float = 1.5,
+        thin_area: float = 4.0,
         seed: int = 42,
     ) -> None:
         """Initialize the Human GT Quad dataset.
@@ -479,6 +507,17 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
             self._connection_pid = pid
         return self._connection
 
+    def _get_category_column(self, conn: sqlite3.Connection) -> str | None:
+        if not hasattr(self, "_cat_column_name"):
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(annotations)").fetchall()]
+            if "category_name" in cols:
+                self._cat_column_name: str | None = "category_name"
+            elif "category" in cols:
+                self._cat_column_name = "category"
+            else:
+                self._cat_column_name = None
+        return self._cat_column_name
+
     def __getstate__(self) -> dict[str, Any]:
         """Drop unpicklable SQLite connection handle during multiprocessing serialization."""
         state = dict(self.__dict__)
@@ -499,11 +538,14 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         conn = self._get_connection()
 
         img_id = record["image_id"]
+        cat_col = self._get_category_column(conn)
+        cat_sql = f", {cat_col}" if cat_col else ""
         ann_rows = conn.execute(
-            """
-            SELECT quad_json, ignore_region, geometry_tier, object_condition, seen_status
+            f"""
+            SELECT quad_json, ignore_region, geometry_tier, object_condition, seen_status{cat_sql}
             FROM annotations
             WHERE image_id = ?
+            ORDER BY rowid
             """,
             (img_id,),
         ).fetchall()
@@ -514,6 +556,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         tiers: list[str] = []
         conditions: list[str] = []
         statuses: list[str] = []
+        positive_categories: list[str] = []
 
         for r in ann_rows:
             quad = json.loads(str(r[0]))
@@ -523,6 +566,8 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
                 tiers.append(str(r[2]))
                 conditions.append(str(r[3]))
                 statuses.append(str(r[4]))
+                cat_val = str(r[5]) if len(r) > 5 and r[5] else "unknown"
+                positive_categories.append(cat_val)
             elif ign == 1:
                 ignore_quads.append(quad)
             elif ign == 2:
@@ -538,6 +583,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
             _quad_tensor(ignore_quads),
             _quad_tensor(trusted_background_quads),
             seed=seed,
+            return_metadata=True,
         )
 
         source_dataset = record["source_dataset"]
@@ -545,6 +591,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         camera_type = CAMERA_TYPES.get(source_dataset, "pinhole")
         background_supervision = bool(transformed[3].numel())
         retained = transformed[6]
+        horizontal_flip = bool(transformed[7])
         size_bins, aspect_bins, radial_bins = _quad_slice_labels(
             transformed[1], self.input_size
         )
@@ -568,6 +615,10 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
             size_bins=size_bins,
             aspect_bins=aspect_bins,
             radial_bins=radial_bins,
+            file_name=str(record["file_name"]),
+            category_names=tuple(positive_categories[idx] for idx in retained),
+            gt_indices=retained,
+            horizontal_flip=horizontal_flip,
         )
 
 

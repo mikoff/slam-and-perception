@@ -157,6 +157,7 @@ class ProposalLoss(nn.Module):
         focal_alpha: float = 0.25,
         focal_gamma: float = 2.0,
         objectness_normalization: str = "per_state_mean",
+        use_background_floor: bool = False,
     ) -> None:
         """Build the loss.
 
@@ -166,6 +167,8 @@ class ProposalLoss(nn.Module):
             ``num_positives`` sums every weighted anchor and divides by the
             positive count of the image (GFL/QFL convention), so each
             background anchor keeps its configured weight.
+        @param use_background_floor Optional legacy floor ``grid_size / 16`` on
+            background normalization (default False for true GFL ``1 / N_pos``).
         """
         super().__init__()
         if objectness_loss not in {"focal", "quality_focal"}:
@@ -181,6 +184,7 @@ class ProposalLoss(nn.Module):
                 "objectness_normalization must be 'per_state_mean' or 'num_positives'"
             )
         self.objectness_normalization = objectness_normalization
+        self.use_background_floor = use_background_floor
         self.strides = strides
         self.objectness_weight = objectness_weight
         self.box_weight = box_weight
@@ -290,12 +294,24 @@ class ProposalLoss(nn.Module):
             centerness_weight_sums = positive_float.sum(dim=1).detach()
             centerness_active = (centerness_weight_sums > 0).detach()
 
-        quality_targets = (
+        raw_iou = (
             aligned_iou(flat_predicted_boxes, flat_target_boxes)
             .reshape_as(targets.objectness)
             .detach()
-            .to(dtype=targets.objectness.dtype)
-            * positive_float
+        )
+        target_w = (flat_target_boxes[:, 2] - flat_target_boxes[:, 0]).clamp(min=0.0)
+        target_h = (flat_target_boxes[:, 3] - flat_target_boxes[:, 1]).clamp(min=0.0)
+        target_min_side = torch.minimum(target_w, target_h).reshape_as(
+            targets.objectness
+        )
+        is_small_or_slender = (target_min_side < 16.0) & (raw_iou > 0.0)
+        calibrated_iou = torch.where(
+            is_small_or_slender,
+            torch.sqrt(raw_iou.clamp(min=0.0)),
+            raw_iou,
+        )
+        quality_targets = (
+            calibrated_iou.to(dtype=targets.objectness.dtype) * positive_float
         )
 
         if self.objectness_loss == "quality_focal":
@@ -337,14 +353,9 @@ class ProposalLoss(nn.Module):
                     .clamp(min=1.0)
                     .to(dtype=detached_quality.dtype)
                 )
-                if state == "positive":
+                if state == "positive" or not self.use_background_floor:
                     norm = pos_norm
                 else:
-                    # Floor background normalization by grid size / 16 so sparsely annotated
-                    # images (e.g. ADE20K facades or OpenImages with 1-3 GT boxes) do not
-                    # receive 50x-200x stronger negative penalties that erase unannotated
-                    # windows and pillars, while keeping 16x stronger background suppression
-                    # than per_state_mean.
                     bg_floor = (
                         counts.clamp(min=1).to(dtype=detached_quality.dtype) / 16.0
                     ).clamp(min=1.0)

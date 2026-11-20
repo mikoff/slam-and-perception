@@ -15,6 +15,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 import ijson
 import torch
 from PIL import Image
@@ -70,6 +71,10 @@ class ProposalSample:
     transform: tuple[float, float, float]
     trusted_background_boxes: Tensor | None = None
     hard_negative_focus_boxes: Tensor | None = None
+    file_name: str | None = None
+    category_names: tuple[str, ...] = ()
+    gt_indices: tuple[int, ...] = ()
+    horizontal_flip: bool = False
 
 
 def _source_signature(path: Path) -> str:
@@ -480,15 +485,8 @@ class ProposalTransform:
         hard_negative_focus_boxes: Tensor | None = None,
         *,
         seed: int,
-    ) -> tuple[
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        tuple[float, float, float],
-        Tensor,
-    ]:
+        return_metadata: bool = False,
+    ) -> tuple[Any, ...]:
         image = image.convert("RGB")
         width, height = image.size
         parameters = sample_augmentation_parameters(
@@ -536,7 +534,7 @@ class ProposalTransform:
         scale, offset_x, offset_y = augmented.transform
 
         if all_boxes.numel() == 0:
-            return (
+            base_empty = (
                 image_tensor,
                 boxes,
                 ignore_boxes,
@@ -545,6 +543,9 @@ class ProposalTransform:
                 augmented.transform,
                 hard_negative_focus_boxes,
             )
+            if return_metadata:
+                return (*base_empty, (), parameters.horizontal_flip)
+            return base_empty
         transformed = all_boxes * scale
         transformed[:, 0::2] += offset_x
         transformed[:, 1::2] += offset_y
@@ -582,7 +583,7 @@ class ProposalTransform:
             & geometrically_valid
             & (visibility >= self.augmentation.ignore_visible_fraction)
         )
-        return (
+        base_out = (
             image_tensor,
             clipped[positive],
             clipped[ignore],
@@ -591,6 +592,10 @@ class ProposalTransform:
             augmented.transform,
             clipped[focus],
         )
+        if return_metadata:
+            retained_indices = tuple(torch.where(positive)[0].tolist())
+            return (*base_out, retained_indices, parameters.horizontal_flip)
+        return base_out
 
 
 def _load_hard_negative_focus(

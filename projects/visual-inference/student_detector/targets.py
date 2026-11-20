@@ -34,6 +34,7 @@ class TrainingTargets:
     positive_counts_per_level: Tensor
     source_datasets: tuple[str, ...]
     domains: tuple[str, ...]
+    matched_gt_indices: Tensor | None = None
 
     def to(
         self, device: torch.device, *, non_blocking: bool = False
@@ -77,6 +78,11 @@ class TrainingTargets:
             ),
             source_datasets=self.source_datasets,
             domains=self.domains,
+            matched_gt_indices=(
+                self.matched_gt_indices.to(device, non_blocking=non_blocking)
+                if self.matched_gt_indices is not None
+                else None
+            ),
         )
 
 
@@ -129,6 +135,7 @@ class TargetBuilder:
         background_loss_weights: Mapping[str, float] | None = None,
         default_background_weight: float = 0.0,
         hard_negative_focus_weight: float = 1.0,
+        ignore_unmatched_gt_interior: bool = False,
     ) -> None:
         self.assigner = assigner
         self.background_loss_weights = dict(background_loss_weights or {})
@@ -142,6 +149,7 @@ class TargetBuilder:
         if hard_negative_focus_weight < 1:
             raise ValueError("hard-negative focus weight must be at least 1")
         self.hard_negative_focus_weight = hard_negative_focus_weight
+        self.ignore_unmatched_gt_interior = ignore_unmatched_gt_interior
         self._grid_cache: dict[
             tuple[tuple[tuple[int, int], ...], torch.device],
             tuple[Tensor, Sequence[slice]],
@@ -170,8 +178,8 @@ class TargetBuilder:
             from .losses import flatten_detector_output
 
             obj_flat, dist_flat, _ = flatten_detector_output(pred_output)
-            pred_scores_b = obj_flat.detach()
-            pred_distances_b = dist_flat.detach()
+            pred_scores_b = obj_flat.detach().float()
+            pred_distances_b = dist_flat.detach().float()
 
         objectness = []
         objectness_masks = []
@@ -179,6 +187,7 @@ class TargetBuilder:
         distances = []
         centerness = []
         positive_masks = []
+        matched_gt_indices = []
         trusted_background_masks = []
         hard_negative_focus_masks = []
         weak_background_masks = []
@@ -230,15 +239,17 @@ class TargetBuilder:
                 )
             ignored_points = points_inside_boxes(points, ignore_boxes)
             positive = assignment.positive_mask
-            if getattr(self.assigner, "assignment_mode", None) == "one_to_one":
+            is_one_to_one = (
+                getattr(self.assigner, "assignment_mode", None) == "one_to_one"
+            )
+            non_giant_boxes = boxes.new_empty((0, 4))
+            if boxes.numel() > 0:
                 box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
                 img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
-                # Keep interior anchors of all foreground objects (up to 95% image area)
-                # in the ignore mask so large foreground instances (e.g. close-up cars)
-                # are not penalized as background across their bodies.
-                valid_bound_boxes = boxes[box_areas < 0.95 * img_area]
+                non_giant_boxes = boxes[box_areas < 0.90 * img_area]
+            if self.ignore_unmatched_gt_interior and non_giant_boxes.numel() > 0:
                 ignored_points = ignored_points | (
-                    points_inside_boxes(points, valid_bound_boxes) & ~positive
+                    points_inside_boxes(points, non_giant_boxes) & ~positive
                 )
             trusted_boxes = sample.trusted_background_boxes
             trusted_points = points_inside_boxes(
@@ -247,6 +258,24 @@ class TargetBuilder:
                 if trusted_boxes is not None
                 else boxes.new_empty((0, 4)),
             )
+            if (
+                is_one_to_one
+                and not self.ignore_unmatched_gt_interior
+                and non_giant_boxes.numel() > 0
+            ):
+                # In 1-to-1 assignment, unmatched interior anchors of medium/large GTs
+                # receive full negative suppression to eliminate duplicate clusters,
+                # while small/slender GTs (min_side < 12 or area < 256) remain weak
+                # negatives so 3x3 conv smoothing does not crush their objectness.
+                ng_w = non_giant_boxes[:, 2] - non_giant_boxes[:, 0]
+                ng_h = non_giant_boxes[:, 3] - non_giant_boxes[:, 1]
+                large_enough = (torch.minimum(ng_w, ng_h) >= 12.0) & (
+                    ng_w * ng_h >= 256.0
+                )
+                if large_enough.any():
+                    trusted_points = trusted_points | points_inside_boxes(
+                        points, non_giant_boxes[large_enough]
+                    )
             available = valid_flat & ~ignored_points & ~positive
             trusted_background = available & trusted_points
             focus_boxes = sample.hard_negative_focus_boxes
@@ -276,6 +305,7 @@ class TargetBuilder:
             distances.append(assignment.box_targets)
             centerness.append(assignment.centerness_targets)
             positive_masks.append(positive)
+            matched_gt_indices.append(assignment.matched_gt_indices)
             trusted_background_masks.append(trusted_background)
             hard_negative_focus_masks.append(hard_negative_focus)
             weak_background_masks.append(weak_background)
@@ -313,4 +343,5 @@ class TargetBuilder:
             positive_counts_per_level,
             tuple(sample.source_dataset for sample in samples),
             tuple(sample.domain for sample in samples),
+            torch.stack(matched_gt_indices),
         )

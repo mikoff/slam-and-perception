@@ -9,12 +9,13 @@ from torch import Tensor, nn
 class DepthwiseSeparableConv(nn.Sequential):
     """Depthwise 3x3 followed by pointwise Conv-BN-ReLU."""
 
-    def __init__(self, in_channels: int, out_channels: int) -> None:
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1) -> None:
         super().__init__(
             nn.Conv2d(
                 in_channels,
                 in_channels,
                 kernel_size=3,
+                stride=stride,
                 padding=1,
                 groups=in_channels,
                 bias=False,
@@ -23,6 +24,50 @@ class DepthwiseSeparableConv(nn.Sequential):
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True),
         )
+
+
+class P2LitePAN(nn.Module):
+    """Bidirectional top-down + bottom-up Path Aggregation Network (PAN) over 3 or 4 levels."""
+
+    def __init__(
+        self,
+        in_channels: tuple[int, ...] = (48, 80, 160, 256),
+        out_channels: int = 128,
+    ) -> None:
+        super().__init__()
+        if len(in_channels) not in (3, 4):
+            raise ValueError(f"P2LitePAN expects 3 or 4 pyramid levels, got {len(in_channels)}")
+        num_levels = len(in_channels)
+        self.laterals = nn.ModuleList(
+            [nn.Conv2d(c, out_channels, kernel_size=1) for c in in_channels]
+        )
+        self.td_outputs = nn.ModuleList(
+            [DepthwiseSeparableConv(out_channels, out_channels) for _ in range(num_levels)]
+        )
+        self.downsamples = nn.ModuleList(
+            [
+                DepthwiseSeparableConv(out_channels, out_channels, stride=2)
+                for _ in range(num_levels - 1)
+            ]
+        )
+        self.bu_outputs = nn.ModuleList(
+            [DepthwiseSeparableConv(out_channels, out_channels) for _ in range(num_levels - 1)]
+        )
+
+    def forward(self, features: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
+        laterals = [conv(feat) for conv, feat in zip(self.laterals, features, strict=True)]
+        for idx in range(len(laterals) - 2, -1, -1):
+            laterals[idx] = laterals[idx] + functional.interpolate(
+                laterals[idx + 1], size=laterals[idx].shape[-2:], mode="nearest"
+            )
+        td = [conv(lat) for conv, lat in zip(self.td_outputs, laterals, strict=True)]
+        outs: list[Tensor] = [td[0]]
+        for idx in range(len(td) - 1):
+            down = self.downsamples[idx](outs[-1])
+            if down.shape[-2:] != td[idx + 1].shape[-2:]:
+                down = functional.interpolate(down, size=td[idx + 1].shape[-2:], mode="nearest")
+            outs.append(self.bu_outputs[idx](td[idx + 1] + down))
+        return tuple(outs)
 
 
 class LiteFPN(nn.Module):

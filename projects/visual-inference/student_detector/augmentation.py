@@ -228,6 +228,60 @@ def mask_to_tensor(mask: Image.Image) -> Tensor:
     )
 
 
+def canvas_box_to_native(
+    box: Tensor | tuple[float, float, float, float] | list[float],
+    transform: tuple[float, float, float],
+    original_size: tuple[int, int],
+    *,
+    horizontal_flip: bool = False,
+    margin: float = 0.0,
+) -> tuple[float, float, float, float]:
+    """Invert canvas [x1, y1, x2, y2] back to unflipped native image coordinates.
+
+    /// @brief Maps a letterboxed (and optionally flipped) 384-canvas box to raw PIL space.
+    /// @param box Canvas box [x1, y1, x2, y2].
+    /// @param transform (scale, offset_x, offset_y) from AugmentedImage.
+    /// @param original_size (orig_height, orig_width) of the native image.
+    /// @param horizontal_flip Whether horizontal flip was applied before letterboxing.
+    /// @param margin Fractional box padding per side (e.g. 0.15 for SigLIP crop margin).
+    /// @return Clamped (x1, y1, x2, y2) in raw unflipped native pixel coordinates.
+    """
+    if isinstance(box, Tensor):
+        bx1, by1, bx2, by2 = (
+            float(box[0].item()),
+            float(box[1].item()),
+            float(box[2].item()),
+            float(box[3].item()),
+        )
+    else:
+        bx1, by1, bx2, by2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
+
+    orig_h, orig_w = int(original_size[0]), int(original_size[1])
+    scale, off_x, off_y = transform
+    bw = max(0.0, bx2 - bx1)
+    bh = max(0.0, by2 - by1)
+    pad_w = margin * bw
+    pad_h = margin * bh
+
+    fx1 = (bx1 - pad_w - off_x) / scale
+    fy1 = (by1 - pad_h - off_y) / scale
+    fx2 = (bx2 + pad_w - off_x) / scale
+    fy2 = (by2 + pad_h - off_y) / scale
+
+    if horizontal_flip:
+        nx1 = float(orig_w) - fx2
+        nx2 = float(orig_w) - fx1
+    else:
+        nx1 = fx1
+        nx2 = fx2
+
+    cx1 = max(0.0, min(float(orig_w), nx1))
+    cy1 = max(0.0, min(float(orig_h), fy1))
+    cx2 = max(0.0, min(float(orig_w), nx2))
+    cy2 = max(0.0, min(float(orig_h), fy2))
+    return (cx1, cy1, cx2, cy2)
+
+
 def effective_augmentation_policy(config: AugmentationConfig) -> dict[str, Any]:
     """Return requested probabilities plus fixed effective operation bounds."""
     return {

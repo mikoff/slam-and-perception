@@ -162,12 +162,25 @@ class TaskAlignedAssigner:
         num_valid_gt = boxes.shape[0]
         gt_centers = (boxes[:, :2] + boxes[:, 2:]) * 0.5
 
-        # Spatial prior: anchor must be inside GT box and within center_radius * stride
+        # Spatial prior: anchor must be inside GT box (with sub-stride tube for thin objects)
+        box_w = (boxes[:, 2] - boxes[:, 0]).clamp(min=1.0)
+        box_h = (boxes[:, 3] - boxes[:, 1]).clamp(min=1.0)
+        box_min_side = torch.minimum(box_w, box_h)
+        pad_x = torch.where(
+            box_w[None, :] < point_strides[:, None],
+            0.5 * point_strides[:, None],
+            torch.zeros(1, device=gt_boxes.device, dtype=gt_boxes.dtype),
+        )
+        pad_y = torch.where(
+            box_h[None, :] < point_strides[:, None],
+            0.5 * point_strides[:, None],
+            torch.zeros(1, device=gt_boxes.device, dtype=gt_boxes.dtype),
+        )
         in_gt = (
-            (points[:, None, 0] >= boxes[None, :, 0])
-            & (points[:, None, 0] <= boxes[None, :, 2])
-            & (points[:, None, 1] >= boxes[None, :, 1])
-            & (points[:, None, 1] <= boxes[None, :, 3])
+            (points[:, None, 0] >= boxes[None, :, 0] - pad_x)
+            & (points[:, None, 0] <= boxes[None, :, 2] + pad_x)
+            & (points[:, None, 1] >= boxes[None, :, 1] - pad_y)
+            & (points[:, None, 1] <= boxes[None, :, 3] + pad_y)
         )
         radius = self.center_radius * point_strides[:, None]
         in_center = (
@@ -178,9 +191,12 @@ class TaskAlignedAssigner:
         )
         candidate_mask = in_gt & in_center & valid_point_mask[:, None]
 
-        # Scale-Gated FPN specialization: restrict candidates by stride receptive field
-        box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-        box_scales = torch.sqrt(box_areas.clamp(min=1.0))
+        # Scale-Gated FPN specialization: slender objects stay on finest strides
+        box_areas = box_w * box_h
+        box_scales = torch.minimum(
+            torch.sqrt(box_areas.clamp(min=1.0)),
+            box_min_side * 3.0,
+        )
         min_stride = min(self.strides)
         max_stride = max(self.strides)
         min_scale_per_point = torch.where(
@@ -216,7 +232,7 @@ class TaskAlignedAssigner:
 
         from .geometry import box_iou
 
-        pair_ious = box_iou(pred_b, boxes).clamp(min=1e-6)
+        pair_ious = box_iou(pred_b, boxes).clamp(min=1e-3)
         if pred_distances is None:
             # Proximity floor in fallback mode to prevent large-object starvation
             dists = ((points[:, None, :] - gt_centers[None, :, :]) ** 2).sum(dim=2).sqrt()
@@ -224,7 +240,7 @@ class TaskAlignedAssigner:
             center_prox = (1.0 - (dists / max_d)).clamp(min=0.1, max=1.0)
             pair_ious = torch.maximum(pair_ious, center_prox * 0.5)
 
-        pair_scores = scores.unsqueeze(1).clamp(min=1e-6)
+        pair_scores = scores.unsqueeze(1).clamp(min=1e-3)
         raw_t = (pair_scores**self.alpha) * (pair_ious**self.beta)
         alignment_matrix = raw_t * candidate_mask.float()
 
@@ -251,7 +267,11 @@ class TaskAlignedAssigner:
                     [m[1] for m in matches], dtype=torch.long, device=gt_boxes.device
                 )
                 matched[cand_idx] = valid_indices[gt_idx]
-                centerness[cand_idx] = aligned_iou(pred_b[cand_idx], boxes[gt_idx])
+                raw_iou_m = aligned_iou(pred_b[cand_idx], boxes[gt_idx])
+                is_small_m = (box_min_side[gt_idx] < 16.0) & (raw_iou_m > 0.0)
+                centerness[cand_idx] = torch.where(
+                    is_small_m, torch.sqrt(raw_iou_m.clamp(min=0.0)), raw_iou_m
+                )
         else:
             box_areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
             box_scales = torch.sqrt(box_areas.clamp(min=1.0))
@@ -303,7 +323,7 @@ class TaskAlignedAssigner:
             matched_gts = matched[pos_indices]
             box_targets[pos_indices] = encode_ltrb(
                 points[pos_indices], gt_boxes[matched_gts]
-            )
+            ).clamp(min=0.0)
 
         pos_per_level = torch.stack(
             [pos_mask[s].sum() for s in level_slices]
@@ -401,7 +421,7 @@ class QuadTaskAlignedAssigner:
         num_gt = canonical.shape[0]
         inside = points_inside_convex_quads(points, canonical) & valid_point_mask[:, None]
 
-        # Scale-Gated FPN specialization: restrict candidates by stride receptive field
+        # Scale-Gated FPN specialization: slender objects stay on finest strides
         x = canonical[:, :, 0]
         y = canonical[:, :, 1]
         shoelace = 0.5 * (
@@ -410,7 +430,31 @@ class QuadTaskAlignedAssigner:
             + (x[:, 2] * y[:, 3] - x[:, 3] * y[:, 2])
             + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
         ).abs()
-        quad_scales = torch.sqrt(shoelace.clamp(min=1.0))
+        edges = torch.linalg.vector_norm(
+            torch.roll(canonical, -1, dims=1) - canonical, dim=-1
+        )
+        quad_min_side = edges.amin(dim=-1).clamp(min=1.0)
+        quad_scales = torch.minimum(
+            torch.sqrt(shoelace.clamp(min=1.0)),
+            quad_min_side * 3.0,
+        )
+        # Sub-stride thin-object tube so 2-4px poles between grid columns remain representable
+        is_sub_stride = quad_min_side[None, :] < point_strides[:, None]
+        if is_sub_stride.any():
+            q_xmin = x.min(dim=1).values
+            q_xmax = x.max(dim=1).values
+            q_ymin = y.min(dim=1).values
+            q_ymax = y.max(dim=1).values
+            pad = 0.75 * point_strides[:, None]
+            in_tube = (
+                is_sub_stride
+                & (points[:, None, 0] >= q_xmin[None, :] - pad)
+                & (points[:, None, 0] <= q_xmax[None, :] + pad)
+                & (points[:, None, 1] >= q_ymin[None, :] - pad)
+                & (points[:, None, 1] <= q_ymax[None, :] + pad)
+                & valid_point_mask[:, None]
+            )
+            inside = inside | in_tube
         min_stride = min(self.strides)
         max_stride = max(self.strides)
         min_scale_per_point = torch.where(
@@ -454,7 +498,7 @@ class QuadTaskAlignedAssigner:
         if cand_pts.numel() > 0:
             pair_ious = aligned_quad_iou(
                 pred_q[cand_pts], canonical[cand_gts]
-            ).clamp(min=1e-6)
+            ).clamp(min=1e-3)
             if pred_offsets is None:
                 centers = canonical[cand_gts].mean(dim=1)
                 dists = ((points[cand_pts] - centers) ** 2).sum(dim=1).sqrt()
@@ -462,7 +506,7 @@ class QuadTaskAlignedAssigner:
                 max_d = radius.clamp(min=1.0)
                 center_prox = (1.0 - (dists / max_d)).clamp(min=0.1, max=1.0)
                 pair_ious = torch.maximum(pair_ious, center_prox * 0.5)
-            pair_scores = scores[cand_pts].clamp(min=1e-6)
+            pair_scores = scores[cand_pts].clamp(min=1e-3)
             t = (pair_scores**self.alpha) * (pair_ious**self.beta)
             alignment_matrix[cand_pts, cand_gts] = t
 
@@ -476,12 +520,12 @@ class QuadTaskAlignedAssigner:
             closest_cands = dists.argmin(dim=0)
             pair_ious = aligned_quad_iou(
                 pred_q[closest_cands], canonical[zero_gt_indices]
-            ).clamp(min=1e-6)
+            ).clamp(min=1e-3)
             if pred_offsets is None:
                 pair_ious = torch.maximum(
                     pair_ious, torch.tensor(0.1, device=value.device)
                 )
-            pair_scores = scores[closest_cands].clamp(min=1e-6)
+            pair_scores = scores[closest_cands].clamp(min=1e-3)
             t = (pair_scores**self.alpha) * (pair_ious**self.beta)
             alignment_matrix[closest_cands, zero_gt_indices] = t
 
@@ -495,8 +539,10 @@ class QuadTaskAlignedAssigner:
                     [m[1] for m in matches], dtype=torch.long, device=value.device
                 )
                 matched[cand_idx] = gt_idx
-                quality_targets[cand_idx] = aligned_quad_iou(
-                    pred_q[cand_idx], canonical[gt_idx]
+                raw_q_iou = aligned_quad_iou(pred_q[cand_idx], canonical[gt_idx])
+                is_small_q = (quad_min_side[gt_idx] < 16.0) & (raw_q_iou > 0.0)
+                quality_targets[cand_idx] = torch.where(
+                    is_small_q, torch.sqrt(raw_q_iou.clamp(min=0.0)), raw_q_iou
                 )
         else:
             quad_xmin = canonical[:, :, 0].min(dim=1)[0]

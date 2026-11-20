@@ -18,9 +18,9 @@ SIGLIP_INPUT_SIZE: tuple[int, int] = (224, 224)
 
 DEFAULT_PROMPT_TEMPLATES: tuple[str, ...] = (
     "a photo of a {category}",
+    "a close-up photo of a {category}",
     "a cropped image of a {category}",
-    "a {category} on the road",
-    "a {category} in a traffic scene",
+    "{category}",
 )
 
 
@@ -65,17 +65,27 @@ class SiglipTeacher:
         self.revision = revision
         self.device = torch.device(device)
 
-        self.model: SiglipModel = SiglipModel.from_pretrained(
-            model_name, revision=revision
-        )
+        try:
+            self.model: SiglipModel = SiglipModel.from_pretrained(
+                model_name, revision=revision, local_files_only=True
+            )
+        except OSError:
+            self.model = SiglipModel.from_pretrained(
+                model_name, revision=revision
+            )
         self.model.eval()
         for param in self.model.parameters():
             param.requires_grad = False
         self.model.to(self.device)
 
-        self.processor: AutoProcessor = AutoProcessor.from_pretrained(
-            model_name, revision=revision
-        )
+        try:
+            self.processor: AutoProcessor = AutoProcessor.from_pretrained(
+                model_name, revision=revision, local_files_only=True
+            )
+        except OSError:
+            self.processor = AutoProcessor.from_pretrained(
+                model_name, revision=revision
+            )
 
         scale_val = float(self.model.logit_scale.detach().cpu().item())
         bias_val = float(self.model.logit_bias.detach().cpu().item())
@@ -185,11 +195,13 @@ class SiglipTeacher:
         self,
         categories: Sequence[str],
         templates: Sequence[str] | None = None,
+        synonyms: dict[str, Sequence[str]] | None = None,
     ) -> tuple[Tensor, dict[str, Any]]:
         """Construct an averaged, unit-normalized text representation bank for categories.
 
         /// @param categories Ordered list of category names.
         /// @param templates Formatting strings containing '{category}'.
+        /// @param synonyms Optional mapping from category name to tuple/list of synonym strings.
         /// @return Tuple of (normalized bank [C, D], metadata dictionary).
         """
         prompt_templates = tuple(templates) if templates is not None else DEFAULT_PROMPT_TEMPLATES
@@ -197,7 +209,12 @@ class SiglipTeacher:
 
         category_embeddings: list[Tensor] = []
         for cat in category_list:
-            formatted_prompts = [tmpl.format(category=cat.replace("_", " ")) for tmpl in prompt_templates]
+            syn_list = list(synonyms[cat]) if (synonyms and cat in synonyms) else [cat.replace("_", " ")]
+            formatted_prompts = [
+                tmpl.format(category=s.replace("_", " "))
+                for s in syn_list
+                for tmpl in prompt_templates
+            ]
             prompt_embeds = self.encode_text(formatted_prompts)
             mean_embed = prompt_embeds.mean(dim=0, keepdim=True)
             norm_embed = torch.nn.functional.normalize(mean_embed, dim=-1)

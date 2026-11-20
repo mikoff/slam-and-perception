@@ -67,6 +67,8 @@ class QuadProposalLoss(nn.Module):
         quality_target_mode: str = "blend",
         quality_blend: float = 0.8,
         geometry_quality_target: str = "exact_iou",
+        quality_normalization: str = "num_positives",
+        use_proxy_quality_floor: bool = False,
     ) -> None:
         super().__init__()
         if quality_target_mode not in {"centerness", "blend", "iou"}:
@@ -76,6 +78,10 @@ class QuadProposalLoss(nn.Module):
         if geometry_quality_target not in {"exact_iou", "corner_proxy"}:
             raise ValueError(
                 "geometry_quality_target must be exact_iou or corner_proxy"
+            )
+        if quality_normalization not in {"num_positives", "per_group_mean"}:
+            raise ValueError(
+                "quality_normalization must be 'num_positives' or 'per_group_mean'"
             )
         self.strides = strides
         self.quality_weight = quality_weight
@@ -87,6 +93,8 @@ class QuadProposalLoss(nn.Module):
         self.quality_target_mode = quality_target_mode
         self.quality_blend = quality_blend
         self.geometry_quality_target = geometry_quality_target
+        self.quality_normalization = quality_normalization
+        self.use_proxy_quality_floor = use_proxy_quality_floor
 
     def _decoded_quads(
         self, offsets: Tensor, feature_shapes: tuple[tuple[int, int], ...]
@@ -301,10 +309,24 @@ class QuadProposalLoss(nn.Module):
                     exact_iou = aligned_quad_iou(
                         selected_pred.float(), selected_target.float()
                     )
-                    proxy_quality = self._corner_quality_proxy(
-                        selected_pred.float(), selected_target.float()
-                    )
-                    geometry_quality = torch.maximum(exact_iou, 0.5 * proxy_quality)
+                    if self.use_proxy_quality_floor:
+                        proxy_quality = self._corner_quality_proxy(
+                            selected_pred.float(), selected_target.float()
+                        )
+                        geometry_quality = torch.maximum(exact_iou, 0.5 * proxy_quality)
+                    else:
+                        t_edges = torch.linalg.vector_norm(
+                            torch.roll(selected_target.float(), -1, dims=1)
+                            - selected_target.float(),
+                            dim=-1,
+                        )
+                        t_min_side = t_edges.amin(dim=-1)
+                        is_small_or_slender = (t_min_side < 16.0) & (exact_iou > 0.0)
+                        geometry_quality = torch.where(
+                            is_small_or_slender,
+                            torch.sqrt(exact_iou.clamp(min=0.0)),
+                            exact_iou,
+                        )
                 else:
                     geometry_quality = self._corner_quality_proxy(
                         selected_pred.float(), selected_target.float()
@@ -320,17 +342,46 @@ class QuadProposalLoss(nn.Module):
                     positive.reshape(-1)
                 ] + self.quality_blend * geometry_quality
         per_location_quality = _quality_focal_loss(
-            quality_logits.reshape(-1),
-            quality_target.to(quality_logits.dtype),
+            quality_logits.reshape(-1).float(),
+            quality_target.float(),
             self.quality_focal_beta,
         )
-        positive_quality = self._group_mean(per_location_quality, positive.reshape(-1))
-        trusted_quality = self._group_mean(
-            per_location_quality, targets.trusted_background_mask.reshape(-1)
-        )
-        weak_quality = self._group_mean(
-            per_location_quality, targets.weak_background_mask.reshape(-1)
-        )
+        if self.quality_normalization == "num_positives":
+            batch_size = quality_logits.shape[0]
+            per_image_quality = per_location_quality.reshape(batch_size, -1)
+            pos_norm = (
+                positive.to(dtype=per_image_quality.dtype).sum(dim=1).clamp(min=1.0)
+            )
+            positive_quality = (
+                (per_image_quality * positive.to(dtype=per_image_quality.dtype)).sum(
+                    dim=1
+                )
+                / pos_norm
+            ).mean()
+            trusted_quality = (
+                (
+                    per_image_quality
+                    * targets.trusted_background_mask.to(dtype=per_image_quality.dtype)
+                ).sum(dim=1)
+                / pos_norm
+            ).mean()
+            weak_quality = (
+                (
+                    per_image_quality
+                    * targets.weak_background_mask.to(dtype=per_image_quality.dtype)
+                ).sum(dim=1)
+                / pos_norm
+            ).mean()
+        else:
+            positive_quality = self._group_mean(
+                per_location_quality, positive.reshape(-1)
+            )
+            trusted_quality = self._group_mean(
+                per_location_quality, targets.trusted_background_mask.reshape(-1)
+            )
+            weak_quality = self._group_mean(
+                per_location_quality, targets.weak_background_mask.reshape(-1)
+            )
         quality_loss = (
             positive_quality
             + trusted_quality

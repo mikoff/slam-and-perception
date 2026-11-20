@@ -146,8 +146,8 @@ class QuadTargetBuilder:
             from .quad_losses import flatten_quad_output
 
             qual_flat, off_flat = flatten_quad_output(pred_output)
-            pred_quality_b = qual_flat.detach()
-            pred_offsets_b = off_flat.detach()
+            pred_quality_b = qual_flat.detach().float()
+            pred_offsets_b = off_flat.detach().float()
 
         quality, corner_offsets, positive_masks = [], [], []
         matched_gt_indices = []
@@ -195,10 +195,11 @@ class QuadTargetBuilder:
                     (ignore_quads, quads[assignment.unrepresentable_gt_indices])
                 )
             ignored = points_inside_quads(points, ignore_quads)
-            if (
-                self.ignore_unmatched_gt_interior
-                or getattr(self.assigner, "assignment_mode", None) == "one_to_one"
-            ) and quads.numel() > 0:
+            is_one_to_one = (
+                getattr(self.assigner, "assignment_mode", None) == "one_to_one"
+            )
+            non_giant_quads = quads.new_empty((0, 4, 2))
+            if quads.numel() > 0:
                 img_area = float(sample.image.shape[-2] * sample.image.shape[-1])
                 x = quads[:, :, 0]
                 y = quads[:, :, 1]
@@ -211,11 +212,10 @@ class QuadTargetBuilder:
                         + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
                     ).abs()
                 )
-                # Keep interior anchors of all foreground quads (up to 95% image area)
-                # in the ignore mask so large foreground instances are not penalized.
-                valid_bound_quads = quads[shoelace < 0.95 * img_area]
+                non_giant_quads = quads[shoelace < 0.90 * img_area]
+            if self.ignore_unmatched_gt_interior and non_giant_quads.numel() > 0:
                 ignored = ignored | (
-                    points_inside_quads(points, valid_bound_quads)
+                    points_inside_quads(points, non_giant_quads)
                     & ~assignment.positive_mask
                 )
             trusted_quads = _sample_quads(
@@ -226,7 +226,34 @@ class QuadTargetBuilder:
             corner_offsets.append(assignment.corner_targets)
             positive_masks.append(assignment.positive_mask)
             matched_gt_indices.append(assignment.matched_gt_indices)
-            trusted_background = background & points_inside_quads(points, trusted_quads)
+            trusted_points = points_inside_quads(points, trusted_quads)
+            if (
+                is_one_to_one
+                and not self.ignore_unmatched_gt_interior
+                and non_giant_quads.numel() > 0
+            ):
+                ng_edges = torch.linalg.vector_norm(
+                    torch.roll(non_giant_quads, -1, dims=1) - non_giant_quads,
+                    dim=-1,
+                )
+                ng_min_side = ng_edges.amin(dim=-1)
+                ng_x = non_giant_quads[:, :, 0]
+                ng_y = non_giant_quads[:, :, 1]
+                ng_area = (
+                    0.5
+                    * (
+                        (ng_x[:, 0] * ng_y[:, 1] - ng_x[:, 1] * ng_y[:, 0])
+                        + (ng_x[:, 1] * ng_y[:, 2] - ng_x[:, 2] * ng_y[:, 1])
+                        + (ng_x[:, 2] * ng_y[:, 3] - ng_x[:, 3] * ng_y[:, 2])
+                        + (ng_x[:, 3] * ng_y[:, 0] - ng_x[:, 0] * ng_y[:, 3])
+                    ).abs()
+                )
+                large_enough = (ng_min_side >= 12.0) & (ng_area >= 256.0)
+                if large_enough.any():
+                    trusted_points = trusted_points | points_inside_quads(
+                        points, non_giant_quads[large_enough]
+                    )
+            trusted_background = background & trusted_points
             trusted_background_masks.append(trusted_background)
             weak_background_masks.append(background & ~trusted_background)
             valid_levels_by_batch.append(valid_levels)

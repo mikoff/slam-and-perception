@@ -13,6 +13,7 @@ from .quad_geometry import (
     canonicalize_quads,
     decode_quad_offsets,
     polygon_nms,
+    quad_area,
     quad_validity,
 )
 
@@ -27,6 +28,7 @@ class QuadDetection:
     invalid_candidate_count: int = 0
     levels: Tensor | None = None
     location_indices: Tensor | None = None
+    flat_indices: Tensor | None = None
 
     @property
     def boxes(self) -> Tensor:
@@ -113,10 +115,11 @@ class QuadInferenceDecoder:
             "soft",
             "part_aware",
             "part_aware_soft",
+            "containment_aware",
             "nms_free",
         }:
             raise ValueError(
-                "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
+                "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', 'containment_aware', or 'nms_free'"
             )
         self.strides = strides
         self.pre_nms_top_k = pre_nms_top_k
@@ -198,15 +201,25 @@ class QuadInferenceDecoder:
             selected_levels = point_levels[selected_indices]
             selected_locations = point_locations[selected_indices]
             finite_coords = torch.isfinite(decoded).all(dim=(1, 2))
+            safe_raw = torch.where(
+                finite_coords[:, None, None], decoded, torch.zeros_like(decoded)
+            )
+            raw_valid = finite_coords & quad_validity(safe_raw)
+            raw_area = quad_area(safe_raw).clamp(min=1e-4)
             decoded = decoded.clone()
             decoded[..., 0].clamp_(min=0, max=width)
             decoded[..., 1].clamp_(min=0, max=height)
-            valid = finite_coords & quad_validity(decoded)
+            valid = (
+                raw_valid
+                & quad_validity(decoded)
+                & (quad_area(decoded) >= 0.20 * raw_area)
+            )
             invalid_count = int((~valid).sum().item())
             decoded = decoded[valid]
             selected_scores = selected_scores[valid]
             selected_levels = selected_levels[valid]
             selected_locations = selected_locations[valid]
+            selected_flat = selected_indices[valid]
             if decoded.numel() == 0:
                 detections.append(
                     QuadDetection(
@@ -218,6 +231,7 @@ class QuadInferenceDecoder:
                         invalid_candidate_count=invalid_count,
                         levels=selected_levels,
                         location_indices=selected_locations,
+                        flat_indices=selected_flat,
                     )
                 )
                 continue
@@ -244,6 +258,7 @@ class QuadInferenceDecoder:
                     invalid_candidate_count=invalid_count,
                     levels=selected_levels[keep],
                     location_indices=selected_locations[keep],
+                    flat_indices=selected_flat[keep],
                 )
             )
         return detections

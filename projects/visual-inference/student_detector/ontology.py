@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
+
+import torch
+from torch import Tensor
 
 CategoryReadiness = Literal["evaluable", "scarce", "unsupported", "distractor"]
 
@@ -30,6 +34,8 @@ DISTRACTOR_CATEGORIES: tuple[str, ...] = (
     "vegetation",
     "building_wall",
     "ego_platform_bodywork",
+    "indoor_lamp_or_light_fixture",
+    "bed_and_bedding",
 )
 
 UNSUPPORTED_CATEGORIES: tuple[str, ...] = ()
@@ -46,10 +52,158 @@ EXTENDED_CATEGORIES: tuple[str, ...] = (
     "golf_cart",
     "luggage_and_bags",
     "signboard",
+    "traffic_sign",
+    "traffic_light",
     "pole",
     "bench",
     "license_plate",
+    "window",
+    "door",
+    "building",
+    "tree",
+    "stairs",
+    "fence",
+    "chair",
+    "table",
+    "cabinet",
+    "wheeled_transport",
 )
+
+# Mutually-exclusive foreground vocabulary for SOTA sigmoid open-vocabulary detection
+# (excludes colliding scene-stuff distractors and duplicate two-wheeler aliases).
+OPEN_VOCAB_CATEGORIES: tuple[str, ...] = (
+    BASE_CATEGORIES + NOVEL_CATEGORIES + EXTENDED_CATEGORIES
+)
+
+# Real SQLite categories intentionally held out from closed-set GT supervision
+# to benchmark true zero-shot open-vocabulary generalization at test time.
+ZERO_SHOT_EVAL_CATEGORIES: tuple[str, ...] = (
+    "book",
+    "painting",
+    "cushion",
+    "flowerpot",
+)
+
+# Per-dataset annotation capability matrix for Federated Open-Vocabulary Loss:
+# maps each source_dataset to the canonical OPEN_VOCAB_CATEGORIES it actually labels.
+# Mined background/clutter proposals from dataset `d` MUST NOT apply negative BCE
+# gradients to categories outside `SOURCE_ANNOTATED_CATEGORIES[d]`.
+SOURCE_ANNOTATED_CATEGORIES: dict[str, frozenset[str]] = {
+    "bdd100k_images_100k": frozenset(
+        {
+            "car",
+            "pedestrian",
+            "cyclist",
+            "bus",
+            "truck",
+            "traffic_light",
+            "traffic_sign",
+        }
+    ),
+    "nuimages": frozenset(
+        {
+            "car",
+            "pedestrian",
+            "cyclist",
+            "bus",
+            "truck",
+            "traffic_cone",
+            "construction_barrier",
+            "stroller",
+            "debris",
+            "wheelchair",
+            "wheeled_transport",
+        }
+    ),
+    "woodscape_rgb_fisheye": frozenset(
+        {
+            "car",
+            "pedestrian",
+            "cyclist",
+            "bus",
+            "truck",
+            "traffic_light",
+            "traffic_sign",
+            "pole",
+            "fence",
+            "wheeled_transport",
+        }
+    ),
+    "coco_2017": frozenset(
+        {
+            "car",
+            "pedestrian",
+            "cyclist",
+            "bus",
+            "truck",
+            "traffic_light",
+            "parking_meter",
+            "fire_hydrant",
+            "bench",
+            "dog",
+            "luggage_and_bags",
+            "chair",
+            "table",
+        }
+    ),
+    "ade20k": frozenset(
+        {
+            "car",
+            "pedestrian",
+            "cyclist",
+            "bus",
+            "truck",
+            "pillar",
+            "trash_bin",
+            "canopy",
+            "signboard",
+            "traffic_light",
+            "pole",
+            "bench",
+            "luggage_and_bags",
+            "door",
+            "fence",
+            "chair",
+            "table",
+            "cabinet",
+        }
+    ),
+    "open_images_subset": frozenset(
+        {
+            "car",
+            "pedestrian",
+            "cyclist",
+            "bus",
+            "truck",
+        }
+    ),
+    "roboflow_ev_parking": frozenset(
+        {
+            "car",
+        }
+    ),
+}
+
+
+def build_source_annotated_mask(
+    source_datasets: Sequence[str],
+    categories: Sequence[str] = OPEN_VOCAB_CATEGORIES,
+    *,
+    device: torch.device | str | None = None,
+) -> Tensor:
+    """Build a boolean mask [N, C] indicating which classes are annotated per sample source."""
+    num_samples = len(source_datasets)
+    num_classes = len(categories)
+    mask = torch.ones((num_samples, num_classes), dtype=torch.bool)
+    for row_idx, src in enumerate(source_datasets):
+        annotated = SOURCE_ANNOTATED_CATEGORIES.get(src)
+        if annotated is not None:
+            for col_idx, cat in enumerate(categories):
+                if cat not in annotated:
+                    mask[row_idx, col_idx] = False
+    if device is not None:
+        mask = mask.to(device=device)
+    return mask
 
 READINESS_STATUS: dict[str, CategoryReadiness] = {
     "car": "evaluable",
@@ -83,6 +237,8 @@ READINESS_STATUS: dict[str, CategoryReadiness] = {
     "vegetation": "distractor",
     "building_wall": "distractor",
     "ego_platform_bodywork": "distractor",
+    "indoor_lamp_or_light_fixture": "distractor",
+    "bed_and_bedding": "distractor",
 }
 
 CANONICAL_MAPPINGS: dict[str, str] = {
@@ -145,11 +301,29 @@ CANONICAL_MAPPINGS: dict[str, str] = {
     "column": "pillar",
     "trash_bin": "trash_bin",
     "ashcan": "trash_bin",
+    "waste_container": "trash_bin",
     "street_light": "street_light",
     "streetlight": "street_light",
+    "lamp": "indoor_lamp_or_light_fixture",
+    "sconce": "indoor_lamp_or_light_fixture",
+    "chandelier": "indoor_lamp_or_light_fixture",
+    "bed": "bed_and_bedding",
+    "pillow": "bed_and_bedding",
+    "mattress": "bed_and_bedding",
     "canopy": "canopy",
     "awning": "canopy",
     "signboard": "signboard",
+    "billboard": "signboard",
+    "trade_name": "signboard",
+    "traffic_sign": "traffic_sign",
+    "traffic sign": "traffic_sign",
+    "trafficsign_indistingushable": "traffic_sign",
+    "stop_sign": "traffic_sign",
+    "stop sign": "traffic_sign",
+    "street_sign": "traffic_sign",
+    "traffic_light": "traffic_light",
+    "traffic light": "traffic_light",
+    "unknown_traffic_light": "traffic_light",
     "pole": "pole",
     "bench": "bench",
     "cart": "cart",
@@ -159,6 +333,41 @@ CANONICAL_MAPPINGS: dict[str, str] = {
     "license_plate": "license_plate",
     "luggage_and_bags": "luggage_and_bags",
     "suitcase": "luggage_and_bags",
+    "backpack": "luggage_and_bags",
+    "handbag": "luggage_and_bags",
+    "bag": "luggage_and_bags",
+    "window": "window",
+    "windowpane": "window",
+    "door": "door",
+    "double_door": "door",
+    "building": "building",
+    "house": "building",
+    "edifice": "building",
+    "skyscraper": "building",
+    "tree": "tree",
+    "trees": "tree",
+    "palm": "tree",
+    "stairs": "stairs",
+    "stairway": "stairs",
+    "steps": "stairs",
+    "chair": "chair",
+    "armchair": "chair",
+    "swivel_chair": "chair",
+    "seat": "chair",
+    "sofa": "chair",
+    "couch": "chair",
+    "table": "table",
+    "desk": "table",
+    "coffee_table": "table",
+    "dining_table": "table",
+    "cabinet": "cabinet",
+    "chest_of_drawers": "cabinet",
+    "wardrobe": "cabinet",
+    "shelf": "cabinet",
+    "bookcase": "cabinet",
+    "other_wheeled_transport": "wheeled_transport",
+    "wheeled_transport": "wheeled_transport",
+    "trailer": "wheeled_transport",
 }
 
 COMPATIBLE_LABELS: dict[str, tuple[str, ...]] = {
@@ -176,7 +385,7 @@ COMPATIBLE_LABELS: dict[str, tuple[str, ...]] = {
     "parking_slot": ("parking_slot", "parking_space", "empty_parking_bay"),
     "pillar": ("pillar", "column"),
     "trash_bin": ("trash_bin", "ashcan", "waste_container"),
-    "street_light": ("street_light", "streetlight", "lamp"),
+    "street_light": ("street_light", "streetlight"),
     "canopy": ("canopy", "awning", "sunshade"),
     "cart": ("cart", "shopping_cart", "golf_cart"),
     "road_surface": ("road_surface", "road", "street"),
@@ -250,15 +459,20 @@ class ConceptAuditRecord:
 
 __all__ = [
     "BASE_CATEGORIES",
+    "build_source_annotated_mask",
     "CANONICAL_MAPPINGS",
     "CategoryReadiness",
     "COMPATIBLE_LABELS",
     "ConceptAuditRecord",
     "DISTRACTOR_CATEGORIES",
+    "EXTENDED_CATEGORIES",
     "is_compatible",
     "map_to_canonical",
     "normalize_category_name",
     "NOVEL_CATEGORIES",
+    "OPEN_VOCAB_CATEGORIES",
     "READINESS_STATUS",
+    "SOURCE_ANNOTATED_CATEGORIES",
     "UNSUPPORTED_CATEGORIES",
+    "ZERO_SHOT_EVAL_CATEGORIES",
 ]

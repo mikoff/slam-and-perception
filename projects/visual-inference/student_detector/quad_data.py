@@ -51,6 +51,10 @@ class QuadProposalSample:
     aspect_bins: tuple[str, ...] = ()
     radial_bins: tuple[str, ...] = ()
     stabilities: tuple[float, ...] = ()
+    file_name: str | None = None
+    category_names: tuple[str, ...] = ()
+    gt_indices: tuple[int, ...] = ()
+    horizontal_flip: bool = False
 
 
 def _quad_slice_labels(quads: Tensor, size: int) -> tuple[tuple[str, ...], ...]:
@@ -122,15 +126,8 @@ class QuadProposalTransform:
         trusted_background_quads: Tensor | None = None,
         *,
         seed: int,
-    ) -> tuple[
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        Tensor,
-        tuple[float, float, float],
-        tuple[int, ...],
-    ]:
+        return_metadata: bool = False,
+    ) -> tuple[object, ...]:
         image = image.convert("RGB")
         width, height = image.size
         parameters = sample_augmentation_parameters(
@@ -197,7 +194,7 @@ class QuadProposalTransform:
                 original_area, 1e-7
             )
         if not transformed.shape[0]:
-            return (
+            base_empty = (
                 augmented.tensor,
                 quads.new_empty((0, 4, 2)),
                 ignore_quads.new_empty((0, 4, 2)),
@@ -206,6 +203,9 @@ class QuadProposalTransform:
                 augmented.transform,
                 (),
             )
+            if return_metadata:
+                return (*base_empty, parameters.horizontal_flip)
+            return base_empty
         areas = polygon_signed_area(clipped_tensor).abs()
         edge_lengths = torch.linalg.vector_norm(
             torch.roll(clipped_tensor, -1, 1) - clipped_tensor, dim=2
@@ -237,7 +237,7 @@ class QuadProposalTransform:
             & geometrically_valid
             & (visibility_tensor >= self.augmentation.ignore_visible_fraction)
         )
-        return (
+        base_out = (
             augmented.tensor,
             clipped_tensor[positive],
             clipped_tensor[ignore],
@@ -246,6 +246,9 @@ class QuadProposalTransform:
             augmented.transform,
             tuple(torch.where(positive)[0].tolist()),
         )
+        if return_metadata:
+            return (*base_out, parameters.horizontal_flip)
+        return base_out
 
 
 class QuadProposalDataset(Dataset[QuadProposalSample]):

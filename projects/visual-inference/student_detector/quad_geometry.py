@@ -20,7 +20,7 @@ def _quad_tensor(quad: Tensor) -> Tensor:
 
 def quad_signed_area(quad: Tensor) -> Tensor:
     """Return signed image-coordinate area; positive means clockwise."""
-    value = _quad_tensor(quad)
+    value = _quad_tensor(quad).float()
     return 0.5 * (
         (value[..., :, 0] * torch.roll(value[..., :, 1], -1, -1)).sum(-1)
         - (value[..., :, 1] * torch.roll(value[..., :, 0], -1, -1)).sum(-1)
@@ -33,7 +33,7 @@ def quad_area(quad: Tensor) -> Tensor:
 
 def quad_centroid(quad: Tensor) -> Tensor:
     """Return the area centroid of a non-degenerate quadrilateral."""
-    value = _quad_tensor(quad)
+    value = _quad_tensor(quad).float()
     following = torch.roll(value, -1, dims=-2)
     cross = (
         value[..., :, 0] * following[..., :, 1]
@@ -61,7 +61,7 @@ def quad_validity(
     min_edge: float = 1e-4,
 ) -> Tensor:
     """Return a mask for finite, convex, non-self-intersecting quads."""
-    value = _quad_tensor(quad)
+    value = _quad_tensor(quad).float()
     finite = torch.isfinite(value).all(dim=(-1, -2))
     edges = torch.roll(value, -1, -2) - value
     edge_lengths = torch.linalg.vector_norm(edges, dim=-1)
@@ -77,7 +77,7 @@ def quad_validity(
 
 def canonicalize_quads(quad: Tensor) -> Tensor:
     """Canonicalize quads clockwise, starting at each top-left vertex."""
-    value = _quad_tensor(quad)
+    value = _quad_tensor(quad).float()
     if not torch.isfinite(value).all():
         raise ValueError("quad contains non-finite coordinates")
     original_shape = value.shape
@@ -310,14 +310,19 @@ def _aligned_intersection_area(first: Tensor, second: Tensor) -> Tensor:
 
 
 def aligned_quad_iou(first: Tensor, second: Tensor) -> Tensor:
-    """Compute exact IoU for aligned [N, 4, 2] pairs."""
-    first_value = _quad_tensor(first)
-    second_value = _quad_tensor(second)
+    """Compute exact IoU for aligned [N, 4, 2] pairs, returning 0 for degenerate/non-convex quads."""
+    first_value = _quad_tensor(first).float()
+    second_value = _quad_tensor(second).float()
     if first_value.shape != second_value.shape:
         raise ValueError("aligned quad tensors must have equal shape")
-    intersection = _aligned_intersection_area(first_value, second_value)
-    union = quad_area(first_value) + quad_area(second_value) - intersection
-    return intersection / union.clamp(min=torch.finfo(first_value.dtype).eps)
+    both_valid = quad_validity(first_value) & quad_validity(second_value)
+    area1 = quad_area(first_value)
+    area2 = quad_area(second_value)
+    raw_intersection = _aligned_intersection_area(first_value, second_value)
+    intersection = torch.where(both_valid, raw_intersection, torch.zeros_like(area1))
+    intersection = torch.minimum(intersection, torch.minimum(area1, area2)).clamp(min=0.0)
+    union = (area1 + area2 - intersection).clamp(min=torch.finfo(first_value.dtype).eps)
+    return (intersection / union).clamp(min=0.0, max=1.0)
 
 
 _compiled_aligned_quad_iou = torch.compile(
@@ -347,8 +352,8 @@ def pairwise_quad_iou(
     Values that cannot exceed ``minimum_iou`` are safely left at zero. This is
     useful for NMS, where only threshold crossings matter.
     """
-    first_value = _quad_tensor(first)
-    second_value = _quad_tensor(second)
+    first_value = _quad_tensor(first).float()
+    second_value = _quad_tensor(second).float()
     if first_value.ndim != 3 or second_value.ndim != 3:
         raise ValueError("quad sets must have shape [N, 4, 2] and [M, 4, 2]")
     if pair_chunk_size < 1:
@@ -423,10 +428,12 @@ def polygon_nms(
     soft_sigma: float = 0.5,
     part_scale_ratio: float = 0.4,
     part_max_iou: float = 0.65,
+    iomin_threshold: float = 0.80,
+    class_ids: Tensor | None = None,
     score_threshold: float = 0.05,
     return_scores: bool = False,
 ) -> Tensor | tuple[Tensor, Tensor]:
-    """Exact class-agnostic NMS using one batched polygon-overlap matrix."""
+    """Exact polygon NMS supporting hard, Soft-NMS, part-aware, and containment-aware suppression."""
     value = _quad_tensor(quads)
     if value.shape[0] != scores.shape[0]:
         raise ValueError("quads and scores must have equal length")
@@ -438,6 +445,7 @@ def polygon_nms(
     order = torch.argsort(scores.detach().cpu(), descending=True, stable=True)
     valid_cpu = valid.detach().cpu()
     scores_cpu = scores.detach().cpu()
+    classes_cpu = class_ids.detach().cpu() if class_ids is not None else None
     num_quads = value.shape[0]
 
     if nms_mode == "nms_free":
@@ -447,7 +455,7 @@ def polygon_nms(
         keep = torch.tensor(kept_free, dtype=torch.long, device=value.device)
         return (keep, scores[keep]) if return_scores else keep
 
-    if nms_mode == "hard":
+    if nms_mode == "hard" and classes_cpu is None:
         overlaps = (
             pairwise_quad_iou(value, value, minimum_iou=iou_threshold).detach().cpu()
         )
@@ -467,9 +475,11 @@ def polygon_nms(
 
     overlaps = pairwise_quad_iou(value, value, minimum_iou=0.0).detach().cpu()
     areas = quad_area(value).detach().cpu()
-    scale_ratios = torch.minimum(areas[:, None], areas[None, :]) / torch.maximum(
-        areas[:, None], areas[None, :]
-    ).clamp(min=1e-6)
+    min_areas = torch.minimum(areas[:, None], areas[None, :]).clamp(min=1e-6)
+    max_areas = torch.maximum(areas[:, None], areas[None, :]).clamp(min=1e-6)
+    scale_ratios = min_areas / max_areas
+    intersections = overlaps * (areas[:, None] + areas[None, :]) / (1.0 + overlaps)
+    iomins = intersections / min_areas
 
     kept_indices: list[int] = []
     final_scores: list[float] = []
@@ -496,8 +506,27 @@ def polygon_nms(
         rem_tensor = torch.tensor(remaining, dtype=torch.long)
         pair_ious = overlaps[idx, rem_tensor]
         pair_ratios = scale_ratios[idx, rem_tensor]
+        pair_iomins = iomins[idx, rem_tensor]
 
-        if nms_mode == "part_aware":
+        if nms_mode == "hard":
+            assert classes_cpu is not None
+            same_cls = classes_cpu[rem_tensor] == classes_cpu[idx]
+            to_suppress = same_cls & (pair_ious > iou_threshold)
+            suppressed[rem_tensor[to_suppress]] = True
+        elif nms_mode == "containment_aware":
+            if classes_cpu is not None:
+                same_cls = classes_cpu[rem_tensor] == classes_cpu[idx]
+                cross_cls_thresh = max(iou_threshold, 0.70)
+                to_suppress = (
+                    same_cls
+                    & ((pair_ious > iou_threshold) | (pair_iomins > iomin_threshold))
+                ) | ((~same_cls) & (pair_ious > cross_cls_thresh))
+            else:
+                to_suppress = (pair_ious > iou_threshold) | (
+                    (pair_iomins > iomin_threshold) & (pair_ratios > 0.15)
+                )
+            suppressed[rem_tensor[to_suppress]] = True
+        elif nms_mode == "part_aware":
             to_suppress = (pair_ious > part_max_iou) | (
                 (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
             )

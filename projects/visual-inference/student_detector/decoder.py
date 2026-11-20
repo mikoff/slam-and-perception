@@ -22,6 +22,7 @@ class Detection:
     pre_nms_scores: Tensor | None = None
     candidate_count: int = 0
     invalid_candidate_count: int = 0
+    flat_indices: Tensor | None = None
 
 
 def class_agnostic_nms(
@@ -33,11 +34,13 @@ def class_agnostic_nms(
     soft_sigma: float = 0.5,
     part_scale_ratio: float = 0.4,
     part_max_iou: float = 0.65,
+    iomin_threshold: float = 0.80,
+    class_ids: Tensor | None = None,
     score_threshold: float = 0.05,
     max_output: int | None = None,
     return_scores: bool = False,
 ) -> Tensor | tuple[Tensor, Tensor]:
-    """Class-agnostic NMS supporting hard NMS, Gaussian Soft-NMS, and part-aware suppression."""
+    """NMS supporting hard, Soft-NMS, part-aware, and containment-aware suppression."""
     if boxes.numel() == 0:
         empty = torch.empty((0,), dtype=torch.long, device=boxes.device)
         empty_scores = torch.empty((0,), dtype=scores.dtype, device=scores.device)
@@ -49,7 +52,7 @@ def class_agnostic_nms(
             order = order[:max_output]
         return (order, scores[order]) if return_scores else order
 
-    if nms_mode == "hard":
+    if nms_mode == "hard" and class_ids is None:
         order = torch.argsort(scores, descending=True, stable=True)
         # NMS only needs a strict processing order. Unique synthetic priorities
         # preserve stable score/index ordering even when model scores are equal.
@@ -73,13 +76,20 @@ def class_agnostic_nms(
     order = torch.argsort(scores_f, descending=True, stable=True)
     boxes_sorted = boxes_f[order]
     areas_sorted = areas[order]
+    classes_sorted = class_ids[order] if class_ids is not None else None
 
     from torchvision.ops import box_iou as tv_box_iou
 
     ious = tv_box_iou(boxes_sorted, boxes_sorted)
-    scale_ratios = torch.minimum(
-        areas_sorted[:, None], areas_sorted[None, :]
-    ) / torch.maximum(areas_sorted[:, None], areas_sorted[None, :]).clamp(min=1e-6)
+    min_areas = torch.minimum(areas_sorted[:, None], areas_sorted[None, :]).clamp(
+        min=1e-6
+    )
+    max_areas = torch.maximum(areas_sorted[:, None], areas_sorted[None, :]).clamp(
+        min=1e-6
+    )
+    scale_ratios = min_areas / max_areas
+    intersections = ious * (areas_sorted[:, None] + areas_sorted[None, :]) / (1.0 + ious)
+    iomins = intersections / min_areas
 
     kept_local: list[int] = []
     final_scores: list[float] = []
@@ -101,8 +111,27 @@ def class_agnostic_nms(
 
         pair_ious = ious[i, active_remaining]
         pair_ratios = scale_ratios[i, active_remaining]
+        pair_iomins = iomins[i, active_remaining]
 
-        if nms_mode == "part_aware":
+        if nms_mode == "hard":
+            assert classes_sorted is not None
+            same_cls = classes_sorted[active_remaining] == classes_sorted[i]
+            to_suppress = same_cls & (pair_ious > iou_threshold)
+            suppressed[active_remaining[to_suppress]] = True
+        elif nms_mode == "containment_aware":
+            if classes_sorted is not None:
+                same_cls = classes_sorted[active_remaining] == classes_sorted[i]
+                cross_cls_thresh = max(iou_threshold, 0.70)
+                to_suppress = (
+                    same_cls
+                    & ((pair_ious > iou_threshold) | (pair_iomins > iomin_threshold))
+                ) | ((~same_cls) & (pair_ious > cross_cls_thresh))
+            else:
+                to_suppress = (pair_ious > iou_threshold) | (
+                    (pair_iomins > iomin_threshold) & (pair_ratios > 0.15)
+                )
+            suppressed[active_remaining[to_suppress]] = True
+        elif nms_mode == "part_aware":
             to_suppress = (pair_ious > part_max_iou) | (
                 (pair_ious > iou_threshold) & (pair_ratios > part_scale_ratio)
             )
@@ -158,10 +187,11 @@ class InferenceDecoder:
             "soft",
             "part_aware",
             "part_aware_soft",
+            "containment_aware",
             "nms_free",
         }:
             raise ValueError(
-                "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', or 'nms_free'"
+                "nms_mode must be 'hard', 'soft', 'part_aware', 'part_aware_soft', 'containment_aware', or 'nms_free'"
             )
         self.strides = strides
         self.top_k = top_k
@@ -299,6 +329,7 @@ class InferenceDecoder:
             selected_scores = selected_scores[valid]
             selected_levels = point_levels[selected_indices][valid]
             selected_locations = point_locations[selected_indices][valid]
+            selected_flat = selected_indices[valid]
             keep, kept_scores = class_agnostic_nms(
                 selected_boxes,
                 selected_scores,
@@ -321,6 +352,7 @@ class InferenceDecoder:
                     selected_scores,
                     count,
                     invalid_count,
+                    selected_flat[keep],
                 )
             )
         return detections

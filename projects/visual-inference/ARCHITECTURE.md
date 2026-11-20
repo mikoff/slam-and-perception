@@ -1,56 +1,41 @@
 # Module Purpose & Boundaries
 
-This project owns class-agnostic proposal-object contracts, SAM-based open-world object discovery, MobileNetV4 edge student detector training (HBB and Quad geometries), and Raspberry Pi 5 edge export.
+Owns open-world SAM pseudo-label discovery, edge-targeted MobileNetV4 student object detection across Horizontal Bounding Box (HBB) and Oriented Quadrilateral (Quad) geometries, and end-to-end SigLIP-distilled open-vocabulary semantic classification without a runtime text encoder.
 
 # Technical Contracts & Interfaces
 
-- Input tensors: FP32 `[B, 3, H, W]`, default resolution 384x384 (divisible by 32).
-- Backbone: `MobileNetV4Backbone` (`mobilenetv4_conv_medium.e500_r256_in1k`) exposing C2 (48ch), C3 (80ch), C4 (160ch), and C5 (256ch).
-- Neck: `P2LiteFPN` outputs 4 pyramid levels `[B, 96, H / s, W / s]` for strides $s \in (4, 8, 16, 32)$.
-- Head Architectures:
-  - **HBB Student Detector (`StudentDetector`)**: `SharedDetectionHead` predicting objectness `[B, 1, H_l, W_l]`, FCOS-style distances $(l, t, r, b)$ `[B, 4, H_l, W_l]`, and centerness `[B, 1, H_l, W_l]`. Supports `dual_head=True` (primary 1-to-1 head + auxiliary 1-to-many TAL head).
-  - **Quad Detector (`QuadProposalDetector`)**: `SharedQuadProposalHead` predicting quality logit `[B, 1, H_l, W_l]` and 8 corner vertex offsets `[B, 8, H_l, W_l]`. Supports `dual_head=True` and learnable level scales.
-- Target Builders & Assigners:
-  - **Baseline (ATSS)**: `ATSSAssigner` (with aspect-adapted priors, interior-first candidate selection, $\mu + 0.5\sigma$ multi-level routing, and stride-smoothed centerness) and `QuadAssigner` ($k=4$, `scale_measure="area"`, `eligible_levels=2`) to preserve P3 medium-object recall while routing tall/slender pillars and columns across P4–P5.
-  - **Recipe 2 (TAL)**: `TaskAlignedAssigner` and `QuadTaskAlignedAssigner` with 1-to-1 greedy bipartite matching and auxiliary 1-to-many alignment ($t = s^\alpha \times \text{IoU}^\beta$). Features **Scale-Gated FPN Specialization** enforcing canonical receptive field scale intervals (P2: $[0, 64]$ px, P3: $[32, 128]$ px, P4: $[64, 256]$ px, P5: $[128, \infty)$ px) to prevent macro-scene competition from overriding fine instance heads.
-  - **Topological Container Suppression**: `suppress_container_boxes` and `suppress_container_quads` dynamically detect composite container proposals (enclosing $\ge 2$ children or 1 child with area $>15\%$ and $\ge 8\times$ child area) and downgrade them to ignore regions (`w=0`) rather than foreground targets.
-  - **TargetBuilder Interior Guard**: Restricts the non-matched ignore mask to ground-truth objects $< 95\%$ image area (`TargetBuilder` for 1-to-1 TAL), ensuring close-up foreground objects do not zero out background supervision across the entire image.
-- Loss Formulations:
-  - **HBB (`ProposalLoss`)**: Quality Focal Loss on objectness (`num_positives` with `counts / 16` background floor to prevent sparse-GT window/pillar suppression) + CIoU box loss + per-axis span-weighted Smooth-$\mathcal{L}_1$ LTRB loss + BCE centerness loss.
-  - **Quad (`QuadProposalLoss`)**: Quality Focal Loss (with `0.5 * corner_quality_proxy` floor on `exact_iou`) + per-axis span-weighted Corner L1 loss + per-axis variance-normalized Gaussian Wasserstein Distance (GWD) loss + corner validity loss.
-- Training Pipelines & Automation:
-  - **Stage 1 (Self-Supervised Discovery Pre-Training)**: Trained on 10,000 balanced multi-domain images using SAM pseudo-labels (`SAMStudentHBBDataset`). High recall baseline across broad object candidates. Run script: `scripts/train_student_pilot.py`.
-  - **Stage 2 (Canonical Ground-Truth Fine-Tuning)**: Fine-tunes Stage 1 checkpoints on verified human GT from `quad_train_enriched.sqlite` (`HumanGTHBBDataset` for HBB, `HumanGTQuadDataset` for Quads). HBB uses CIoU (`box_weight=2.0`) + Smooth-L1 (`ltrb_weight=0.5`) with `num_positives` normalization and `centerness_alpha=0.25`. Quad uses GWD (`gwd_weight=2.0`) + Min-over-8 Corner Smooth-$\mathcal{L}_1$ (`corner_weight=2.0`). Both employ `weak_negative_weight=0.15` and continuous QFL IoU calibration ($\alpha=0.0$ for quads). Unified script: `scripts/finetune_student_gt.py --geometry {hbb, quad}`.
-  - **Unified Pipeline Automation**: `scripts/run_two_stage_pipeline.sh` orchestrates Stage 1, Stage 2, evaluation, and dashboard generation across geometries in a single entry point.
-- Decoders & Suppression:
-  - `InferenceDecoder` (HBB) and `QuadInferenceDecoder` (Quads, with boundary coordinate clamping prior to `quad_validity`) support `"hard"`, `"part_aware"` (scale ratio $\le 0.4$, max duplicate IoU threshold `part_max_iou=0.65`), `"part_aware_soft"`, and `"nms_free"`.
-  - Centerness scoring parameter `centerness_alpha` ($\in [0.0, 1.0]$) blends scores as $\text{score} = \sigma(\text{obj}) \times \sigma(\text{center})^\alpha$. For Stage-2 HBB, $\alpha=0.25$ balances centerness with QFL IoU calibration; for Quads, centerness is decoupled ($\alpha = 0.0$) to avoid aspect-ratio distortion penalties.
-  - Stage 2 Quad Fine-Tuning on 14k Enriched curriculum achieved **72.47% GT Recall@100@50**, **42.53% GT Rec@10@50** (+14.32% jump), **38.45% AP@50**, and **36.93% Rec@100@75** (up from 19.98% at 10k). Checkpoint: `artifacts/finetune_14k_quad/checkpoints/mobilenetv4_p2_quad_finetune_best.pt`.
-  - Stage 2 HBB Fine-Tuning on 14k Enriched reached **57.13% GT Recall@100@50** (+2.75% over 10k v2), **35.96% Rec@10@50** (+6.84%), and **36.69% AP@50** (+14.00% gain). Checkpoint: `artifacts/finetune_14k_hbb/checkpoints/mobilenetv4_p2_hbb_finetune_best.pt`.
-  - Qualitative visualization defaults to **Part-Aware NMS (IoU threshold 0.45, duplicate limit 0.65)** to suppress adjacent anchor cluster duplicates from 1-to-1 ignore mask halos.
-- Pseudo-Label Storage & DataLoader:
-  - Streaming transactional SQLite (`sam_discovery.sqlite`, WAL mode) via `discovery_storage.py`. Lazy per-worker SQLite reader in `SAMStudentHBBDataset` and `SAMStudentDataset`. Full-scale dataset discovery (267.8k images) orchestrated with start/pause/resume daemon via `scripts/manage_sam_discovery.sh`.
-  - Authoritative human GT datasets: `HumanGTHBBDataset` and `HumanGTQuadDataset` in `student_detector/human_gt_data.py`. Enriched with full ADE20K (16.8k img: 152.1k things/agents/structure) and balanced Open Images V7 (15.0k img: 41.3k vehicles & infrastructure assets), with rooftop PKLot purged (299.6k total images, 4.10M human GT annotations) in `quad_train_enriched.sqlite` and synchronized with `sam_discovery_enriched.sqlite`.
+- **Input & Canvas**: FP32 RGB `[B, 3, H, W]` letterboxed to `384x384` (`divisible by 32`), with `valid_mask` `[H, W]` and `transform = (scale, off_x, off_y, horizontal_flip)`.
+- **Backbone & Bidirectional Neck**:
+  - `MobileNetV4Backbone` (`mobilenetv4_conv_medium.e500_r256_in1k`) emits `(C2: 48ch, C3: 80ch, C4: 160ch, C5: 256ch)` at strides `s in (4, 8, 16, 32)`.
+  - `P2LitePAN` (`neck_type="pan"`, `fpn_channels=128`) performs top-down + bottom-up depthwise-separable fusion returning `[B, 128, H/s, W/s]`; legacy `P2LiteFPN` (`96ch`) remains loadable.
+- **Dual-Head Proposal Detectors (`dual_head=True`, `use_3dmf=True`)**:
+  - `StudentDetector` (HBB) predicts `objectness` `[B, 1, H_l, W_l]`, FCOS `ltrb` `[B, 4, H_l, W_l]`, and `centerness` `[B, 1, H_l, W_l]`.
+  - `QuadProposalDetector` (Quad) predicts `quality` `[B, 1, H_l, W_l]` and corner offsets `[B, 8, H_l, W_l]`.
+  - Primary head embeds `CrossScale3DMaxFilter` (3DMF across adjacent scales + 3x3 spatial window); inference defaults `forward_eval_head(features, aux_weight=0.0)`.
+- **Open-Vocabulary Heads (`student_detector/open_vocab_heads.py`)**:
+  - **Option A (`DenseAnchorSemanticHead`)**: 2-layer depthwise-separable conv tower on `P2LitePAN` + 1x1 projection to L2-normalized `[N, 768]` via `forward_indexed` or static `forward_dense` (zero RoI ops).
+  - **Option B (`RoIPooledSemanticHead`)**: coordinate-free dual-scale `MultiScaleRoIAlign` (`focal_margin=0.15`, `context_margin=0.45`, `output_size=5`) + LayerNorm/GELU MLP to L2-normalized `[N, 768]`.
+  - **Calibration (`_ContrastiveClassifierMixin`)**: domain-neutral `DEFAULT_PROMPT_TEMPLATES` (`siglip.py`) + disambiguated `DEFAULT_CATEGORY_SYNONYMS` (`vocabulary.py`, incl. `trash_bin`, `dog`, `stairs`, `debris`) scored against frozen `[C, 768]` `VocabularyBank` embeddings via damped visual-centroid offset (`torch.where(raw <= 0.05, 0.85 * raw.clamp(max=0.016), raw)`), asymmetric median subtraction (`torch.where(med < 0.0, 0.75 * med, 0.36 * med)`), 2.0x-scale distractor margin veto (`+0.004`), and Option A+B blending (`0.30 * p_A + 0.70 * p_B`, ranked by `sqrt(s_obj * p_cls)`).
+- **Losses & Target Assignment**:
+  - `TaskAlignedAssigner` / `QuadTaskAlignedAssigner`: primary 1-to-1 greedy matching + auxiliary 1-to-many TAL (`top_k=13`), slender-aware gating, and `sqrt(IoU)` quality calibration for `min_side < 16`.
+  - `OpenVocabularySigmoidLoss`: primary SigLIP distillation (cosine error + KL over `[37; 7]` bank + symmetric `subspace_mse`/`mean_cos_loss` + `t_margin_loss` + InfoNCE) + compatible human-GT support (`compat`, Seesaw rare mitigation floor `0.75`, federated `SOURCE_ANNOTATED_CATEGORIES` masking where `open_images_subset` is pruned to 5 base classes and unannotated background keeps `0.35` weight).
+- **Decoders & Semantic Filtering**: `class_agnostic_nms` and `polygon_nms` (`containment_aware`, `pair_ratios > 0.15` when `class_ids=None`) feed `filter_semantic_detections`, which combines HBB + Quad overlap (`torch.maximum(q_iou, 0.85 * b_iou)`), drops `< 4.5px` micro-specks unless `p >= 0.45`, and runs Pass-0 objectness-aware container suppression preserving `VALID_CONTAINER_PARTS`.
 
 # Active Design Patterns & Decisions
 
-- **Two-Stage Training Paradigm (OWLv2 Analogy)**: Stage 1 trains broad visual representation on diverse SAM pseudo-labels; Stage 2 sharpens bounding envelopes and calibrates confidence scores exclusively on human ground truth.
-- **Envelope Tightening Loss**: Joint Smooth-$\mathcal{L}_1$ (`ltrb_weight=0.5`) + CIoU (`box_weight=2.0`) directly penalizes loose boundaries, halving coordinate loss ($0.3557 \to 0.1757$).
-- P2-stride feature pyramid ($s=4$) enables direct representation and localization of small objects down to 4–16 px across all pyramid levels.
-- Hybrid supervision combines confirmed human GT (6,452 thing instances) with SAM novel discoveries (25,728 instances with stability >= 0.88).
-- Suppressed internal subparts (28,354 instances) and non-object stuff (`road_surface`) are assigned to ignore regions rather than hard negatives.
-- Post-processing decoders (`InferenceDecoder` for HBB, `QuadInferenceDecoder` for Quads) apply NMS outside the model graph.
-- Longest-edge orthonormal derivation for quad axes and scales eliminates `torch.linalg.eigh` eigensolver instability on square or near-square quads with repeated eigenvalues.
-- Mixed precision: FP16 autocast with `GradScaler` on CUDA, consuming ~3.48 GB VRAM at batch size 32.
-- Vectorized Target Building: `ATSSAssigner`, `TargetBuilder`, `TaskAlignedAssigner`, and `QuadTaskAlignedAssigner` are fully tensorized, avoiding CPU-GPU sync stalls ($9.5\times$ TargetBuilder acceleration).
-- Multi-worker multiprocessing: Uses `torch.multiprocessing.set_sharing_strategy("file_system")` to prevent Linux IPC file descriptor exhaustion with SQLite multi-worker DataLoaders.
+- **Stage-2 Morphism & Semantic Refinement**: `warmstart_detector_from_stage2` expands `96ch` checkpoints into `128ch` `P2LitePAN`; `--semantic-refinement` freezes the detector (`scale=90, bias=-4.40`) to align Option A/B heads without harming open-world localization, with 60/40 WiSE-FT head blending on HBB.
+- **Open-World Caching & Balanced Sampling**: `artifacts/cache/open_world_pseudo_gt_8k.pt` (`4,358` objects across `2,833` images, adding `fence`/`stroller` while excluding `stairs` on driving datasets via `prepare_siglip_distill_assets.py`) + `siglip_sam_discovery_8k.pt` (`7,337` images) + SAM ignore boxes (`7,360` images) combine with `+1,698` rare-class images (`8,898` train total, `0` val/holdout overlap, `dog` quota `60`, `bdd100k` specks `< 8px` masked).
+- **P2-Aligned Quad GT Retention**: `HumanGTQuadDataset` sets `regular_min_side=2.0`, `thin_major_axis_min=4.0`, `thin_aspect_ratio_min=1.5`, and `thin_area=4.0` to retain slender poles/signs on the `384x384` canvas.
+- **Measured Option A / B / A+B Profile (`benchmark_option_a_vs_b.json`)**:
+  - **HBB (pre-WiSE-FT blend, `cohort_val_800` / `holdout_210`)**: `Top1`: `OptA=70.1%/70.7%`, `OptB=69.7%/69.4%`, `OptAB=72.6%/72.6%`; `ZeroShot-4` `4-way / 41-way Top5`: `OptB=59.5%/75.6%` (`val`), `61.8%/82.3%` (`holdout`); `PostSemOvlp=2.58/3.09`; `OptA/B Agree=73.3%/73.5%`; `ActiveCats=36/37 (val), 35/37 (holdout)`.
+  - **Quad (`cohort_val_800` / `holdout_210`)**: `Top1`: `OptA=63.1%/62.2%`, `OptB=64.5%/61.9%`, `OptAB=65.9%/63.4%`; `ZeroShot-4`: `OptB=70.1%/83.3%` (`val`), `74.4%/76.9%` (`holdout`); `PostSemOvlp=0.69/0.82`; `OptA/B Agree=71.8%/69.9%`; `ActiveCats=36/37 (val), 34/37 (holdout)`.
+- **SQLite Determinism**: `quad_train_enriched.sqlite` and `sam_discovery_enriched.sqlite` query with `ORDER BY rowid` and `torch.multiprocessing.set_sharing_strategy("file_system")`.
 
 # Local Constraints & Gotchas
 
-- **Letterbox Invariants & Level Masks**: Images are transformed into a square $384 \times 384$ canvas with aspect-preserving letterboxing (`sample.transform = (scale, off_x, off_y)`). When running inference, `level_masks` sampled from `sample.valid_mask` via `point_validity_from_pixel_mask` MUST be passed to `InferenceDecoder` so padding cells are masked to $-\infty$. When projecting boxes back to original image space, coordinates must be un-letterboxed: `boxes[:, 0::2] = ((boxes[:, 0::2] - off_x) / scale).clamp(0, orig_w)` and `boxes[:, 1::2] = ((boxes[:, 1::2] - off_y) / scale).clamp(0, orig_h)`. Never multiply letterboxed coordinates by crude aspect ratios.
-- Stride-8 (P3) models drop small objects (<16px); student models must maintain P2 (stride 4).
-- Non-finite loss values trigger immediate training abort via fail-fast `torch.isfinite` check before backward pass.
-- Suppressed SAM subparts must remain in ignore masks; treating them as background penalties penalizes detector predictions of whole objects.
-- `sample.original_size` is `(height, width)`. When calculating scale and unletterboxing, unpack as `orig_h, orig_w`.
-- Image files are read from dataset storage at `/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/`.
-- Training pipelines: `scripts/train_student_pilot.py` (Stage 1), `scripts/finetune_student_gt.py` (Stage 2 HBB & Quad), and comparative visualizers `scripts/visualize_student_comparison.py` (Master 4-model dashboard), `scripts/visualize_v1_vs_v2_comparison.py` (v1 vs v2 parity dashboard), & `scripts/visualize_student_validation.py`.
+- **Mandatory FP32 Geometry & Loss under AMP**: Canvas `384^2 = 147,456 > 65,504` (FP16 max); promote quad geometry, `_quality_focal_loss`, `OpenVocabularySigmoidLoss` logits, and `train_proposal_decoder` to FP32.
+- **Quad Validity Before Border Clamping**: Filter `quad_validity` on unclamped vertices prior to `.clamp(0, W)`.
+- **Coordinate-Free Semantic Heads & BatchNorm Integrity**: Never feed normalized box center coords `[xc/W, yc/H]` into semantic heads; restrict WiSE-FT interpolation to conv/linear or semantic heads so BatchNorm stats stay exact.
+- **Flip & Padding Invariants**: Pass `horizontal_flip` to `canvas_box_to_native`; slice `category_names` alongside `retained` geometric masks; apply `point_validity_from_pixel_mask(sample.valid_mask, ...)` in decoders so letterbox padding anchors are masked to `-inf`.
+- **Synthetic vs. Empirical Centroid Bias**: Keep the `raw <= 0.05` guard inside `compute_prompt_bias` so empirical SigLIP centroids (`<= 0.02`) are damped (`0.85 * raw.clamp(max=0.016)`) while high-dot synthetic test centroids (`0.45`) still subtract in full.
+- **Dashboard Visibility Gating**: `_build_sota_preds` caps rendered predictions at `<= 25/image` using joint score `sqrt(s_obj * p_cls)` after `filter_semantic_detections`.
