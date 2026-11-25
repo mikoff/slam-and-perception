@@ -2,7 +2,7 @@
 
 Edge-targeted **MobileNetV4 + P2LitePAN** open-vocabulary object detectors (Horizontal Bounding Box & Oriented Quadrilateral) distilled from **OWLv2-Large** (`google/owlv2-large-patch14-ensemble`) into a `384x384`, `7.4M–10.2M`-parameter runtime with zero runtime text encoder.
 
-For architectural contracts and empirical history, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+For concise active runtime contracts, see [`ARCHITECTURE.md`](ARCHITECTURE.md). For all engineering decisions (`D1`–`D9`), the end-to-end development pipeline, and compute/SOTA analysis, see [`docs/owlv2_pipeline_and_decisions.md`](docs/owlv2_pipeline_and_decisions.md) and [`docs/open_vocabulary_embedding_guide.md`](docs/open_vocabulary_embedding_guide.md).
 
 ---
 
@@ -164,4 +164,4 @@ uv run ruff check student_detector/ scripts/ tests/
 uv run pytest
 ```
 
-Architecture & historical docs: [`docs/code_audit.md`](docs/code_audit.md), [`docs/open_vocabulary_embedding_guide.md`](docs/open_vocabulary_embedding_guide.md), [`docs/visual_inference_system_audit.md`](docs/visual_inference_system_audit.md), [`docs/history/phase2.md`](docs/history/phase2.md), [`docs/history/phase3.md`](docs/history/phase3.md), [`docs/history/proposal_detector_roadmap.md`](docs/history/proposal_detector_roadmap.md), and [`docs/history/model_inspection.md`](docs/history/model_inspection.md).
+Architecture & historical docs: [`ARCHITECTURE.md`](ARCHITECTURE.md), [`docs/owlv2_pipeline_and_decisions.md`](docs/owlv2_pipeline_and_decisions.md), [`docs/open_vocabulary_embedding_guide.md`](docs/open_vocabulary_embedding_guide.md), [`docs/code_audit.md`](docs/code_audit.md), [`docs/visual_inference_system_audit.md`](docs/visual_inference_system_audit.md), [`docs/history/phase2.md`](docs/history/phase2.md), [`docs/history/phase3.md`](docs/history/phase3.md), [`docs/history/proposal_detector_roadmap.md`](docs/history/proposal_detector_roadmap.md), and [`docs/history/model_inspection.md`](docs/history/model_inspection.md).
