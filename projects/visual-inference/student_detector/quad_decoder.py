@@ -107,9 +107,15 @@ class QuadInferenceDecoder:
         part_scale_ratio: float = 0.4,
         part_max_iou: float = 0.65,
         score_threshold: float = 0.05,
+        small_box_min_side: float = 16.0,
+        small_box_score_power: float = 1.0,
     ) -> None:
         if pre_nms_top_k < max_proposals:
             raise ValueError("pre_nms_top_k must be at least max_proposals")
+        if small_box_min_side < 0.0:
+            raise ValueError("small_box_min_side must be >= 0.0")
+        if small_box_score_power <= 0.0:
+            raise ValueError("small_box_score_power must be > 0.0")
         if nms_mode not in {
             "hard",
             "soft",
@@ -131,6 +137,8 @@ class QuadInferenceDecoder:
         self.part_scale_ratio = part_scale_ratio
         self.part_max_iou = part_max_iou
         self.score_threshold = score_threshold
+        self.small_box_min_side = float(small_box_min_side)
+        self.small_box_score_power = float(small_box_score_power)
 
     def __call__(
         self,
@@ -175,29 +183,82 @@ class QuadInferenceDecoder:
 
         detections: list[QuadDetection] = []
         for batch in range(scores.shape[0]):
-            finite = torch.isfinite(scores[batch])
-            count = min(self.pre_nms_top_k, int(finite.sum().item()))
-            if count == 0:
-                detections.append(
-                    QuadDetection(
-                        decoded_all.new_empty((0, 4, 2)),
-                        scores.new_empty((0,)),
-                        decoded_all.new_empty((0, 4, 2)),
-                        scores.new_empty((0,)),
-                        levels=torch.empty(
-                            (0,), dtype=torch.int64, device=scores.device
-                        ),
-                        location_indices=torch.empty(
-                            (0,), dtype=torch.int64, device=scores.device
-                        ),
+            if self.small_box_score_power == 1.0:
+                finite = torch.isfinite(scores[batch])
+                count = min(self.pre_nms_top_k, int(finite.sum().item()))
+                if count == 0:
+                    detections.append(
+                        QuadDetection(
+                            decoded_all.new_empty((0, 4, 2)),
+                            scores.new_empty((0,)),
+                            decoded_all.new_empty((0, 4, 2)),
+                            scores.new_empty((0,)),
+                            levels=torch.empty(
+                                (0,), dtype=torch.int64, device=scores.device
+                            ),
+                            location_indices=torch.empty(
+                                (0,), dtype=torch.int64, device=scores.device
+                            ),
+                            flat_indices=torch.empty(
+                                (0,), dtype=torch.int64, device=scores.device
+                            ),
+                        )
                     )
+                    continue
+                selected_indices = torch.argsort(
+                    scores[batch], descending=True, stable=True
+                )[:count]
+                selected_scores = scores[batch, selected_indices]
+                decoded = decoded_all[batch, selected_indices]
+            else:
+                row_scores = scores[batch]
+                finite = torch.isfinite(row_scores)
+                if self.small_box_score_power > 1.0 and self.score_threshold > 0.0:
+                    cand_indices = torch.where(
+                        finite & (row_scores >= self.score_threshold)
+                    )[0]
+                else:
+                    cand_indices = torch.where(finite)[0]
+                count = min(self.pre_nms_top_k, int(cand_indices.numel()))
+                if count == 0:
+                    detections.append(
+                        QuadDetection(
+                            decoded_all.new_empty((0, 4, 2)),
+                            scores.new_empty((0,)),
+                            decoded_all.new_empty((0, 4, 2)),
+                            scores.new_empty((0,)),
+                            levels=torch.empty(
+                                (0,), dtype=torch.int64, device=scores.device
+                            ),
+                            location_indices=torch.empty(
+                                (0,), dtype=torch.int64, device=scores.device
+                            ),
+                            flat_indices=torch.empty(
+                                (0,), dtype=torch.int64, device=scores.device
+                            ),
+                        )
+                    )
+                    continue
+                cand_quads = decoded_all[batch, cand_indices]
+                cx = cand_quads[..., 0].clamp(min=0, max=width)
+                cy = cand_quads[..., 1].clamp(min=0, max=height)
+                cand_min_side = torch.minimum(
+                    (cx.amax(dim=1) - cx.amin(dim=1)).clamp(min=0.0),
+                    (cy.amax(dim=1) - cy.amin(dim=1)).clamp(min=0.0),
                 )
-                continue
-            selected_indices = torch.argsort(
-                scores[batch], descending=True, stable=True
-            )[:count]
-            selected_scores = scores[batch, selected_indices]
-            decoded = decoded_all[batch, selected_indices]
+                raw_cand_scores = row_scores[cand_indices]
+                cand_scores = torch.where(
+                    cand_min_side < self.small_box_min_side,
+                    raw_cand_scores.clamp(min=0.0).pow(self.small_box_score_power),
+                    raw_cand_scores,
+                )
+                top_local = torch.argsort(cand_scores, descending=True, stable=True)[
+                    :count
+                ]
+                selected_indices = cand_indices[top_local]
+                selected_scores = cand_scores[top_local]
+                # Keep decoded unclamped here so quad_validity(safe_raw) runs pre-clamp.
+                decoded = decoded_all[batch, selected_indices]
             selected_levels = point_levels[selected_indices]
             selected_locations = point_locations[selected_indices]
             finite_coords = torch.isfinite(decoded).all(dim=(1, 2))

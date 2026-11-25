@@ -197,3 +197,26 @@ def test_corner_loss_preserves_horizontal_gradient_on_tall_vertical_quad() -> No
         target + torch.stack([torch.zeros(8), y_shift]), target, positive
     )
     assert loss_x > loss_y
+
+
+def test_quad_target_builder_respects_max_one_to_one_interior_area_frac() -> None:
+    from student_detector.task_aligned_assigner import QuadTaskAlignedAssigner
+
+    shapes = ((8, 8), (4, 4), (2, 2))
+    # 40x40 quad covers 1600 / 4096 = 39.1% of the 64x64 image.
+    sample = SimpleNamespace(
+        image=torch.zeros(3, 64, 64),
+        quads=torch.stack((quad_from_bbox([12.0, 12.0, 52.0, 52.0]),)),
+        ignore_quads=torch.empty((0, 4, 2)),
+        trusted_background_quads=torch.empty((0, 4, 2)),
+        valid_mask=torch.ones(64, 64, dtype=torch.bool),
+    )
+    assigner = QuadTaskAlignedAssigner(strides=(8, 16, 32), assignment_mode="one_to_one")
+    default_targets = QuadTargetBuilder(assigner)(
+        [sample], shapes, device=torch.device("cpu")
+    )
+    capped_targets = QuadTargetBuilder(
+        assigner, max_one_to_one_interior_area_frac=0.20
+    )([sample], shapes, device=torch.device("cpu"))
+    assert default_targets.trusted_background_mask.any()
+    assert not capped_targets.trusted_background_mask.any()

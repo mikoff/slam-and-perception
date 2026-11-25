@@ -44,6 +44,7 @@ from student_detector.human_gt_data import (
 )
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.ontology import (
+    CLOSED_MERGE_MAP,
     DISTRACTOR_CATEGORIES,
     OPEN_VOCAB_CATEGORIES,
     ZERO_SHOT_EVAL_CATEGORIES,
@@ -238,6 +239,10 @@ def evaluate_sota_split(
     device: torch.device,
     batch_size: int = 16,
     workers: int = 4,
+    decoder_top_k: int = 500,
+    decoder_max_detections: int = 100,
+    small_box_min_side: float = 16.0,
+    small_box_score_power: float = 1.0,
 ) -> dict[str, Any]:
     """Evaluate SOTA Detector + Option A, Option B, and Option A+B Fusion on one split."""
     strides = (4, 8, 16, 32)
@@ -254,30 +259,41 @@ def evaluate_sota_split(
     if geometry == "hbb":
         decoder: Any = InferenceDecoder(
             strides=strides,
-            top_k=500,
+            top_k=decoder_top_k,
             nms_iou_threshold=0.50,
-            max_detections=100,
+            max_detections=decoder_max_detections,
             score_mode="objectness",
             nms_mode="containment_aware",
             score_threshold=0.01,
+            small_box_min_side=small_box_min_side,
+            small_box_score_power=small_box_score_power,
         )
     else:
         decoder = QuadInferenceDecoder(
             strides=strides,
-            pre_nms_top_k=500,
+            pre_nms_top_k=decoder_top_k,
             nms_iou_threshold=0.50,
-            max_proposals=100,
+            max_proposals=decoder_max_detections,
             centerness_alpha=0.0,
             nms_mode="containment_aware",
             score_threshold=0.01,
+            small_box_min_side=small_box_min_side,
+            small_box_score_power=small_box_score_power,
         )
 
-    cat_to_idx = {cat: idx for idx, cat in enumerate(OPEN_VOCAB_CATEGORIES)}
+    seen_categories = tuple(vocab_37.categories)
+    cat_to_idx = {cat: idx for idx, cat in enumerate(seen_categories)}
+    merge_map = (
+        CLOSED_MERGE_MAP
+        if ("street_light" not in cat_to_idx and "pole" in cat_to_idx)
+        else {}
+    )
     zs_to_41 = {
-        cat: len(OPEN_VOCAB_CATEGORIES) + i
-        for i, cat in enumerate(ZERO_SHOT_EVAL_CATEGORIES)
+        cat: vocab_41.categories.index(cat)
+        for cat in ZERO_SHOT_EVAL_CATEGORIES
+        if cat in vocab_41.categories
     }
-    zs_start = len(OPEN_VOCAB_CATEGORIES)
+    zs_start = min(zs_to_41.values()) if zs_to_41 else len(vocab_41.categories)
     text_37 = vocab_37.embeddings.to(device)
     text_41 = vocab_41.embeddings.to(device)
 
@@ -316,8 +332,9 @@ def evaluate_sota_split(
     signboard_total = 0
     signboard_to_win_door = {v: 0 for v in variants}
     win_door_indices = {
-        cat_to_idx["window"],
-        cat_to_idx["door"],
+        cat_to_idx[name]
+        for name in ("window", "door")
+        if name in cat_to_idx
     }
 
     clutter_rejected = {v: 0 for v in variants}
@@ -406,10 +423,10 @@ def evaluate_sota_split(
                 z_b_gt = z_b_oracle_all[oracle_cursor : oracle_cursor + n_gt]
                 oracle_cursor += n_gt
 
-                # Canonical GT class mapping
+                # Canonical GT class mapping (collapsing merged classes like street_light->pole on Core-27 preset)
                 gt_canon = [
-                    map_to_canonical(c)
-                    for c in sample.category_names
+                    merge_map.get(c, c) if c is not None else None
+                    for c in (map_to_canonical(raw_c) for raw_c in sample.category_names)
                 ]
                 gt_cls_idx = [
                     cat_to_idx[c] if c in cat_to_idx else -1 for c in gt_canon
@@ -604,7 +621,7 @@ def evaluate_sota_split(
                         det.boxes,
                         det.scores,
                         p_mat,
-                        OPEN_VOCAB_CATEGORIES,
+                        seen_categories,
                         quads=det.quads if geometry == "quad" else None,
                     )
                     if v_name == "option_ab" and keep_ov.numel() > 1:
@@ -620,8 +637,8 @@ def evaluate_sota_split(
                         active_sem = keep_ov[(joint_scores[keep_ov] >= 0.20) & (top_prob[keep_ov] >= 0.20)]
                         for idx_act in active_sem.tolist():
                             act_cls = int(top_cls[idx_act].item())
-                            if 0 <= act_cls < len(OPEN_VOCAB_CATEGORIES):
-                                predicted_cat_counts_020[v_name][OPEN_VOCAB_CATEGORIES[act_cls]] += 1
+                            if 0 <= act_cls < len(seen_categories):
+                                predicted_cat_counts_020[v_name][seen_categories[act_cls]] += 1
                     if keep_ov.numel() > 0:
                         keep_ov = keep_ov[joint_scores[keep_ov] >= 0.02]
                         if keep_ov.numel() > 1:
@@ -663,7 +680,7 @@ def evaluate_sota_split(
         ov_map50[v_name] = sum(aps) / max(len(aps), 1)
 
     per_class_report: dict[str, Any] = {}
-    for c_name in OPEN_VOCAB_CATEGORIES:
+    for c_name in seen_categories:
         tot_c = per_class_total[c_name]
         pred_ab = predicted_cat_counts_020["option_ab"].get(c_name, 0)
         if tot_c > 0 or pred_ab > 0:
@@ -676,7 +693,7 @@ def evaluate_sota_split(
             }
     zero_gt_detected = {
         c_name: predicted_cat_counts_020["option_ab"].get(c_name, 0)
-        for c_name in OPEN_VOCAB_CATEGORIES
+        for c_name in seen_categories
         if per_class_total[c_name] == 0 and predicted_cat_counts_020["option_ab"].get(c_name, 0) > 0
     }
 
@@ -1149,6 +1166,9 @@ def profile_edge_latency_and_params(
     geometry: str,
     legacy_region_head_ckpt: Path | None = None,
     input_size: int = 384,
+    decoder_top_k: int = 500,
+    small_box_min_side: float = 16.0,
+    small_box_score_power: float = 1.0,
 ) -> dict[str, Any]:
     """Measure parameter counts, 4-thread CPU latency (Pi 5 proxy), and CUDA latency."""
     strides = (4, 8, 16, 32)
@@ -1171,22 +1191,26 @@ def profile_edge_latency_and_params(
     if geometry == "hbb":
         decoder: Any = InferenceDecoder(
             strides=strides,
-            top_k=500,
+            top_k=decoder_top_k,
             nms_iou_threshold=0.50,
             max_detections=30,
             score_mode="objectness",
             nms_mode="containment_aware",
             score_threshold=0.05,
+            small_box_min_side=small_box_min_side,
+            small_box_score_power=small_box_score_power,
         )
     else:
         decoder = QuadInferenceDecoder(
             strides=strides,
-            pre_nms_top_k=500,
+            pre_nms_top_k=decoder_top_k,
             nms_iou_threshold=0.50,
             max_proposals=30,
             centerness_alpha=0.0,
             nms_mode="containment_aware",
             score_threshold=0.05,
+            small_box_min_side=small_box_min_side,
+            small_box_score_power=small_box_score_power,
         )
 
     def _time_on_device(dev_str: str, warmup: int, iters: int) -> dict[str, float]:
@@ -1356,6 +1380,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--only-hbb", action="store_true", help="Benchmark HBB only and skip Quad.")
+    parser.add_argument("--only-quad", action="store_true", help="Benchmark Quad only and skip HBB.")
+    parser.add_argument(
+        "--skip-legacy",
+        action="store_true",
+        help="Skip evaluating legacy v3/v4 region heads.",
+    )
+    parser.add_argument("--small-box-score-power", type=float, default=1.0)
+    parser.add_argument("--small-box-min-side", type=float, default=16.0)
+    parser.add_argument("--decoder-top-k", type=int, default=500)
+    parser.add_argument("--decoder-max-detections", type=int, default=100)
     parser.add_argument(
         "--device",
         type=str,
@@ -1425,12 +1460,25 @@ def main() -> None:
 
     report: dict[str, Any] = {
         "device": str(device),
-        "seen_categories_count": len(OPEN_VOCAB_CATEGORIES),
+        "seen_categories_count": len(vocab_37.categories),
         "zero_shot_unseen_categories": list(ZERO_SHOT_EVAL_CATEGORIES),
+        "decoder_config": {
+            "top_k": args.decoder_top_k,
+            "max_detections": args.decoder_max_detections,
+            "small_box_min_side": args.small_box_min_side,
+            "small_box_score_power": args.small_box_score_power,
+        },
         "geometries": {},
     }
 
-    sota_ckpts = {"hbb": args.hbb_sota_ckpt, "quad": args.quad_sota_ckpt}
+    if args.only_hbb and args.only_quad:
+        raise ValueError("Cannot pass both --only-hbb and --only-quad")
+    if args.only_hbb:
+        sota_ckpts = {"hbb": args.hbb_sota_ckpt}
+    elif args.only_quad:
+        sota_ckpts = {"quad": args.quad_sota_ckpt}
+    else:
+        sota_ckpts = {"hbb": args.hbb_sota_ckpt, "quad": args.quad_sota_ckpt}
 
     for geom, ckpt_path in sota_ckpts.items():
         if not ckpt_path.exists():
@@ -1458,6 +1506,9 @@ def main() -> None:
                 vocab_37=vocab_37,
                 geometry=geom,
                 legacy_region_head_ckpt=legacy_configs[geom]["v4_head"],
+                decoder_top_k=args.decoder_top_k,
+                small_box_min_side=args.small_box_min_side,
+                small_box_score_power=args.small_box_score_power,
             ),
             "splits": {},
         }
@@ -1476,11 +1527,15 @@ def main() -> None:
                 device=device,
                 batch_size=args.batch_size,
                 workers=args.workers,
+                decoder_top_k=args.decoder_top_k,
+                decoder_max_detections=args.decoder_max_detections,
+                small_box_min_side=args.small_box_min_side,
+                small_box_score_power=args.small_box_score_power,
             )
             split_entry: dict[str, Any] = {"sota": sota_m, "legacy": {}}
 
             leg_cfg = legacy_configs[geom]
-            if leg_cfg["det_ckpt"].exists():
+            if not args.skip_legacy and leg_cfg["det_ckpt"].exists():
                 for tag in ("v3", "v4"):
                     h_path = leg_cfg[f"{tag}_head"]
                     v_path = leg_cfg[f"{tag}_vocab"]

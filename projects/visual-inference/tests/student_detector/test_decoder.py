@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+
+import pytest
 import torch
 
 from student_detector.decoder import InferenceDecoder, class_agnostic_nms
@@ -186,3 +189,56 @@ def test_nms_part_aware_configurable_part_max_iou() -> None:
         part_max_iou=0.80,
     )
     assert keep_relaxed.tolist() == [0, 1]
+
+
+def test_decoder_small_box_score_decalibration() -> None:
+    with pytest.raises(ValueError, match="small_box_min_side"):
+        InferenceDecoder(small_box_min_side=-1.0)
+    with pytest.raises(ValueError, match="small_box_score_power"):
+        InferenceDecoder(small_box_score_power=0.0)
+
+    # Single stride=8 grid (4x4 over 32x32):
+    # - cell (0, 0) center=(4,4), ltrb=(4,4,4,4) -> 8x8px (min_side < 16), obj=0.60
+    # - cell (2, 2) center=(20,20), ltrb=(10,10,10,10) -> 20x20px (min_side >= 16), obj=0.52
+    obj = torch.full((1, 1, 4, 4), -20.0)
+    obj[0, 0, 0, 0] = math.log(0.60 / 0.40)
+    obj[0, 0, 2, 2] = math.log(0.52 / 0.48)
+    cen = torch.zeros((1, 1, 4, 4))
+    dist = torch.full((1, 4, 4, 4), 4.0)
+    dist[0, :, 2, 2] = 10.0
+    out = DetectorOutput((obj,), (dist,), (cen,))
+
+    raw_res = InferenceDecoder(
+        strides=(8,),
+        top_k=1,
+        max_detections=1,
+        score_mode="objectness",
+        small_box_score_power=1.0,
+    )(out, (32, 32))[0]
+    assert raw_res.boxes.shape == (1, 4)
+    assert torch.allclose(raw_res.scores[0], torch.tensor(0.60), atol=1e-4)
+    assert float(raw_res.boxes[0, 2] - raw_res.boxes[0, 0]) < 16.0
+
+    decal_top1 = InferenceDecoder(
+        strides=(8,),
+        top_k=1,
+        max_detections=1,
+        score_mode="objectness",
+        small_box_min_side=16.0,
+        small_box_score_power=1.5,
+    )(out, (32, 32))[0]
+    assert decal_top1.boxes.shape == (1, 4)
+    assert torch.allclose(decal_top1.scores[0], torch.tensor(0.52), atol=1e-4)
+    assert float(decal_top1.boxes[0, 2] - decal_top1.boxes[0, 0]) >= 16.0
+
+    decal_both = InferenceDecoder(
+        strides=(8,),
+        top_k=5,
+        max_detections=5,
+        score_mode="objectness",
+        small_box_min_side=16.0,
+        small_box_score_power=1.5,
+    )(out, (32, 32))[0]
+    assert decal_both.boxes.shape == (2, 4)
+    assert torch.allclose(decal_both.scores[0], torch.tensor(0.52), atol=1e-4)
+    assert torch.allclose(decal_both.scores[1], torch.tensor(0.60**1.5), atol=1e-4)

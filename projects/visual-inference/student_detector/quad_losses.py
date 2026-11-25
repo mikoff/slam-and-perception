@@ -315,18 +315,7 @@ class QuadProposalLoss(nn.Module):
                         )
                         geometry_quality = torch.maximum(exact_iou, 0.5 * proxy_quality)
                     else:
-                        t_edges = torch.linalg.vector_norm(
-                            torch.roll(selected_target.float(), -1, dims=1)
-                            - selected_target.float(),
-                            dim=-1,
-                        )
-                        t_min_side = t_edges.amin(dim=-1)
-                        is_small_or_slender = (t_min_side < 16.0) & (exact_iou > 0.0)
-                        geometry_quality = torch.where(
-                            is_small_or_slender,
-                            torch.sqrt(exact_iou.clamp(min=0.0)),
-                            exact_iou,
-                        )
+                        geometry_quality = exact_iou
                 else:
                     geometry_quality = self._corner_quality_proxy(
                         selected_pred.float(), selected_target.float()

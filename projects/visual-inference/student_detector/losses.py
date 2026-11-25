@@ -299,19 +299,8 @@ class ProposalLoss(nn.Module):
             .reshape_as(targets.objectness)
             .detach()
         )
-        target_w = (flat_target_boxes[:, 2] - flat_target_boxes[:, 0]).clamp(min=0.0)
-        target_h = (flat_target_boxes[:, 3] - flat_target_boxes[:, 1]).clamp(min=0.0)
-        target_min_side = torch.minimum(target_w, target_h).reshape_as(
-            targets.objectness
-        )
-        is_small_or_slender = (target_min_side < 16.0) & (raw_iou > 0.0)
-        calibrated_iou = torch.where(
-            is_small_or_slender,
-            torch.sqrt(raw_iou.clamp(min=0.0)),
-            raw_iou,
-        )
         quality_targets = (
-            calibrated_iou.to(dtype=targets.objectness.dtype) * positive_float
+            raw_iou.clamp(min=0.0).to(dtype=targets.objectness.dtype) * positive_float
         )
 
         if self.objectness_loss == "quality_focal":

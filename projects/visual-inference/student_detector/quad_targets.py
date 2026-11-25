@@ -112,12 +112,16 @@ class QuadTargetBuilder:
         *,
         weak_negative_weight: float = 0.0,
         ignore_unmatched_gt_interior: bool = False,
+        max_one_to_one_interior_area_frac: float = 0.90,
     ) -> None:
         if not 0 <= weak_negative_weight <= 1:
             raise ValueError("weak_negative_weight must be in [0, 1]")
+        if not 0.0 < max_one_to_one_interior_area_frac <= 1.0:
+            raise ValueError("max_one_to_one_interior_area_frac must be in (0, 1]")
         self.assigner = assigner
         self.weak_negative_weight = weak_negative_weight
         self.ignore_unmatched_gt_interior = ignore_unmatched_gt_interior
+        self.max_one_to_one_interior_area_frac = float(max_one_to_one_interior_area_frac)
         self._grid_cache: dict[
             tuple[tuple[tuple[int, int], ...], torch.device],
             tuple[Tensor, Sequence[slice]],
@@ -212,7 +216,9 @@ class QuadTargetBuilder:
                         + (x[:, 3] * y[:, 0] - x[:, 0] * y[:, 3])
                     ).abs()
                 )
-                non_giant_quads = quads[shoelace < 0.90 * img_area]
+                non_giant_quads = quads[
+                    shoelace < self.max_one_to_one_interior_area_frac * img_area
+                ]
             if self.ignore_unmatched_gt_interior and non_giant_quads.numel() > 0:
                 ignored = ignored | (
                     points_inside_quads(points, non_giant_quads)

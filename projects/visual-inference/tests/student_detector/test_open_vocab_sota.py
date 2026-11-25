@@ -10,7 +10,7 @@ from student_detector.backbone import StubP2Backbone
 from student_detector.config import AugmentationConfig
 from student_detector.data import ProposalSample, ProposalTransform
 from student_detector.decoder import InferenceDecoder, class_agnostic_nms
-from student_detector.head import QuadDetectorOutput
+from student_detector.head import DetectorOutput, QuadDetectorOutput
 from student_detector.losses import ProposalLoss
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.ontology import (
@@ -710,6 +710,97 @@ def test_visual_centroid_prompt_debiasing_and_loss() -> None:
     assert torch.isfinite(loss_out.total)
     loss_out.total.backward()
     assert vis_train.grad is not None and torch.isfinite(vis_train.grad).all()
+
+
+def test_quality_focal_uses_raw_iou_for_small_boxes_without_sqrt_boost() -> None:
+    """Verify <16px targets use raw IoU (not sqrt(IoU)) in both HBB and Quad quality focal loss."""
+    import math
+    from student_detector.targets import TrainingTargets
+    from student_detector.quad_targets import QuadTrainingTargets
+
+    # Stride=4 on a 16x16 map -> center at cell (4, 4) is (18.0, 18.0).
+    # Target box: 8x8 -> [14.0, 14.0, 22.0, 22.0] (area = 64).
+    # Predicted box shifted +4.8px right: [18.8, 14.0, 26.8, 22.0] (overlap 3.2*8=25.6, union 102.4 -> exact IoU=0.25).
+    # If sqrt(IoU) were active on <16px targets, QFL target would be 0.50 instead of 0.25.
+    h, w = 16, 16
+    pos_mask = torch.zeros((1, h * w), dtype=torch.bool)
+    cell_idx = 4 * w + 4
+    pos_mask[0, cell_idx] = True
+    empty_mask = torch.zeros_like(pos_mask)
+    ltrb_tgt = torch.zeros((1, h * w, 4), dtype=torch.float32)
+    ltrb_tgt[0, cell_idx] = torch.tensor([1.0, 1.0, 1.0, 1.0])
+    ltrb_pred = torch.zeros((1, 4, h, w), dtype=torch.float32)
+    # Predicted box [18.8, 14.0, 26.8, 22.0]: l=-0.8px (-0.2*4), t=4px (1.0*4), r=8.8px (2.2*4), b=4px (1.0*4)
+    ltrb_pred[0, :, 4, 4] = torch.tensor([-0.2, 1.0, 2.2, 1.0])
+
+    hbb_targets = TrainingTargets(
+        objectness=pos_mask.float(),
+        objectness_mask=pos_mask,
+        objectness_weights=torch.ones_like(pos_mask, dtype=torch.float32),
+        box_distances=ltrb_tgt,
+        centerness=pos_mask.float(),
+        positive_mask=pos_mask,
+        trusted_background_mask=empty_mask,
+        hard_negative_focus_mask=empty_mask,
+        weak_background_mask=empty_mask,
+        ignore_mask=empty_mask,
+        valid_point_masks=(torch.ones((1, h, w), dtype=torch.bool),),
+        valid_gt_count=torch.tensor([1]),
+        fallback_count=torch.tensor([0]),
+        unrepresentable_count=torch.tensor([0]),
+        positive_counts_per_level=torch.tensor([1]),
+        source_datasets=("nuimages",),
+        domains=("automotive",),
+        matched_gt_indices=torch.full((1, h * w), -1, dtype=torch.long),
+    )
+    hbb_crit = ProposalLoss(strides=(4,), objectness_loss="quality_focal", use_background_floor=False)
+
+    def _hbb_obj_loss(prob: float) -> float:
+        obj = torch.zeros((1, 1, h, w), dtype=torch.float32)
+        obj[0, 0, 4, 4] = math.log(prob / (1.0 - prob))
+        out = DetectorOutput(
+            objectness=(obj,),
+            box_distances=(ltrb_pred,),
+            centerness=(torch.zeros((1, 1, h, w)),),
+        )
+        return float(hbb_crit(out, hbb_targets).objectness.item())
+
+    assert _hbb_obj_loss(0.25) < _hbb_obj_loss(0.50)
+
+    # Same verification for QuadProposalLoss (quality_target_mode="iou", use_proxy_quality_floor=False)
+    corner_tgt = torch.zeros((1, h * w, 8), dtype=torch.float32)
+    corner_tgt[0, cell_idx] = torch.tensor([-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0])
+    corner_pred = torch.zeros((1, 8, h, w), dtype=torch.float32)
+    corner_pred[0, :, 4, 4] = torch.tensor([0.2, -1.0, 2.2, -1.0, 2.2, 1.0, 0.2, 1.0])
+    quad_targets = QuadTrainingTargets(
+        quality=pos_mask.float(),
+        corner_offsets=corner_tgt,
+        positive_mask=pos_mask,
+        trusted_background_mask=empty_mask,
+        weak_background_mask=empty_mask,
+        weak_negative_weight=0.25,
+        valid_point_masks=(torch.ones((1, h, w), dtype=torch.bool),),
+        valid_gt_count=torch.tensor([1]),
+        fallback_count=torch.tensor([0]),
+        unrepresentable_count=torch.tensor([0]),
+        positive_counts_per_level=torch.tensor([1]),
+        matched_gt_indices=torch.full((1, h * w), -1, dtype=torch.long),
+    )
+    quad_crit = QuadProposalLoss(
+        strides=(4,),
+        quality_target_mode="iou",
+        geometry_quality_target="exact_iou",
+        use_proxy_quality_floor=False,
+    )
+
+    def _quad_qual_loss(prob: float) -> float:
+        q = torch.full((1, 1, h, w), -20.0, dtype=torch.float32)
+        q[0, 0, 4, 4] = math.log(prob / (1.0 - prob))
+        out = QuadDetectorOutput(quality=(q,), corner_offsets=(corner_pred,))
+        return float(quad_crit(out, quad_targets).quality.item())
+
+    assert _quad_qual_loss(0.25) < _quad_qual_loss(0.50)
+
 
 
 

@@ -33,14 +33,27 @@ class _ContrastiveClassifierMixin(nn.Module):
 
     def _init_contrastive_scale(
         self,
-        init_scale: float = 80.0,
-        prior_prob: float = 0.008,
+        init_scale: float | None = None,
+        prior_prob: float | None = None,
+        teacher_space: str = "siglip",
+        init_bias: float | None = None,
     ) -> None:
+        self.teacher_space = str(teacher_space)
+        if init_scale is None:
+            init_scale = 20.0 if self.teacher_space == "owlv2" else 80.0
+        if init_bias is not None:
+            bias_val = float(init_bias)
+        elif prior_prob is not None:
+            bias_val = _default_logit_bias(prior_prob)
+        elif self.teacher_space == "owlv2":
+            bias_val = -6.5
+        else:
+            bias_val = _default_logit_bias(0.008)
         self.log_scale = nn.Parameter(
             torch.tensor(math.log(init_scale), dtype=torch.float32)
         )
         self.logit_bias = nn.Parameter(
-            torch.tensor(_default_logit_bias(prior_prob), dtype=torch.float32)
+            torch.tensor(bias_val, dtype=torch.float32)
         )
         self.register_buffer("distractor_embeddings", None, persistent=True)
         self.register_buffer("visual_centroid", None, persistent=True)
@@ -70,6 +83,8 @@ class _ContrastiveClassifierMixin(nn.Module):
 
     def compute_prompt_bias(self, txt_f: Tensor) -> Tensor:
         """Compute damped clamped positive baseline cosine offset [1, C] from visual_centroid."""
+        if getattr(self, "teacher_space", "siglip") == "owlv2":
+            return txt_f.new_zeros((1, txt_f.shape[0]))
         c_vec: Tensor | None = getattr(self, "visual_centroid", None)
         if c_vec is None or c_vec.numel() == 0:
             return txt_f.new_zeros((1, txt_f.shape[0]))
@@ -145,13 +160,30 @@ class _ContrastiveClassifierMixin(nn.Module):
             text_embeddings.to(device=vis_f.device, dtype=torch.float32), p=2.0, dim=-1
         )
         scale = self.effective_scale()
+        is_owlv2 = getattr(self, "teacher_space", "siglip") == "owlv2"
+        if is_owlv2:
+            cos_fg = vis_f @ txt_f.t()
+            logits = scale * cos_fg + self.logit_bias.float()
+            if apply_calibration:
+                dist_emb: Tensor | None = getattr(self, "distractor_embeddings", None)
+                if dist_emb is not None and dist_emb.numel() > 0:
+                    dist_f = F.normalize(
+                        dist_emb.to(device=vis_f.device, dtype=torch.float32), p=2.0, dim=-1
+                    )
+                    max_dist_cos = (vis_f @ dist_f.t()).max(dim=-1, keepdim=True).values
+                    logits = logits - 1.5 * scale * F.relu(max_dist_cos - cos_fg + 0.02)
+                if cos_fg.shape[-1] > 1:
+                    cos_top1 = cos_fg.max(dim=-1, keepdim=True).values
+                    logits = logits - 0.25 * scale * F.relu(cos_top1 - cos_fg)
+            return logits, torch.sigmoid(logits)
+
         cos_fg = (vis_f @ txt_f.t()) - self.compute_prompt_bias(txt_f)
         if apply_calibration and cos_fg.shape[-1] > 2:
             med = cos_fg.median(dim=-1, keepdim=True).values
             cos_fg = cos_fg - torch.where(med < 0.0, 0.75 * med, 0.36 * med)
         logits = scale * cos_fg + self.logit_bias.float()
         if apply_calibration:
-            dist_emb: Tensor | None = getattr(self, "distractor_embeddings", None)
+            dist_emb = getattr(self, "distractor_embeddings", None)
             if dist_emb is not None and dist_emb.numel() > 0:
                 dist_f = F.normalize(
                     dist_emb.to(device=vis_f.device, dtype=torch.float32), p=2.0, dim=-1
@@ -181,8 +213,9 @@ class DenseAnchorSemanticHead(_ContrastiveClassifierMixin):
         in_channels: int = 128,
         hidden_channels: int = 128,
         embedding_dim: int = 768,
-        init_scale: float = 80.0,
-        prior_prob: float = 0.008,
+        init_scale: float | None = None,
+        prior_prob: float | None = None,
+        teacher_space: str = "siglip",
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -193,7 +226,11 @@ class DenseAnchorSemanticHead(_ContrastiveClassifierMixin):
             DepthwiseSeparableConv(hidden_channels, hidden_channels),
         )
         self.proj = nn.Conv2d(hidden_channels, embedding_dim, kernel_size=1, bias=True)
-        self._init_contrastive_scale(init_scale=init_scale, prior_prob=prior_prob)
+        self._init_contrastive_scale(
+            init_scale=init_scale,
+            prior_prob=prior_prob,
+            teacher_space=teacher_space,
+        )
 
     def get_config(self) -> dict[str, Any]:
         """Return constructor configuration for checkpoint serialization."""
@@ -201,12 +238,15 @@ class DenseAnchorSemanticHead(_ContrastiveClassifierMixin):
             "in_channels": self.in_channels,
             "hidden_channels": self.hidden_channels,
             "embedding_dim": self.embedding_dim,
+            "teacher_space": getattr(self, "teacher_space", "siglip"),
         }
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> DenseAnchorSemanticHead:
         """Instantiate DenseAnchorSemanticHead from serialized config."""
-        return cls(**config)
+        cfg = dict(config)
+        cfg.setdefault("teacher_space", "siglip")
+        return cls(**cfg)
 
     def forward_tower(self, features: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
         """Run shared semantic depthwise-separable tower across all pyramid levels."""
@@ -262,8 +302,9 @@ class RoIPooledSemanticHead(_ContrastiveClassifierMixin):
         focal_margin: float = 0.15,
         context_margin: float = 0.45,
         dropout: float = 0.1,
-        init_scale: float = 80.0,
-        prior_prob: float = 0.008,
+        init_scale: float | None = None,
+        prior_prob: float | None = None,
+        teacher_space: str = "siglip",
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -291,7 +332,11 @@ class RoIPooledSemanticHead(_ContrastiveClassifierMixin):
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, embedding_dim),
         )
-        self._init_contrastive_scale(init_scale=init_scale, prior_prob=prior_prob)
+        self._init_contrastive_scale(
+            init_scale=init_scale,
+            prior_prob=prior_prob,
+            teacher_space=teacher_space,
+        )
 
     def get_config(self) -> dict[str, Any]:
         """Return constructor configuration for checkpoint serialization."""
@@ -305,6 +350,7 @@ class RoIPooledSemanticHead(_ContrastiveClassifierMixin):
             "focal_margin": self.focal_margin,
             "context_margin": self.context_margin,
             "dropout": self.dropout,
+            "teacher_space": getattr(self, "teacher_space", "siglip"),
         }
 
     @classmethod
@@ -312,6 +358,7 @@ class RoIPooledSemanticHead(_ContrastiveClassifierMixin):
         """Instantiate RoIPooledSemanticHead from serialized config."""
         cfg = dict(config)
         cfg["strides"] = tuple(cfg["strides"])
+        cfg.setdefault("teacher_space", "siglip")
         return cls(**cfg)
 
     def forward(
@@ -403,6 +450,7 @@ class OpenVocabularySigmoidLoss(nn.Module):
         class_counts: Tensor | None = None,
         seesaw_p: float = 0.25,
         unannotated_fg_weight: float = 0.08,
+        teacher_space: str = "siglip",
     ) -> None:
         super().__init__()
         self.focal_alpha = focal_alpha
@@ -415,10 +463,200 @@ class OpenVocabularySigmoidLoss(nn.Module):
         self.contrastive_kd_tau = contrastive_kd_tau
         self.seesaw_p = seesaw_p
         self.unannotated_fg_weight = unannotated_fg_weight
+        self.teacher_space = str(teacher_space)
         self.register_buffer(
             "class_counts",
             class_counts.float().clone() if class_counts is not None else None,
             persistent=False,
+        )
+
+    def _apply_seesaw_weights(
+        self,
+        entry_w: Tensor,
+        y_c: Tensor,
+        num_classes: int,
+    ) -> Tensor:
+        """Apply Seesaw frequency mitigation + mild rare-class boost when class counts exist."""
+        counts_buf: Tensor | None = getattr(self, "class_counts", None)
+        if counts_buf is None or counts_buf.numel() != num_classes:
+            return entry_w
+        cnts = counts_buf.to(device=entry_w.device, dtype=torch.float32).clamp(min=10.0)
+        ref_cnt = cnts.median().clamp(min=100.0)
+        pos_boost = (ref_cnt / cnts).pow(0.15).clamp(min=1.0, max=1.5)
+        n_i = cnts[y_c].unsqueeze(1)
+        n_j = cnts.unsqueeze(0)
+        mitigation = (n_j / n_i).pow(self.seesaw_p).clamp(max=1.0)
+        both_rare = (n_i < 1500.0) & (n_j < 1500.0)
+        mitigation = torch.where(both_rare, mitigation.clamp(min=0.75), mitigation)
+        weighted = entry_w * mitigation
+        weighted.scatter_(1, y_c.unsqueeze(1), pos_boost[y_c].unsqueeze(1))
+        return weighted
+
+    def _forward_owlv2(
+        self,
+        head: DenseAnchorSemanticHead | RoIPooledSemanticHead,
+        vis_norm: Tensor,
+        txt_norm: Tensor,
+        labels: Tensor,
+        *,
+        teacher_embeddings: Tensor | None,
+        has_teacher: Tensor | None,
+        annotated_mask: Tensor | None,
+        closed_text_embeddings: Tensor | None,
+        closed_labels: Tensor | None,
+        closed_annotated_mask: Tensor | None,
+    ) -> OpenVocabLossOutput:
+        """Compute native OWLv2 768-D distillation + Core-27 closed-set supervised loss."""
+        device = vis_norm.device
+        zero = vis_norm.sum() * 0.0
+        dist_emb_raw: Tensor | None = getattr(head, "distractor_embeddings", None)
+        dist_norm = (
+            F.normalize(dist_emb_raw.to(device=device, dtype=torch.float32), p=2.0, dim=-1)
+            if (dist_emb_raw is not None and dist_emb_raw.numel() > 0)
+            else None
+        )
+
+        # --- 1. Native OWLv2 768-D Distillation (gated positives & OOV) ---
+        kl_loss = zero
+        cosine_loss = zero
+        infonce_term = zero
+        if teacher_embeddings is not None and has_teacher is not None:
+            valid_t = has_teacher.to(device=device, dtype=torch.bool) & (labels != -1)
+            if valid_t.any():
+                z_s = vis_norm[valid_t]
+                z_t = F.normalize(
+                    teacher_embeddings[valid_t].to(device=device, dtype=torch.float32),
+                    p=2.0,
+                    dim=-1,
+                )
+                cos_loss = 2.0 * (1.0 - (z_s * z_t).sum(dim=-1)).mean()
+                full_txt = (
+                    torch.cat([txt_norm, dist_norm], dim=0)
+                    if dist_norm is not None
+                    else txt_norm
+                )
+                s_full = (z_s @ full_txt.t()).float()
+                t_full = (z_t @ full_txt.t()).float()
+                tau_kl = 0.06
+                kl_loss = (
+                    F.kl_div(
+                        F.log_softmax(s_full / tau_kl, dim=-1),
+                        F.softmax(t_full / tau_kl, dim=-1),
+                        reduction="batchmean",
+                    )
+                    * (tau_kl * 20.0)
+                )
+                subspace_mse = 0.25 * ((s_full - t_full) * 4.0).pow(2).mean()
+                cosine_loss = cos_loss + subspace_mse
+
+                num_valid_t = int(z_s.shape[0])
+                if num_valid_t >= 2:
+                    t_self = z_t @ z_t.t()
+                    eye = torch.eye(num_valid_t, dtype=torch.bool, device=device)
+                    dup_mask = (t_self > 0.995) & (~eye)
+                    sim_st = (z_s @ z_t.t()).float() / 0.07
+                    sim_st = sim_st.masked_fill(dup_mask, -1e4)
+                    infonce_raw = F.cross_entropy(
+                        sim_st, torch.arange(num_valid_t, device=device)
+                    )
+                    infonce_term = 0.25 * infonce_raw
+
+        # --- 2. Core-27 Closed-Set Supervised Focal + Hard-Negative Margin ---
+        cls_txt = (
+            F.normalize(
+                closed_text_embeddings.to(device=device, dtype=torch.float32),
+                p=2.0,
+                dim=-1,
+            )
+            if closed_text_embeddings is not None
+            else txt_norm
+        )
+        cls_lbls = (
+            closed_labels.to(device=device)
+            if closed_labels is not None
+            else labels
+        )
+        cls_ann = (
+            closed_annotated_mask
+            if closed_annotated_mask is not None
+            else annotated_mask
+        )
+        num_cls = int(cls_txt.shape[0])
+        scale = head.effective_scale()
+        s_cls_all = (vis_norm @ cls_txt.t()).float()
+        logits_cls = scale * s_cls_all + head.logit_bias.float()
+
+        cls_fg_mask = (cls_lbls >= 0) & (cls_lbls < num_cls)
+        cls_bg_mask = cls_lbls == -1
+        cls_oov_mask = cls_lbls == -2
+
+        support_loss = zero
+        if cls_fg_mask.any():
+            fg_idx = cls_fg_mask.nonzero(as_tuple=False).squeeze(-1)
+            y_fg = cls_lbls[fg_idx]
+            s_fg = s_cls_all[fg_idx]
+            logits_fg = logits_cls[fg_idx]
+            one_hot_fg = F.one_hot(y_fg, num_classes=num_cls).to(dtype=torch.float32)
+
+            entry_w = self._apply_seesaw_weights(
+                torch.ones_like(one_hot_fg), y_fg, num_cls
+            )
+            if cls_ann is not None:
+                ann_fg = cls_ann[fg_idx].to(device=device, dtype=torch.bool).clone()
+                ann_fg.scatter_(1, y_fg.unsqueeze(1), True)
+                entry_w = entry_w * torch.where(ann_fg, 1.0, 0.35)
+
+            fg_focal = sigmoid_focal_loss(
+                logits_fg,
+                one_hot_fg,
+                alpha=self.focal_alpha,
+                gamma=self.focal_gamma,
+            )
+            fg_focal_loss = (fg_focal * entry_w).sum() / float(max(y_fg.numel(), 1))
+
+            if num_cls > 1:
+                s_pos = s_fg.gather(1, y_fg.unsqueeze(1)).squeeze(1)
+                s_neg = s_fg.masked_fill(one_hot_fg.bool(), -1e4).max(dim=-1).values
+                margin_loss = 1.5 * F.relu(0.08 - (s_pos - s_neg)).mean()
+            else:
+                margin_loss = zero
+            support_loss = support_loss + fg_focal_loss + margin_loss
+
+        if cls_bg_mask.any():
+            bg_idx = cls_bg_mask.nonzero(as_tuple=False).squeeze(-1)
+            logits_bg = logits_cls[bg_idx]
+            bg_focal = sigmoid_focal_loss(
+                logits_bg,
+                torch.zeros_like(logits_bg),
+                alpha=self.focal_alpha,
+                gamma=self.focal_gamma,
+            )
+            bg_w = torch.ones_like(logits_bg)
+            if cls_ann is not None:
+                ann_bg = cls_ann[bg_idx].to(device=device, dtype=torch.bool)
+                bg_w = torch.where(ann_bg, bg_w, torch.full_like(bg_w, 0.50))
+            bg_focal_loss = (
+                0.35 * (bg_focal * bg_w).sum() / float(max(logits_bg.shape[0], 1))
+            )
+            support_loss = support_loss + bg_focal_loss
+
+            if dist_norm is not None:
+                max_fg_cos = s_cls_all[bg_idx].max(dim=-1).values
+                max_dist_cos = (vis_norm[bg_idx] @ dist_norm.t()).max(dim=-1).values
+                support_loss = support_loss + 0.15 * F.relu(
+                    max_fg_cos - max_dist_cos
+                ).mean()
+
+        kd_scaled = self.kl_weight * kl_loss
+        total = support_loss + kd_scaled + infonce_term + cosine_loss
+        return OpenVocabLossOutput(
+            total=total,
+            focal=support_loss,
+            teacher_kl=kd_scaled + infonce_term,
+            teacher_cosine=cosine_loss,
+            num_foreground=int(cls_fg_mask.sum().item()),
+            num_background=int(cls_bg_mask.sum().item()),
+            num_oov=int(cls_oov_mask.sum().item()),
         )
 
     def forward(
@@ -431,8 +669,11 @@ class OpenVocabularySigmoidLoss(nn.Module):
         teacher_embeddings: Tensor | None = None,
         has_teacher: Tensor | None = None,
         annotated_mask: Tensor | None = None,
+        closed_text_embeddings: Tensor | None = None,
+        closed_labels: Tensor | None = None,
+        closed_annotated_mask: Tensor | None = None,
     ) -> OpenVocabLossOutput:
-        """Compute SigLIP-primary distillation + human-GT support loss for Option A or Option B."""
+        """Compute SigLIP-primary distillation or native OWLv2 hybrid loss."""
         device = visual_embeddings.device
         zero = visual_embeddings.sum() * 0.0
         if visual_embeddings.numel() == 0:
@@ -443,6 +684,19 @@ class OpenVocabularySigmoidLoss(nn.Module):
         txt_norm = F.normalize(
             text_embeddings.to(device=device, dtype=torch.float32), p=2.0, dim=-1
         )
+        if self.teacher_space == "owlv2":
+            return self._forward_owlv2(
+                head,
+                vis_norm,
+                txt_norm,
+                labels,
+                teacher_embeddings=teacher_embeddings,
+                has_teacher=has_teacher,
+                annotated_mask=annotated_mask,
+                closed_text_embeddings=closed_text_embeddings,
+                closed_labels=closed_labels,
+                closed_annotated_mask=closed_annotated_mask,
+            )
         logits_raw, _ = head.classify_embeddings(
             vis_norm, txt_norm, apply_calibration=False
         )
@@ -603,27 +857,18 @@ class OpenVocabularySigmoidLoss(nn.Module):
                 else:
                     soft_tgt = one_hot_c
 
-                entry_w = torch.ones_like(soft_tgt)
+                entry_w = self._apply_seesaw_weights(
+                    torch.ones_like(soft_tgt), y_c, num_classes
+                )
                 if annotated_mask is not None:
                     ann_c = annotated_mask[fg_idx[c_rows]].to(device=device, dtype=torch.bool)
                     ann_c = ann_c.clone()
                     ann_c.scatter_(1, y_c.unsqueeze(1), True)
-                    entry_w = torch.where(
+                    entry_w = entry_w * torch.where(
                         ann_c,
-                        entry_w,
+                        1.0,
                         torch.full_like(entry_w, self.unannotated_fg_weight),
                     )
-                if counts_buf is not None and counts_buf.numel() == num_classes:
-                    cnts = counts_buf.to(device=device, dtype=torch.float32).clamp(min=10.0)
-                    ref_cnt = cnts.median().clamp(min=100.0)
-                    pos_boost = (ref_cnt / cnts).pow(0.15).clamp(min=1.0, max=1.5)
-                    n_i = cnts[y_c].unsqueeze(1)
-                    n_j = cnts.unsqueeze(0)
-                    mitigation = (n_j / n_i).pow(self.seesaw_p).clamp(max=1.0)
-                    both_rare = (n_i < 1500.0) & (n_j < 1500.0)
-                    mitigation = torch.where(both_rare, mitigation.clamp(min=0.75), mitigation)
-                    entry_w = entry_w * mitigation
-                    entry_w.scatter_(1, y_c.unsqueeze(1), pos_boost[y_c].unsqueeze(1))
 
                 per_entry_fg = F.binary_cross_entropy_with_logits(
                     logits_c, soft_tgt, reduction="none"
@@ -716,6 +961,10 @@ VALID_CONTAINER_PARTS: dict[str, frozenset[str]] = {
     "cabinet": frozenset({"book", "flowerpot", "cushion"}),
 }
 
+BACKDROP_NO_SUPPRESS_CONTAINERS: frozenset[str] = frozenset(
+    {"building", "tree", "fence", "canopy"}
+)
+
 
 def filter_semantic_detections(
     boxes: Tensor,
@@ -783,6 +1032,8 @@ def filter_semantic_detections(
     # Pass 0: Suppress tiny sub-part fragments contained inside a higher-objectness container box.
     for m in range(n):
         cat_m = categories[cls_cpu[m]] if cls_cpu[m] < len(categories) else ""
+        if cat_m in BACKDROP_NO_SUPPRESS_CONTAINERS:
+            continue
         allowed = VALID_CONTAINER_PARTS.get(cat_m)
         area_m = areas_cpu[m]
         for k in range(n):
@@ -825,7 +1076,11 @@ def filter_semantic_detections(
             else:
                 if iou_ij > cross_class_iou:
                     suppressed[j] = True
-                elif areas_cpu[j] < 0.45 * area_i and iomin_ij > 0.78:
+                elif (
+                    cat_i not in BACKDROP_NO_SUPPRESS_CONTAINERS
+                    and areas_cpu[j] < 0.45 * area_i
+                    and iomin_ij > 0.78
+                ):
                     cat_j = categories[cls_j] if cls_j < len(categories) else ""
                     if allowed_parts is None or cat_j not in allowed_parts:
                         suppressed[j] = True
@@ -835,6 +1090,7 @@ def filter_semantic_detections(
 
 
 __all__ = [
+    "BACKDROP_NO_SUPPRESS_CONTAINERS",
     "DenseAnchorSemanticHead",
     "OpenVocabLossOutput",
     "OpenVocabularySigmoidLoss",

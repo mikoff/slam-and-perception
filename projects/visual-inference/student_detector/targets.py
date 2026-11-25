@@ -136,6 +136,7 @@ class TargetBuilder:
         default_background_weight: float = 0.0,
         hard_negative_focus_weight: float = 1.0,
         ignore_unmatched_gt_interior: bool = False,
+        max_one_to_one_interior_area_frac: float = 0.90,
     ) -> None:
         self.assigner = assigner
         self.background_loss_weights = dict(background_loss_weights or {})
@@ -150,6 +151,7 @@ class TargetBuilder:
             raise ValueError("hard-negative focus weight must be at least 1")
         self.hard_negative_focus_weight = hard_negative_focus_weight
         self.ignore_unmatched_gt_interior = ignore_unmatched_gt_interior
+        self.max_one_to_one_interior_area_frac = max_one_to_one_interior_area_frac
         self._grid_cache: dict[
             tuple[tuple[tuple[int, int], ...], torch.device],
             tuple[Tensor, Sequence[slice]],
@@ -269,8 +271,11 @@ class TargetBuilder:
                 # negatives so 3x3 conv smoothing does not crush their objectness.
                 ng_w = non_giant_boxes[:, 2] - non_giant_boxes[:, 0]
                 ng_h = non_giant_boxes[:, 3] - non_giant_boxes[:, 1]
-                large_enough = (torch.minimum(ng_w, ng_h) >= 12.0) & (
-                    ng_w * ng_h >= 256.0
+                ng_area = ng_w * ng_h
+                large_enough = (
+                    (torch.minimum(ng_w, ng_h) >= 12.0)
+                    & (ng_area >= 256.0)
+                    & (ng_area < self.max_one_to_one_interior_area_frac * img_area)
                 )
                 if large_enough.any():
                     trusted_points = trusted_points | points_inside_boxes(

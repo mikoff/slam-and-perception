@@ -261,6 +261,28 @@ class VocabularyBank:
             centroid=self.centroid.to(device) if self.centroid is not None else None,
         )
 
+    def subset(self, categories: Sequence[str]) -> VocabularyBank:
+        """Return a new VocabularyBank sliced to `categories` in the requested order."""
+        cat_to_idx = {cat: idx for idx, cat in enumerate(self.categories)}
+        indices: list[int] = []
+        for cat in categories:
+            if cat not in cat_to_idx:
+                raise KeyError(f"Category {cat!r} not found in VocabularyBank")
+            indices.append(cat_to_idx[cat])
+        idx_t = torch.tensor(indices, dtype=torch.long, device=self.embeddings.device)
+        return VocabularyBank(
+            categories=tuple(categories),
+            embeddings=self.embeddings.index_select(0, idx_t).clone(),
+            logit_scale=self.logit_scale,
+            logit_bias=self.logit_bias,
+            class_priors=(
+                self.class_priors.index_select(0, idx_t.to(self.class_priors.device)).clone()
+                if self.class_priors is not None
+                else None
+            ),
+            centroid=self.centroid.clone() if self.centroid is not None else None,
+        )
+
     def classify(
         self,
         region_embeddings: Tensor,

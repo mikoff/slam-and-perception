@@ -175,6 +175,8 @@ class InferenceDecoder:
         part_max_iou: float = 0.65,
         centerness_alpha: float = 1.0,
         score_threshold: float = 0.05,
+        small_box_min_side: float = 16.0,
+        small_box_score_power: float = 1.0,
     ) -> None:
         if score_mode not in {"objectness", "objectness_x_centerness"}:
             raise ValueError(
@@ -182,6 +184,10 @@ class InferenceDecoder:
             )
         if not (0.0 <= centerness_alpha <= 1.0):
             raise ValueError("centerness_alpha must be in [0.0, 1.0]")
+        if small_box_min_side < 0.0:
+            raise ValueError("small_box_min_side must be >= 0.0")
+        if small_box_score_power <= 0.0:
+            raise ValueError("small_box_score_power must be > 0.0")
         if nms_mode not in {
             "hard",
             "soft",
@@ -204,6 +210,8 @@ class InferenceDecoder:
         self.part_scale_ratio = part_scale_ratio
         self.part_max_iou = part_max_iou
         self.score_threshold = score_threshold
+        self.small_box_min_side = float(small_box_min_side)
+        self.small_box_score_power = float(small_box_score_power)
 
     def __call__(
         self,
@@ -291,33 +299,79 @@ class InferenceDecoder:
         )
         detections: list[Detection] = []
         for batch_index in range(scores.shape[0]):
-            count = min(
-                self.top_k,
-                int(torch.isfinite(scores[batch_index]).sum().item()),
-            )
-            if count == 0:
-                detections.append(
-                    Detection(
-                        torch.empty(
-                            (0, 4),
-                            dtype=distances.dtype,
-                            device=distances.device,
-                        ),
-                        torch.empty((0,), dtype=scores.dtype, device=scores.device),
-                        torch.empty((0,), dtype=torch.int64, device=scores.device),
-                        torch.empty((0,), dtype=torch.int64, device=scores.device),
-                    )
+            if self.small_box_score_power == 1.0:
+                count = min(
+                    self.top_k,
+                    int(torch.isfinite(scores[batch_index]).sum().item()),
                 )
-                continue
-            selected_indices = torch.argsort(
-                scores[batch_index], descending=True, stable=True
-            )[:count]
-            selected_scores = scores[batch_index, selected_indices]
-            selected_boxes = decode_ltrb(
-                points[selected_indices], distances[batch_index, selected_indices]
-            )
-            selected_boxes[:, 0::2].clamp_(min=0, max=width)
-            selected_boxes[:, 1::2].clamp_(min=0, max=height)
+                if count == 0:
+                    detections.append(
+                        Detection(
+                            torch.empty(
+                                (0, 4),
+                                dtype=distances.dtype,
+                                device=distances.device,
+                            ),
+                            torch.empty((0,), dtype=scores.dtype, device=scores.device),
+                            torch.empty((0,), dtype=torch.int64, device=scores.device),
+                            torch.empty((0,), dtype=torch.int64, device=scores.device),
+                        )
+                    )
+                    continue
+                selected_indices = torch.argsort(
+                    scores[batch_index], descending=True, stable=True
+                )[:count]
+                selected_scores = scores[batch_index, selected_indices]
+                selected_boxes = decode_ltrb(
+                    points[selected_indices], distances[batch_index, selected_indices]
+                )
+                selected_boxes[:, 0::2].clamp_(min=0, max=width)
+                selected_boxes[:, 1::2].clamp_(min=0, max=height)
+            else:
+                # De-inflate small-box objectness trained under sqrt(IoU) QFL calibration.
+                row_scores = scores[batch_index]
+                finite_mask = torch.isfinite(row_scores)
+                if self.small_box_score_power > 1.0 and self.score_threshold > 0.0:
+                    cand_indices = torch.where(
+                        finite_mask & (row_scores >= self.score_threshold)
+                    )[0]
+                else:
+                    cand_indices = torch.where(finite_mask)[0]
+                count = min(self.top_k, int(cand_indices.numel()))
+                if count == 0:
+                    detections.append(
+                        Detection(
+                            torch.empty(
+                                (0, 4),
+                                dtype=distances.dtype,
+                                device=distances.device,
+                            ),
+                            torch.empty((0,), dtype=scores.dtype, device=scores.device),
+                            torch.empty((0,), dtype=torch.int64, device=scores.device),
+                            torch.empty((0,), dtype=torch.int64, device=scores.device),
+                        )
+                    )
+                    continue
+                cand_boxes = decode_ltrb(
+                    points[cand_indices], distances[batch_index, cand_indices]
+                )
+                cand_boxes[:, 0::2].clamp_(min=0, max=width)
+                cand_boxes[:, 1::2].clamp_(min=0, max=height)
+                cand_w = (cand_boxes[:, 2] - cand_boxes[:, 0]).clamp(min=0.0)
+                cand_h = (cand_boxes[:, 3] - cand_boxes[:, 1]).clamp(min=0.0)
+                cand_min_side = torch.minimum(cand_w, cand_h)
+                raw_cand_scores = row_scores[cand_indices]
+                cand_scores = torch.where(
+                    cand_min_side < self.small_box_min_side,
+                    raw_cand_scores.clamp(min=0.0).pow(self.small_box_score_power),
+                    raw_cand_scores,
+                )
+                top_local = torch.argsort(cand_scores, descending=True, stable=True)[
+                    :count
+                ]
+                selected_boxes = cand_boxes[top_local]
+                selected_scores = cand_scores[top_local]
+                selected_indices = cand_indices[top_local]
             valid = (
                 torch.isfinite(selected_boxes).all(dim=1)
                 & torch.isfinite(selected_scores)

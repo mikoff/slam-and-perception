@@ -9,7 +9,9 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from .annotation_hygiene import RawAnnotationRow, sanitize_image_annotations
 from .ontology import map_to_canonical
 
 
@@ -74,6 +76,7 @@ def load_semantic_image_records(
     dataset_root: Path,
     image_ids: Sequence[int] | None = None,
     index_path: Path | None = None,
+    sanitize_annotations: bool = True,
 ) -> list[SemanticImageRecord]:
     """Load semantic evaluation records preserving object identities from SQLite.
 
@@ -81,6 +84,7 @@ def load_semantic_image_records(
     /// @param dataset_root Root directory of the visual dataset.
     /// @param image_ids Optional sequence of specific image_ids to filter.
     /// @param index_path Optional explicit path to SQLite index; defaults to dataset_root/indexes/quad_val.sqlite.
+    /// @param sanitize_annotations Whether to apply cross-tier deduplication and WoodScape fragment hygiene.
     /// @return Ordered list of SemanticImageRecord instances.
     """
     resolved_root = Path(dataset_root).resolve()
@@ -139,31 +143,61 @@ def load_semantic_image_records(
 
     annotations_by_image: dict[int, list[SemanticGroundTruthRecord]] = defaultdict(list)
     image_source_map = {r[0]: str(r[4]) for r in image_rows}
-
+    grouped_rows: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
     for row in ann_rows:
-        rowid, img_id, quad_json, x1, y1, x2, y2, ignore, cat_name, tier = row
-        pts = json.loads(quad_json)
-        quad_tuple = tuple((float(p[0]), float(p[1])) for p in pts)
-        w = max(float(x2) - float(x1), 0.0)
-        h = max(float(y2) - float(y1), 0.0)
-        area = w * h
-        size_bin = _compute_size_bin(w, h)
-        canonical = map_to_canonical(cat_name)
+        grouped_rows[int(row[1])].append(row)
 
-        rec = SemanticGroundTruthRecord(
-            annotation_id=int(rowid),
-            image_id=int(img_id),
-            source_dataset=image_source_map.get(img_id, "unknown"),
-            source_category=str(cat_name),
-            canonical_category=canonical,
-            quad=quad_tuple,
-            bbox=(float(x1), float(y1), float(x2), float(y2)),
-            ignore_region=int(ignore),
-            geometry_tier=str(tier),
-            size_bin=size_bin,
-            area=area,
-        )
-        annotations_by_image[img_id].append(rec)
+    for img_id, img_rows in grouped_rows.items():
+        source_dataset = image_source_map.get(img_id, "unknown")
+        if sanitize_annotations:
+            hygiene_rows = [
+                RawAnnotationRow(
+                    x1=float(r[3]),
+                    y1=float(r[4]),
+                    x2=float(r[5]),
+                    y2=float(r[6]),
+                    ignore_region=int(r[7]),
+                    category_name=str(r[8]),
+                    geometry_tier=str(r[9]),
+                )
+                for r in img_rows
+            ]
+            decision = sanitize_image_annotations(
+                hygiene_rows, source_dataset=source_dataset
+            )
+            demoted_set = set(decision.demoted_to_ignore_indices)
+            dropped_set = set(decision.dropped_indices)
+        else:
+            demoted_set = set()
+            dropped_set = set()
+
+        for row_idx, row in enumerate(img_rows):
+            if row_idx in dropped_set:
+                continue
+            rowid, _img_id, quad_json, x1, y1, x2, y2, ignore, cat_name, tier = row
+            eff_ignore = 1 if row_idx in demoted_set else int(ignore)
+            pts = json.loads(quad_json)
+            quad_tuple = tuple((float(p[0]), float(p[1])) for p in pts)
+            w = max(float(x2) - float(x1), 0.0)
+            h = max(float(y2) - float(y1), 0.0)
+            area = w * h
+            size_bin = _compute_size_bin(w, h)
+            canonical = map_to_canonical(cat_name)
+
+            rec = SemanticGroundTruthRecord(
+                annotation_id=int(rowid),
+                image_id=int(img_id),
+                source_dataset=source_dataset,
+                source_category=str(cat_name),
+                canonical_category=canonical,
+                quad=quad_tuple,
+                bbox=(float(x1), float(y1), float(x2), float(y2)),
+                ignore_region=eff_ignore,
+                geometry_tier=str(tier),
+                size_bin=size_bin,
+                area=area,
+            )
+            annotations_by_image[img_id].append(rec)
 
     records: list[SemanticImageRecord] = []
     for r in image_rows:

@@ -242,3 +242,35 @@ def test_quad_decoder_clamps_partially_out_of_bounds_quads() -> None:
     assert det.quads.shape == (1, 4, 2)
     assert (det.quads[..., 0] >= 0.0).all() and (det.quads[..., 0] <= 32.0).all()
     assert (det.quads[..., 1] >= 0.0).all() and (det.quads[..., 1] <= 32.0).all()
+
+
+def test_quad_decoder_small_box_score_power_recalibrates_small_quads() -> None:
+    shapes = ((4, 4), (2, 2), (1, 1))
+    quality = tuple(torch.full((1, 1, h, w), -10.0) for h, w in shapes)
+    offsets = tuple(torch.zeros((1, 8, h, w)) for h, w in shapes)
+    # Candidate 0 at level 0, (0, 0) -> center (4, 4), stride 8: small 8x8 quad (min_side=8 < 16).
+    small_prob = 0.65
+    quality[0][0, 0, 0, 0] = float(torch.logit(torch.tensor(small_prob)))
+    offsets[0][0, :, 0, 0] = torch.tensor([-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5])
+    # Candidate 1 at level 1, (1, 1) -> center (24, 24), stride 16: larger 24x24 quad (min_side=24 >= 16).
+    large_prob = 0.62
+    quality[1][0, 0, 1, 1] = float(torch.logit(torch.tensor(large_prob)))
+    offsets[1][0, :, 1, 1] = torch.tensor(
+        [-0.75, -0.75, 0.75, -0.75, 0.75, 0.75, -0.75, 0.75]
+    )
+    output = QuadDetectorOutput(quality, offsets)
+
+    decoder = QuadInferenceDecoder(
+        strides=(8, 16, 32),
+        pre_nms_top_k=10,
+        max_proposals=5,
+        nms_iou_threshold=0.5,
+        score_threshold=0.05,
+        small_box_min_side=16.0,
+        small_box_score_power=1.25,
+    )
+    det = decoder(output, (32, 32))[0]
+    assert det.quads.shape[0] == 2
+    # Large quad keeps 0.62 and outranks small quad calibrated to 0.65 ** 1.25 ~= 0.5839.
+    assert det.scores[0].item() == pytest.approx(large_prob, abs=1e-4)
+    assert det.scores[1].item() == pytest.approx(small_prob**1.25, abs=1e-4)

@@ -84,6 +84,26 @@ ZERO_SHOT_EVAL_CATEGORIES: tuple[str, ...] = (
     "flowerpot",
 )
 
+PRUNED_SCARCE_CATEGORIES: frozenset[str] = frozenset(
+    {
+        "parking_slot",
+        "stairs",
+        "debris",
+        "golf_cart",
+        "parking_meter",
+        "canopy",
+        "wheeled_transport",
+        "cart",
+        "wheelchair",
+    }
+)
+CLOSED_MERGE_MAP: dict[str, str] = {"street_light": "pole"}
+CORE_27_CATEGORIES: tuple[str, ...] = tuple(
+    c
+    for c in OPEN_VOCAB_CATEGORIES
+    if c not in PRUNED_SCARCE_CATEGORIES and c not in CLOSED_MERGE_MAP
+)
+
 # Per-dataset annotation capability matrix for Federated Open-Vocabulary Loss:
 # maps each source_dataset to the canonical OPEN_VOCAB_CATEGORIES it actually labels.
 # Mined background/clutter proposals from dataset `d` MUST NOT apply negative BCE
@@ -462,8 +482,10 @@ __all__ = [
     "build_source_annotated_mask",
     "CANONICAL_MAPPINGS",
     "CategoryReadiness",
+    "CLOSED_MERGE_MAP",
     "COMPATIBLE_LABELS",
     "ConceptAuditRecord",
+    "CORE_27_CATEGORIES",
     "DISTRACTOR_CATEGORIES",
     "EXTENDED_CATEGORIES",
     "is_compatible",
@@ -471,6 +493,7 @@ __all__ = [
     "normalize_category_name",
     "NOVEL_CATEGORIES",
     "OPEN_VOCAB_CATEGORIES",
+    "PRUNED_SCARCE_CATEGORIES",
     "READINESS_STATUS",
     "SOURCE_ANNOTATED_CATEGORIES",
     "UNSUPPORTED_CATEGORIES",

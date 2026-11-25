@@ -5,6 +5,7 @@ Supports Stage-2 fine-tuning to tighten bounding box proposals and calibrate obj
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 
+from .annotation_hygiene import RawAnnotationRow, sanitize_image_annotations
 from .config import AugmentationConfig
 from .data import (
     ProposalSample,
@@ -190,6 +192,30 @@ def load_cohort_image_records(
     return all_images
 
 
+def _prepare_hygiene_masks(
+    rows: Sequence[RawAnnotationRow],
+    source_dataset: str,
+    sanitize: bool,
+) -> tuple[dict[int, int], set[int], set[int], set[int]]:
+    """Map raw positive row indices and compute keep/demote/drop row index sets."""
+    raw_pos_idx_by_row: dict[int, int] = {}
+    raw_pos_counter = 0
+    for row_idx, hr in enumerate(rows):
+        if hr.ignore_region == 0:
+            raw_pos_idx_by_row[row_idx] = raw_pos_counter
+            raw_pos_counter += 1
+
+    if sanitize:
+        decision = sanitize_image_annotations(rows, source_dataset=source_dataset)
+        return (
+            raw_pos_idx_by_row,
+            set(decision.kept_positive_indices),
+            set(decision.demoted_to_ignore_indices),
+            set(decision.dropped_indices),
+        )
+    return raw_pos_idx_by_row, set(raw_pos_idx_by_row.keys()), set(), set()
+
+
 class HumanGTHBBDataset(Dataset[ProposalSample]):
     """PyTorch Dataset loading authoritative human ground-truth boxes for student fine-tuning.
 
@@ -211,6 +237,7 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         tiny_area: float = 4.0,
         tiny_min_side: float = 2.0,
         seed: int = 42,
+        sanitize_annotations: bool = True,
     ) -> None:
         """Initialize the Human GT HBB dataset.
 
@@ -226,6 +253,7 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         @param tiny_area Minimum pixel area in resized input space to retain box.
         @param tiny_min_side Minimum side length in resized input space to retain box.
         @param seed Runtime random seed for epoch-dependent augmentations.
+        @param sanitize_annotations Whether to apply cross-tier deduplication and WoodScape fragment hygiene.
         """
         super().__init__()
         self.cohort_db_path = Path(cohort_db_path)
@@ -236,6 +264,7 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         self.tiny_area = tiny_area
         self.tiny_min_side = tiny_min_side
         self.seed = seed
+        self.sanitize_annotations = bool(sanitize_annotations)
         self._epoch = torch.zeros(1, dtype=torch.long)
 
         self._connection: sqlite3.Connection | None = None
@@ -305,7 +334,12 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
                 self._cat_column_name = "category"
             else:
                 self._cat_column_name = None
+            self._has_geom_tier = "geometry_tier" in cols
         return self._cat_column_name
+
+    def _has_geometry_tier_column(self, conn: sqlite3.Connection) -> bool:
+        self._get_category_column(conn)
+        return bool(getattr(self, "_has_geom_tier", False))
 
     def __len__(self) -> int:
         return len(self.images)
@@ -321,10 +355,12 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
 
         img_id = record["image_id"]
         cat_col = self._get_category_column(conn)
-        cat_sql = f", {cat_col}" if cat_col else ""
+        has_tier = self._has_geometry_tier_column(conn)
+        cat_sql = f", {cat_col}" if cat_col else ", 'unknown'"
+        tier_sql = ", geometry_tier" if has_tier else ", 'unknown'"
         ann_rows = conn.execute(
             f"""
-            SELECT x1, y1, x2, y2, ignore_region{cat_sql}
+            SELECT x1, y1, x2, y2, ignore_region{cat_sql}{tier_sql}
             FROM annotations
             WHERE image_id = ?
             ORDER BY rowid
@@ -336,15 +372,38 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
         ignore_boxes: list[list[float]] = []
         trusted_background_boxes: list[list[float]] = []
         positive_categories: list[str] = []
+        kept_raw_pos_indices: list[int] = []
 
-        for r in ann_rows:
-            bbox = [float(r[0]), float(r[1]), float(r[2]), float(r[3])]
-            ign = int(r[4])
-            if ign == 0:
-                positive_boxes.append(bbox)
-                cat_val = str(r[5]) if len(r) > 5 and r[5] else "unknown"
-                positive_categories.append(cat_val)
-            elif ign == 2:
+        hygiene_rows: list[RawAnnotationRow] = [
+            RawAnnotationRow(
+                x1=float(r[0]),
+                y1=float(r[1]),
+                x2=float(r[2]),
+                y2=float(r[3]),
+                ignore_region=int(r[4]),
+                category_name=str(r[5]) if r[5] else "unknown",
+                geometry_tier=str(r[6]) if r[6] else "unknown",
+            )
+            for r in ann_rows
+        ]
+        raw_pos_idx_by_row, kept_set, demoted_set, dropped_set = _prepare_hygiene_masks(
+            hygiene_rows,
+            source_dataset=str(record["source_dataset"]),
+            sanitize=self.sanitize_annotations,
+        )
+
+        for row_idx, hr in enumerate(hygiene_rows):
+            bbox = [hr.x1, hr.y1, hr.x2, hr.y2]
+            if row_idx in dropped_set:
+                continue
+            if hr.ignore_region == 0:
+                if row_idx in demoted_set:
+                    ignore_boxes.append(bbox)
+                elif row_idx in kept_set:
+                    positive_boxes.append(bbox)
+                    positive_categories.append(hr.category_name)
+                    kept_raw_pos_indices.append(raw_pos_idx_by_row[row_idx])
+            elif hr.ignore_region == 2:
                 trusted_background_boxes.append(bbox)
             else:
                 ignore_boxes.append(bbox)
@@ -385,7 +444,7 @@ class HumanGTHBBDataset(Dataset[ProposalSample]):
             hard_negative_focus_boxes=transformed[6],
             file_name=str(record["file_name"]),
             category_names=tuple(positive_categories[idx] for idx in retained),
-            gt_indices=retained,
+            gt_indices=tuple(kept_raw_pos_indices[idx] for idx in retained),
             horizontal_flip=horizontal_flip,
         )
 
@@ -413,6 +472,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         thin_aspect_ratio_min: float = 1.5,
         thin_area: float = 4.0,
         seed: int = 42,
+        sanitize_annotations: bool = True,
     ) -> None:
         """Initialize the Human GT Quad dataset.
 
@@ -430,6 +490,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         @param thin_aspect_ratio_min Minimum aspect ratio for thin objects.
         @param thin_area Minimum pixel area for thin objects.
         @param seed Runtime random seed for epoch-dependent augmentations.
+        @param sanitize_annotations Whether to apply cross-tier deduplication and WoodScape fragment hygiene.
         """
         super().__init__()
         self.cohort_db_path = Path(cohort_db_path)
@@ -438,6 +499,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         self.split = split
         self.input_size = input_size
         self.seed = seed
+        self.sanitize_annotations = bool(sanitize_annotations)
         self._epoch = torch.zeros(1, dtype=torch.long)
 
         self._connection: sqlite3.Connection | None = None
@@ -539,10 +601,10 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
 
         img_id = record["image_id"]
         cat_col = self._get_category_column(conn)
-        cat_sql = f", {cat_col}" if cat_col else ""
+        cat_sql = f", {cat_col}" if cat_col else ", 'unknown'"
         ann_rows = conn.execute(
             f"""
-            SELECT quad_json, ignore_region, geometry_tier, object_condition, seen_status{cat_sql}
+            SELECT quad_json, ignore_region, geometry_tier, object_condition, seen_status, x1, y1, x2, y2{cat_sql}
             FROM annotations
             WHERE image_id = ?
             ORDER BY rowid
@@ -557,20 +619,47 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
         conditions: list[str] = []
         statuses: list[str] = []
         positive_categories: list[str] = []
+        kept_raw_pos_indices: list[int] = []
 
+        parsed_rows: list[tuple[list[list[float]], RawAnnotationRow, str, str]] = []
+        hygiene_rows: list[RawAnnotationRow] = []
         for r in ann_rows:
             quad = json.loads(str(r[0]))
-            ign = int(r[1])
-            if ign == 0:
-                positive_quads.append(quad)
-                tiers.append(str(r[2]))
-                conditions.append(str(r[3]))
-                statuses.append(str(r[4]))
-                cat_val = str(r[5]) if len(r) > 5 and r[5] else "unknown"
-                positive_categories.append(cat_val)
-            elif ign == 1:
+            cat_val = str(r[9]) if r[9] else "unknown"
+            hr = RawAnnotationRow(
+                x1=float(r[5]),
+                y1=float(r[6]),
+                x2=float(r[7]),
+                y2=float(r[8]),
+                ignore_region=int(r[1]),
+                category_name=cat_val,
+                geometry_tier=str(r[2]) if r[2] else "unknown",
+            )
+            hygiene_rows.append(hr)
+            parsed_rows.append((quad, hr, str(r[3]), str(r[4])))
+
+        raw_pos_idx_by_row, kept_set, demoted_set, dropped_set = _prepare_hygiene_masks(
+            hygiene_rows,
+            source_dataset=str(record["source_dataset"]),
+            sanitize=self.sanitize_annotations,
+        )
+
+        for row_idx, (quad, hr, cond, status) in enumerate(parsed_rows):
+            if row_idx in dropped_set:
+                continue
+            if hr.ignore_region == 0:
+                if row_idx in demoted_set:
+                    ignore_quads.append(quad)
+                elif row_idx in kept_set:
+                    positive_quads.append(quad)
+                    tiers.append(hr.geometry_tier)
+                    conditions.append(cond)
+                    statuses.append(status)
+                    positive_categories.append(hr.category_name)
+                    kept_raw_pos_indices.append(raw_pos_idx_by_row[row_idx])
+            elif hr.ignore_region == 1:
                 ignore_quads.append(quad)
-            elif ign == 2:
+            elif hr.ignore_region == 2:
                 trusted_background_quads.append(quad)
 
         with Image.open(image_path) as loaded:
@@ -617,7 +706,7 @@ class HumanGTQuadDataset(Dataset[QuadProposalSample]):
             radial_bins=radial_bins,
             file_name=str(record["file_name"]),
             category_names=tuple(positive_categories[idx] for idx in retained),
-            gt_indices=retained,
+            gt_indices=tuple(kept_raw_pos_indices[idx] for idx in retained),
             horizontal_flip=horizontal_flip,
         )
 

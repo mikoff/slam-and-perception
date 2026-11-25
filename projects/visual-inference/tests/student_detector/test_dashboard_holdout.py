@@ -90,3 +90,45 @@ def test_validation_inventory_hashes_external_split(tmp_path: Path) -> None:
         audit_records(
             [{"image_id": 999, "file_name": "validation.jpg"}], inventory, tmp_path
         )
+
+
+def test_tracked_holdout_210_ids_lockfile_is_consistent_and_leak_free() -> None:
+    import json
+
+    proj_root = Path(__file__).resolve().parents[2]
+    lock_path = proj_root / "configs" / "holdout_210_ids.json"
+    assert lock_path.exists(), f"Missing tracked holdout lockfile: {lock_path}"
+    data = json.loads(lock_path.read_text(encoding="utf-8"))
+
+    images = data["images"]
+    assert len(images) == 210
+    holdout_ids = [int(r["image_id"]) for r in images]
+    holdout_shas = [str(r["sha256"]) for r in images]
+    assert len(set(holdout_ids)) == 210
+    assert len(set(holdout_shas)) == 210
+    assert all(not str(r["file_name"]).startswith("/home/") for r in images)
+
+    excl_train_ids = data["excluded_training_image_ids"]
+    excl_val_shas = data["excluded_validation_sha256s"]
+    cohort_val_ids = data["cohort_val_800_image_ids"]
+    assert len(excl_train_ids) == 7200
+    assert len(excl_val_shas) == 800
+    assert len(cohort_val_ids) == 800
+    assert set(holdout_ids).isdisjoint({int(x) for x in excl_train_ids})
+    assert set(holdout_shas).isdisjoint(set(excl_val_shas))
+    assert set(holdout_ids).issubset({int(x) for x in cohort_val_ids})
+
+    full_manifest = proj_root / "artifacts" / "dashboard_holdout_8k_8k_full.json"
+    if full_manifest.exists():
+        full = json.loads(full_manifest.read_text(encoding="utf-8"))
+        full_imgs = full["images"]
+        assert [int(r["image_id"]) for r in full_imgs] == holdout_ids
+        assert [str(r["sha256"]) for r in full_imgs] == holdout_shas
+
+    cache_db = proj_root / "artifacts" / "cache" / "owlv2_teacher_30k_patched.sqlite"
+    if cache_db.exists():
+        with sqlite3.connect(f"file:{cache_db}?mode=ro&immutable=1", uri=True) as conn:
+            cache_ids = {
+                int(r[0]) for r in conn.execute("SELECT image_id FROM processed_images")
+            }
+        assert set(holdout_ids).isdisjoint(cache_ids)

@@ -33,6 +33,7 @@ import torch
 from torch import Tensor
 import torch.nn.functional as F
 
+from student_detector.annotation_hygiene import RawAnnotationRow, sanitize_image_annotations
 from student_detector.human_gt_data import DEFAULT_ENRICHED_GT_INDEX_PATH, DEFAULT_IMAGE_ROOT
 from student_detector.ontology import (
     DISTRACTOR_CATEGORIES,
@@ -195,18 +196,40 @@ def select_sam_candidates(
     """Select up to `max_per_image` diverse non-GT SAM discovery regions per train image."""
     train_ids = sorted(meta_by_id.keys())
     gt_boxes_by_id: dict[int, list[list[float]]] = defaultdict(list)
+    raw_gt_by_id: dict[int, tuple[str, list[RawAnnotationRow]]] = {}
     with sqlite3.connect(f"file:{gt_db_path}?mode=ro&immutable=1", uri=True) as conn:
         conn.execute("CREATE TEMP TABLE s_tids (image_id INTEGER PRIMARY KEY)")
         conn.executemany("INSERT INTO s_tids VALUES (?)", [(i,) for i in train_ids])
-        for img_id, x1, y1, x2, y2 in conn.execute(
+        for img_id, x1, y1, x2, y2, ign, cat_name, tier, src_ds in conn.execute(
             """
-            SELECT a.image_id, a.x1, a.y1, a.x2, a.y2
+            SELECT a.image_id, a.x1, a.y1, a.x2, a.y2, a.ignore_region, a.category_name, a.geometry_tier, i.source_dataset
             FROM annotations a
             JOIN s_tids t ON a.image_id = t.image_id
+            JOIN images i ON a.image_id = i.image_id
             WHERE a.ignore_region = 0
+            ORDER BY a.image_id, a.rowid
             """
         ):
-            gt_boxes_by_id[int(img_id)].append([float(x1), float(y1), float(x2), float(y2)])
+            iid = int(img_id)
+            if iid not in raw_gt_by_id:
+                raw_gt_by_id[iid] = (str(src_ds), [])
+            raw_gt_by_id[iid][1].append(
+                RawAnnotationRow(
+                    x1=float(x1),
+                    y1=float(y1),
+                    x2=float(x2),
+                    y2=float(y2),
+                    ignore_region=int(ign),
+                    category_name=str(cat_name or ""),
+                    geometry_tier=str(tier or "unknown"),
+                )
+            )
+    for img_id, (src_ds, h_rows) in raw_gt_by_id.items():
+        decision = sanitize_image_annotations(h_rows, source_dataset=src_ds)
+        gt_boxes_by_id[img_id] = [
+            [h_rows[idx].x1, h_rows[idx].y1, h_rows[idx].x2, h_rows[idx].y2]
+            for idx in decision.kept_positive_indices
+        ]
 
     gt_arrays: dict[int, np.ndarray] = {
         img_id: np.asarray(bxs, dtype=np.float32) if bxs else np.zeros((0, 4), dtype=np.float32)
