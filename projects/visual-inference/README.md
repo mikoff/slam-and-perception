@@ -164,4 +164,4 @@ uv run ruff check student_detector/ scripts/ tests/
 uv run pytest
 ```
 
-Historical Stage-1/2 architecture docs: [`docs/phase2.md`](docs/phase2.md), [`docs/phase3.md`](docs/phase3.md), [`docs/proposal_detector_roadmap.md`](docs/proposal_detector_roadmap.md), [`docs/code_audit.md`](docs/code_audit.md), [`docs/model_inspection.md`](docs/model_inspection.md), and [`docs/cloud_training_runbook.md`](docs/cloud_training_runbook.md).
+Architecture & historical docs: [`docs/code_audit.md`](docs/code_audit.md), [`docs/open_vocabulary_embedding_guide.md`](docs/open_vocabulary_embedding_guide.md), [`docs/visual_inference_system_audit.md`](docs/visual_inference_system_audit.md), [`docs/history/phase2.md`](docs/history/phase2.md), [`docs/history/phase3.md`](docs/history/phase3.md), [`docs/history/proposal_detector_roadmap.md`](docs/history/proposal_detector_roadmap.md), and [`docs/history/model_inspection.md`](docs/history/model_inspection.md).
