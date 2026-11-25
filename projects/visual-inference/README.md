@@ -54,6 +54,30 @@ uv run python scripts/benchmark_open_vocab_options.py \
 
 ---
 
+## Offline Archives & Full Recovery
+
+Raw images, large training SQLite databases, and intermediate caches are excluded from Git (`.gitignore`). Full raw archives and a compact prebuilt backup live on external SSD storage (`<backup-drive>`):
+
+| Storage Group | Location on External Drive | Size | Contents |
+|---|---|---:|---|
+| **Core 4 Raw Dataset `.tar` Archives** | `<backup-drive>/datasets/public/` | ~104 GB | `nuimages-DatasetNinja.tar` (~35.5 GB), `coco-2017-DatasetNinja.tar` (~31.6 GB), `woodscape-rgb-fisheye-DatasetNinja.tar` (~27.9 GB), `bdd100k_-images-100k-DatasetNinja.tar` (~8.9 GB); official COCO `annotations_trainval2017.zip` is fetched & SHA-256 verified per [`dataset-pipeline/README.md`](dataset-pipeline/README.md) |
+| **Auxiliary Enrichment Archives** | `<backup-drive>/datasets/public/incoming_enrichment/archives/` | ~1.28 GB | `ade20k/ADEChallengeData2016.zip` (923 MB); `open_images/{oidv7-class-descriptions-boxable.csv,test-annotations-bbox.csv,validation-annotations-bbox.csv}` (98 MB — `.jpg`s download from AWS S3); `roboflow/samples.json` (255 MB — `.jpg`s download from HuggingFace `Voxel51/PKLot`) |
+| **Compact Prebuilt Backup** *(verified via `BACKUP_MANIFEST.txt`)* | `<backup-drive>/datasets/visual-inference/` | ~17 GB | `holdout_210_images/` (~89.5 MB dereferenced real images); `output/` (~11 GB `indexes/quad_{train_enriched,train,val}.sqlite`, `annotations/`, `checksums.sha256`); `artifacts/cache/` (~1.8 GB `owlv2_teacher_{12k,30k,30k_patched}.sqlite` + QA); `artifacts/pseudo_labels/` & `artifacts/phase1/` (~3.8 GB `sam_discovery*.sqlite`, `sam_pilot_800.json`); `artifacts/models/` (~350 MB `owlv2_30k_hbb_v3/`, `owlv2_30k_quad/`, `sota_8k_*`, frozen banks, `dashboard_holdout_8k_8k_full.json`) |
+
+### Recovery Paths from Checkout
+
+- **Path A — Instant Inference & `holdout_210` Benchmark (< 1 min)**: Use git-tracked [`release/`](release/) directly with `--image-root <backup-drive>/datasets/visual-inference/holdout_210_images` (no archive extraction needed).
+- **Path B — Fast Retrain / Full Validation Restore (skip cache extraction)**:
+  1. Re-extract the 4 `.tar` archives from `<backup-drive>/datasets/public/` via `dataset-pipeline` to repopulate `<repo>/data/visual-inference-datasets/raw/` and `output/images/` symlinks.
+  2. Copy `output/`, `artifacts/cache/`, `artifacts/pseudo_labels/`, `artifacts/phase1/`, and `artifacts/models/` from `<backup-drive>/datasets/visual-inference/` into `<repo>/data/visual-inference-datasets/output/` and `projects/visual-inference/artifacts/`.
+- **Path C — Pure Raw-Archives + Git-Repo Rebuild (zero prebuilt SQLites/caches)**:
+  1. Symlink `<backup-drive>/datasets/public/*.tar` plus `ade20k/`, `open_images/`, and `roboflow/` under `<repo>/data/visual-inference-datasets/archives/` (or pass `VISUAL_INFERENCE_ADE20K_ARCHIVE`, `VISUAL_INFERENCE_OPEN_IMAGES_DIR`, `VISUAL_INFERENCE_ROBOFLOW_SAMPLES_JSON` / CLI overrides).
+  2. Restore the `dataset-pipeline` taxonomy target removed in commit `544715c8` (`git show 544715c8^:projects/visual-inference/automotive_taxonomy_mapping.json > projects/visual-inference/automotive_taxonomy_mapping.json`).
+  3. Fetch COCO official annotations ([`dataset-pipeline/README.md`](dataset-pipeline/README.md)), run `cd projects/visual-inference/dataset-pipeline && uv run python -m dataset_pipeline all --config configs/datasets.yaml`, build `output/indexes/quad_train.sqlite`, copy `quad_train.sqlite` to `quad_train_enriched.sqlite`, and run `scripts/ingest_ade20k.py`, `scripts/ingest_open_images.py`, and `scripts/ingest_roboflow_ev_parking.py`.
+  4. Proceed with Steps 1–5 of `End-to-End Reproduction Pipeline` below (pass `--ade20k-archive`, `--open-images-archive-dir`, and `--holdout-storage-dir` to `scripts/prepare_dashboard_holdout.py` if enrichment archives live outside `data/visual-inference-datasets/archives/`).
+
+---
+
 ## End-to-End Reproduction Pipeline
 
 All commands below assume working directory `projects/visual-inference`.

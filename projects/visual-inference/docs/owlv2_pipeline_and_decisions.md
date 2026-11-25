@@ -43,6 +43,8 @@ flowchart TD
 | **5b. Phase 2 Oriented Quad** | [`../scripts/train_owlv2_quad.py`](../scripts/train_owlv2_quad.py), [`../student_detector/quad_targets.py`](../student_detector/quad_targets.py), [`../student_detector/quad_losses.py`](../student_detector/quad_losses.py) | `sota_8k_quad` (`strict=True`), `owlv2_teacher_30k_patched.sqlite` | `owlv2_quad_best.pt` (6 ep, `0.92 s/step`), `owlv2_adapted_vocab_*.pt` | Pre-run 20-step speed & recall gate (`R@100=45.5%`, `loss_det=2.15`) + Ep 6 (`composite_score=0.5647`) |
 | **6. Benchmark, Fidelity & Visual QA** | [`../scripts/benchmark_open_vocab_options.py`](../scripts/benchmark_open_vocab_options.py), [`../scripts/benchmark_owlv2_teacher_vs_student.py`](../scripts/benchmark_owlv2_teacher_vs_student.py), [`../scripts/visualize_open_vocab_ab_dashboard.py`](../scripts/visualize_open_vocab_ab_dashboard.py) | HBB `v3` & Quad checkpoints, Core-27/31/37/41 banks, `holdout_210` & `cohort_val_800` | `benchmark_*.json`, `dashboard_open_vocab_a_b_ab.html`, `0`-overlap audit | `--assert-no-overlap-cache` (`0/236`), `node --check` on embedded JS, visual PNG inspection, `uv run ruff check`, `uv run pytest` |
 
+> **Offline Archives & Recovery**: See [`../README.md`](../README.md#offline-archives--full-recovery) for the full offline raw-archive inventory (`nuImages`, `COCO 2017`, `WoodScape`, `BDD100K`, `ADE20K`, `Open Images`, `PKLot`), compact SSD backup layout, and Git [`../release/`](../release/) quickstart.
+
 ---
 
 ## 2. Engineering Decision Log (ADRs)
