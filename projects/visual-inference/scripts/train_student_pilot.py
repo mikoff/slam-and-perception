@@ -19,6 +19,7 @@ if hasattr(torch.multiprocessing, "set_sharing_strategy"):
 from student_detector.assigner import ATSSAssigner
 from student_detector.decoder import InferenceDecoder
 from student_detector.data_isolation import audit_training_isolation
+from student_detector.human_gt_data import DEFAULT_GT_INDEX_PATH
 from student_detector.losses import ProposalLoss
 from student_detector.model import QuadProposalDetector, StudentDetector
 from student_detector.quad_assigner import QuadAssigner
@@ -196,9 +197,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gt-index",
         type=Path,
-        default=Path(
-            "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite"
-        ),
+        default=DEFAULT_GT_INDEX_PATH,
         help="Path to authoritative quad_train.sqlite ground-truth index for cohort filtering.",
     )
     parser.add_argument(

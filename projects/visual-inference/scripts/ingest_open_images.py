@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import logging
+import os
 import sqlite3
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,11 +49,18 @@ TARGET_MIDS: dict[str, str] = {
     "/m/01jfm_": "license_plate",
 }
 
-DEFAULT_ARCHIVE_DIR = Path(
-    "/media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/open_images"
-)
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_WORKSPACE_ROOT = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets"
+    os.environ.get(
+        "VISUAL_INFERENCE_DATA_ROOT",
+        str(REPO_ROOT / "data" / "visual-inference-datasets"),
+    )
+)
+DEFAULT_ARCHIVE_DIR = Path(
+    os.environ.get(
+        "VISUAL_INFERENCE_OPEN_IMAGES_DIR",
+        str(DEFAULT_WORKSPACE_ROOT / "archives" / "open_images"),
+    )
 )
 AWS_S3_BASE_URL = "https://open-images-dataset.s3.amazonaws.com"
 

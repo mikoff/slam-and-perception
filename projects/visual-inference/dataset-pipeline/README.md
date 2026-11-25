@@ -26,9 +26,9 @@ If discovery finds multiple projects in an extraction, set that dataset's
 `project_subpath`. The supplied taxonomy is
 `configs/automotive_taxonomy_mapping.json`; unmapped categories are fatal.
 
-Before the first run, verify the exact archive filenames under
-`/media/sashamikoff/fb.com-mikoff/datasets/public` and adjust the example paths
-if the downloaded files have different names.
+Before the first run, place or symlink the source archives under
+`<workspace_root>/archives` (or update `archive:` in `configs/datasets.yaml` to
+point to your archive mount) and verify exact filenames.
 
 The supplied configuration resolves its workspace to
 `~/git/skillup/data/visual-inference-datasets`. The archives remain at their configured

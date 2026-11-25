@@ -28,6 +28,29 @@ Evaluated on sanitized annotations across 7 domains (`bdd100k_images_100k`, `nui
    ```
 2. **Teacher Revision**: `OWLV2_MODEL_ID = "google/owlv2-large-patch14-ensemble"` is pinned to commit SHA `95e26936e865f87db1742128404b3c035d47d89d` (`OWLV2_MODEL_REVISION` in [`student_detector/owlv2_teacher.py`](student_detector/owlv2_teacher.py)).
 3. **Holdout Isolation Lockfile**: Exact 210 holdout image IDs, SHA256 hashes, and excluded 800-image validation sets are tracked in [`configs/holdout_210_ids.json`](configs/holdout_210_ids.json).
+4. **Portable Data Root Overrides**: Default dataset/SQLite paths resolve dynamically relative to the repository root (`<repo>/data/visual-inference-datasets`) and can be overridden via `VISUAL_INFERENCE_DATA_ROOT`, `VISUAL_INFERENCE_IMAGE_ROOT`, `VISUAL_INFERENCE_GT_INDEX`, and `VISUAL_INFERENCE_ENRICHED_GT_INDEX`.
+
+---
+
+## Quickstart: Reproduce Inference & `holdout_210` Benchmark from `release/`
+
+Trained HBB `v3` & Oriented Quad checkpoints, adapted/frozen OWLv2 vocabulary banks, and a compact `holdout_210` ground-truth DB live directly in [`release/`](release/). Supply a directory containing the `210` holdout images (e.g., backed up on external SSD) via `--image-root`:
+
+```bash
+cd projects/visual-inference
+uv run python scripts/benchmark_open_vocab_options.py \
+  --only-hbb --only-holdout --skip-legacy \
+  --hbb-sota-ckpt release/checkpoints/owlv2_30k_hbb_v3_best.pt \
+  --vocab-37 release/vocabs/hbb_v3/owlv2_adapted_vocab_core27.pt \
+  --vocab-41 release/vocabs/hbb_v3/owlv2_adapted_vocab_31classes_core27_zeroshot.pt \
+  --vocab-distractors release/vocabs/frozen/owlv2_vocabulary_bank_distractors.pt \
+  --gt-index release/benchmarks/holdout_210.sqlite \
+  --holdout-manifest release/benchmarks/holdout_210_manifest.json \
+  --image-root /path/to/holdout_210_images \
+  --decoder-top-k 1000 --decoder-max-detections 100 \
+  --small-box-min-side 16.0 --small-box-score-power 1.25 \
+  --output-json /tmp/verify_release_hbb_holdout210.json
+```
 
 ---
 

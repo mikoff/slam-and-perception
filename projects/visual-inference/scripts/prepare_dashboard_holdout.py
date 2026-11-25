@@ -28,7 +28,7 @@ from student_detector.dashboard_holdout import (
     validation_inventory,
 )
 from student_detector.human_gt_data import DEFAULT_ENRICHED_GT_INDEX_PATH
-from student_detector.sam_student_data import DEFAULT_IMAGE_ROOT
+from student_detector.sam_student_data import DEFAULT_DATA_ROOT, DEFAULT_IMAGE_ROOT
 
 
 def rectangle(box: list[float]) -> list[list[float]]:
@@ -54,6 +54,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gt-index", type=Path, default=DEFAULT_ENRICHED_GT_INDEX_PATH)
     parser.add_argument("--image-root", type=Path, default=DEFAULT_IMAGE_ROOT)
+    parser.add_argument(
+        "--ade20k-archive",
+        type=Path,
+        default=DEFAULT_ARCHIVE,
+        help="Path to ADEChallengeData2016.zip for validation sampling.",
+    )
+    parser.add_argument(
+        "--open-images-archive-dir",
+        type=Path,
+        default=DEFAULT_ARCHIVE_DIR,
+        help="Directory containing Open Images validation-annotations-bbox.csv.",
+    )
+    parser.add_argument(
+        "--holdout-storage-dir",
+        type=Path,
+        default=DEFAULT_DATA_ROOT / "evaluation" / "dashboard_holdout",
+        help="Directory to cache extracted/downloaded validation images.",
+    )
     parser.add_argument("--cohort-size", type=int, default=14000)
     parser.add_argument(
         "--validation-pseudo-labels",
@@ -101,7 +119,7 @@ def main() -> None:
     rng = random.Random(args.split_seed)
     records: list[dict[str, Any]] = []
     counts: dict[str, int] = defaultdict(int)
-    storage = DEFAULT_ARCHIVE_DIR.parent.parent / "evaluation/dashboard_holdout"
+    storage = args.holdout_storage_dir
     storage.mkdir(parents=True, exist_ok=True)
 
     def add(
@@ -199,7 +217,7 @@ def main() -> None:
 
     if args.include_new_sources:
         # ADE20K's official validation partition was never ingested for training.
-        with zipfile.ZipFile(DEFAULT_ARCHIVE) as archive:
+        with zipfile.ZipFile(args.ade20k_archive) as archive:
             names = sorted(
                 n
                 for n in archive.namelist()
@@ -233,7 +251,7 @@ def main() -> None:
 
         # Include both close-up cars and a random mix of the curated target classes.
         oi: dict[str, list[dict[str, str]]] = defaultdict(list)
-        with (DEFAULT_ARCHIVE_DIR / "validation-annotations-bbox.csv").open() as stream:
+        with (args.open_images_archive_dir / "validation-annotations-bbox.csv").open() as stream:
             for row in csv.DictReader(stream):
                 if row["LabelName"] in TARGET_MIDS and row["IsGroupOf"] != "1":
                     if f"open_images__{row['ImageID']}.jpg" not in used_names:

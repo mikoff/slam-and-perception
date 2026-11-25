@@ -16,6 +16,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${PROJECT_ROOT}/../.." && pwd)"
+DATA_ROOT="${VISUAL_INFERENCE_DATA_ROOT:-${REPO_ROOT}/data/visual-inference-datasets}"
+GT_INDEX="${GT_INDEX:-${DATA_ROOT}/output/indexes/quad_train_enriched.sqlite}"
 
 PID_FILE="${PROJECT_ROOT}/artifacts/pseudo_labels/discovery.pid"
 LOG_FILE="${PROJECT_ROOT}/artifacts/pseudo_labels/discovery.log"
@@ -114,9 +117,9 @@ cmd_start() {
     local EXTRA_ARGS="${1:-}"
     if [ -z "${EXTRA_ARGS}" ]; then
         if [ "${TOTAL_IMAGES}" -le 14000 ]; then
-            EXTRA_ARGS="--index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
+            EXTRA_ARGS="--index-db ${GT_INDEX} --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
         else
-            EXTRA_ARGS="--all-images --index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --output-db ${DB_FILE}"
+            EXTRA_ARGS="--all-images --index-db ${GT_INDEX} --output-db ${DB_FILE}"
         fi
     fi
     setsid .venv/bin/python3 -u scripts/run_sam_pilot_discovery.py \
@@ -303,9 +306,9 @@ cmd_run() {
     local EXTRA_ARGS="${1:-}"
     if [ -z "${EXTRA_ARGS}" ]; then
         if [ "${TOTAL_IMAGES}" -le 14000 ]; then
-            EXTRA_ARGS="--index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
+            EXTRA_ARGS="--index-db ${GT_INDEX} --num-images ${TOTAL_IMAGES} --output-db ${DB_FILE}"
         else
-            EXTRA_ARGS="--all-images --index-db /home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite --output-db ${DB_FILE}"
+            EXTRA_ARGS="--all-images --index-db ${GT_INDEX} --output-db ${DB_FILE}"
         fi
     fi
     echo "Starting SAM Discovery interactively in foreground..."

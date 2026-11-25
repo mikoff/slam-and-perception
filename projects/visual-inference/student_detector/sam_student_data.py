@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import random
 import sqlite3
@@ -40,8 +41,18 @@ DEFAULT_PSEUDO_LABELS_DB = (
     / "pseudo_labels"
     / "sam_discovery.sqlite"
 )
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_DATA_ROOT = Path(
+    os.environ.get(
+        "VISUAL_INFERENCE_DATA_ROOT",
+        str(REPO_ROOT / "data" / "visual-inference-datasets"),
+    )
+)
 DEFAULT_IMAGE_ROOT = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output"
+    os.environ.get(
+        "VISUAL_INFERENCE_IMAGE_ROOT",
+        str(DEFAULT_DATA_ROOT / "output"),
+    )
 )
 
 SOURCE_DOMAINS: dict[str, str] = {

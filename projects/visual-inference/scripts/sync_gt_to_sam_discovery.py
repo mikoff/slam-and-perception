@@ -8,16 +8,17 @@ import logging
 import sqlite3
 from pathlib import Path
 
+from student_detector.human_gt_data import DEFAULT_ENRICHED_GT_INDEX_PATH
+
 logging.basicConfig(
     level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
 )
 logger = logging.getLogger("sync_gt_to_sam_discovery")
 
-DEFAULT_GT_DB = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
-)
-DEFAULT_SAM_DB = Path(
-    "/home/sashamikoff/git/skillup/projects/visual-inference/artifacts/pseudo_labels/sam_discovery_enriched.sqlite"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_GT_DB = DEFAULT_ENRICHED_GT_INDEX_PATH
+DEFAULT_SAM_DB = (
+    PROJECT_ROOT / "artifacts" / "pseudo_labels" / "sam_discovery_enriched.sqlite"
 )
 
 

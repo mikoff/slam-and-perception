@@ -7,6 +7,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import sqlite3
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,11 +21,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ingest_roboflow_ev_parking")
 
-DEFAULT_SAMPLES_JSON = Path(
-    "/media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/roboflow/samples.json"
-)
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_WORKSPACE_ROOT = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets"
+    os.environ.get(
+        "VISUAL_INFERENCE_DATA_ROOT",
+        str(REPO_ROOT / "data" / "visual-inference-datasets"),
+    )
+)
+DEFAULT_SAMPLES_JSON = Path(
+    os.environ.get(
+        "VISUAL_INFERENCE_ROBOFLOW_SAMPLES_JSON",
+        str(DEFAULT_WORKSPACE_ROOT / "archives" / "roboflow" / "samples.json"),
+    )
 )
 HF_BASE_URL = "https://huggingface.co/datasets/Voxel51/PKLot/resolve/main"
 

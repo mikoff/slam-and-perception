@@ -345,7 +345,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device = torch.device(args.device)
-    splits = build_split_datasets("hbb", args.gt_index, args.image_root, args.holdout_manifest)
+    splits = build_split_datasets(
+        "hbb",
+        args.gt_index,
+        args.image_root,
+        args.holdout_manifest,
+        only_holdout=True,
+    )
     if "holdout_210" not in splits:
         raise RuntimeError(f"Holdout split unavailable from {args.holdout_manifest}")
     holdout_ds = splits["holdout_210"]

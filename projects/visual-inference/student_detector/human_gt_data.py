@@ -33,6 +33,7 @@ from .quad_data import (
 )
 from .sam_student_data import (
     CAMERA_TYPES,
+    DEFAULT_DATA_ROOT,
     DEFAULT_IMAGE_ROOT,
     DEFAULT_PSEUDO_LABELS_DB,
     SOURCE_DOMAINS,
@@ -40,10 +41,16 @@ from .sam_student_data import (
 )
 
 DEFAULT_GT_INDEX_PATH = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite"
+    os.environ.get(
+        "VISUAL_INFERENCE_GT_INDEX",
+        str(DEFAULT_DATA_ROOT / "output" / "indexes" / "quad_train.sqlite"),
+    )
 )
 DEFAULT_ENRICHED_GT_INDEX_PATH = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
+    os.environ.get(
+        "VISUAL_INFERENCE_ENRICHED_GT_INDEX",
+        str(DEFAULT_DATA_ROOT / "output" / "indexes" / "quad_train_enriched.sqlite"),
+    )
 )
 
 STAGE2_COHORT_QUOTAS: dict[str, int] = {

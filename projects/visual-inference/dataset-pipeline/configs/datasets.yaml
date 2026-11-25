@@ -3,19 +3,19 @@ taxonomy: automotive_taxonomy_mapping.json
 
 datasets:
   nuimages:
-    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/nuimages-DatasetNinja.tar
+    archive: archives/nuimages-DatasetNinja.tar
     extracted_dir: raw/nuimages
     project_subpath: null
   woodscape_rgb_fisheye:
-    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/woodscape-rgb-fisheye-DatasetNinja.tar
+    archive: archives/woodscape-rgb-fisheye-DatasetNinja.tar
     extracted_dir: raw/woodscape_rgb_fisheye
     project_subpath: null
   bdd100k_images_100k:
-    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/bdd100k_-images-100k-DatasetNinja.tar
+    archive: archives/bdd100k_-images-100k-DatasetNinja.tar
     extracted_dir: raw/bdd100k_images_100k
     project_subpath: null
   coco_2017:
-    archive: /media/sashamikoff/fb.com-mikoff/datasets/public/coco-2017-DatasetNinja.tar
+    archive: archives/coco-2017-DatasetNinja.tar
     extracted_dir: raw/coco_2017
     project_subpath: null
     official_annotations:

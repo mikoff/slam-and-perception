@@ -7,6 +7,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import sqlite3
 import zipfile
 from pathlib import Path
@@ -128,11 +129,18 @@ ADE_TARGET_CLASSES: dict[int, str] = {
     149: "clock",
 }
 
-DEFAULT_ARCHIVE = Path(
-    "/media/sashamikoff/fb.com-mikoff/datasets/public/incoming_enrichment/archives/ade20k/ADEChallengeData2016.zip"
-)
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_WORKSPACE_ROOT = Path(
-    "/home/sashamikoff/git/skillup/data/visual-inference-datasets"
+    os.environ.get(
+        "VISUAL_INFERENCE_DATA_ROOT",
+        str(REPO_ROOT / "data" / "visual-inference-datasets"),
+    )
+)
+DEFAULT_ARCHIVE = Path(
+    os.environ.get(
+        "VISUAL_INFERENCE_ADE20K_ARCHIVE",
+        str(DEFAULT_WORKSPACE_ROOT / "archives" / "ade20k" / "ADEChallengeData2016.zip"),
+    )
 )
 
 

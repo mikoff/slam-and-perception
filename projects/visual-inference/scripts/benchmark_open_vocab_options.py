@@ -126,9 +126,43 @@ def build_split_datasets(
     holdout_manifest: Path,
     input_size: int = 384,
     cohort_size: int = 8000,
+    *,
+    only_holdout: bool = False,
 ) -> dict[str, Any]:
     """Build cohort_val (800) and holdout_210 datasets with unified transforms."""
     ds_cls = HumanGTHBBDataset if geometry == "hbb" else HumanGTQuadDataset
+    if only_holdout:
+        if not holdout_manifest.exists():
+            raise FileNotFoundError(
+                f"Holdout manifest not found for --only-holdout: {holdout_manifest}"
+            )
+        raw_manifest = json.loads(holdout_manifest.read_text())
+        ho_imgs = (
+            raw_manifest["images"]
+            if isinstance(raw_manifest, dict) and "images" in raw_manifest
+            else raw_manifest
+        )
+        holdout_ds = ds_cls(
+            cohort_db_path=gt_index,
+            gt_index_path=gt_index,
+            image_root=image_root,
+            split="all",
+            cohort_size=None,
+            input_size=input_size,
+        )
+        holdout_ds._connection = None
+        holdout_ds.images = [
+            {
+                "image_id": int(r["image_id"]),
+                "file_name": str(r["file_name"]),
+                "source_dataset": str(r["source_dataset"]),
+                "width": int(r["width"]),
+                "height": int(r["height"]),
+            }
+            for r in ho_imgs
+        ]
+        return {"holdout_210": holdout_ds}
+
     val_ds = ds_cls(
         cohort_db_path=gt_index,
         gt_index_path=gt_index,
@@ -1383,6 +1417,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--only-hbb", action="store_true", help="Benchmark HBB only and skip Quad.")
     parser.add_argument("--only-quad", action="store_true", help="Benchmark Quad only and skip HBB.")
     parser.add_argument(
+        "--only-holdout",
+        action="store_true",
+        help="Evaluate only the holdout_210 split without loading cohort_val_800.",
+    )
+    parser.add_argument(
         "--skip-legacy",
         action="store_true",
         help="Skip evaluating legacy v3/v4 region heads.",
@@ -1493,7 +1532,11 @@ def main() -> None:
             visual_centroid=visual_centroid,
         )
         splits = build_split_datasets(
-            geom, args.gt_index, args.image_root, args.holdout_manifest
+            geom,
+            args.gt_index,
+            args.image_root,
+            args.holdout_manifest,
+            only_holdout=args.only_holdout,
         )
 
         geom_res: dict[str, Any] = {

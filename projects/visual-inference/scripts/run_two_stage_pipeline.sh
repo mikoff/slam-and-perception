@@ -16,6 +16,8 @@ if [ "${RECIPE}" != "p2_baseline" ] && [ "${RECIPE}" != "recipe2" ] && [ -z "${R
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "${ROOT_DIR}/../.." && pwd)"
+DATA_ROOT="${VISUAL_INFERENCE_DATA_ROOT:-${REPO_ROOT}/data/visual-inference-datasets}"
 cd "${ROOT_DIR}"
 
 TAG_SUFFIX=""
@@ -24,7 +26,8 @@ if [ -n "${RUN_TAG}" ]; then
 fi
 
 COHORT_SIZE="${COHORT_SIZE:-10000}"
-GT_INDEX="${GT_INDEX:-/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train.sqlite}"
+GT_INDEX_OVERRIDE="${GT_INDEX:-}"
+GT_INDEX="${GT_INDEX_OVERRIDE:-${DATA_ROOT}/output/indexes/quad_train.sqlite}"
 PSEUDO_LABELS_DB="${PSEUDO_LABELS_DB:-artifacts/pseudo_labels/sam_discovery.sqlite}"
 VALIDATION_PSEUDO_LABELS="${VALIDATION_PSEUDO_LABELS:-artifacts/phase1/pseudo_labels/sam_pilot_800.json}"
 PIPELINE_VAL_RATIO="${PIPELINE_VAL_RATIO:-0.10}"
@@ -37,12 +40,12 @@ STAGE2_VAL_INTERVAL="${STAGE2_VAL_INTERVAL:-${VAL_INTERVAL:-${STAGE2_EPOCHS}}}"
 
 if [ "${STAGE}" = "stage1_enriched" ] || [ "${STAGE}" = "stage2_enriched" ] || [ "${STAGE}" = "all_enriched" ] || [ "${STAGE}" = "dashboard_enriched" ]; then
     COHORT_SIZE=14000
-    GT_INDEX="/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
+    GT_INDEX="${GT_INDEX_OVERRIDE:-${DATA_ROOT}/output/indexes/quad_train_enriched.sqlite}"
     PSEUDO_LABELS_DB="artifacts/pseudo_labels/sam_discovery_enriched.sqlite"
     COHORT_TAG="14k"
 elif [ "${COHORT_SIZE}" -eq 8000 ]; then
     COHORT_TAG="8k"
-    GT_INDEX="/home/sashamikoff/git/skillup/data/visual-inference-datasets/output/indexes/quad_train_enriched.sqlite"
+    GT_INDEX="${GT_INDEX_OVERRIDE:-${DATA_ROOT}/output/indexes/quad_train_enriched.sqlite}"
     PSEUDO_LABELS_DB="artifacts/pseudo_labels/sam_discovery_enriched.sqlite"
 elif [ "${COHORT_SIZE}" -gt 10000 ]; then
     COHORT_TAG="14k"

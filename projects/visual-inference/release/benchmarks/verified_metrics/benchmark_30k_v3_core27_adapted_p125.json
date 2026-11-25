@@ -1,0 +1,663 @@
+{
+  "device": "cuda",
+  "seen_categories_count": 27,
+  "zero_shot_unseen_categories": [
+    "book",
+    "painting",
+    "cushion",
+    "flowerpot"
+  ],
+  "decoder_config": {
+    "top_k": 1000,
+    "max_detections": 100,
+    "small_box_min_side": 16.0,
+    "small_box_score_power": 1.25
+  },
+  "geometries": {
+    "hbb": {
+      "sota_checkpoint": "artifacts/owlv2_30k_hbb_v3/checkpoints/owlv2_hbb_best.pt",
+      "sota_best_epoch": 2,
+      "edge_profile": {
+        "parameters_millions": {
+          "sota_detector_inference": 7.307,
+          "option_a_head": 0.135,
+          "option_b_head": 2.875,
+          "sota_total_option_a": 7.442,
+          "sota_total_option_b": 10.183,
+          "sota_total_option_ab": 10.317,
+          "legacy_region_head": 1.314
+        },
+        "cpu_4thread_latency_ms": {
+          "detector_only_ms": 203.96,
+          "head_a_indexed_25props_ms": 37.09,
+          "head_a_full_dense_ms": 96.01,
+          "head_b_roi_25props_ms": 15.77,
+          "end_to_end_option_a_ms": 236.8,
+          "end_to_end_option_b_ms": 247.32,
+          "end_to_end_option_ab_ms": 241.45
+        },
+        "cuda_latency_ms": {
+          "detector_only_ms": 17.17,
+          "head_a_indexed_25props_ms": 1.69,
+          "head_a_full_dense_ms": 1.51,
+          "head_b_roi_25props_ms": 3.84,
+          "end_to_end_option_a_ms": 16.86,
+          "end_to_end_option_b_ms": 22.23,
+          "end_to_end_option_ab_ms": 20.24
+        }
+      },
+      "splits": {
+        "cohort_val_800": {
+          "sota": {
+            "num_images": 800,
+            "num_gt": 8499,
+            "localization": {
+              "boxes_per_img_030": 15.64,
+              "overlap_pairs_025": 5.56,
+              "post_semantic_nms_overlap_pairs_025": 1.54,
+              "dup_gt_rate": 0.0239,
+              "clutter_prop_rate_030": 0.5504,
+              "recall_10_50": 0.2646,
+              "recall_100_50": 0.5389,
+              "recall_100_75": 0.1826,
+              "class_agnostic_ap50": 0.1378
+            },
+            "semantics_37_seen": {
+              "evaluated_recalled_gt": 3678,
+              "option_a": {
+                "matched_prop_top1": 0.8086,
+                "matched_prop_top3": 0.9535,
+                "seen_on_41bank_top1": 0.798,
+                "open_vocab_map50": 0.1629,
+                "clutter_rejection_rate": 0.1606,
+                "signboard_to_window_door_err": 0.16
+              },
+              "option_b": {
+                "matched_prop_top1": 0.8399,
+                "matched_prop_top3": 0.9641,
+                "oracle_gt_box_top1": 0.8013,
+                "oracle_gt_box_top3": 0.9466,
+                "seen_on_41bank_top1": 0.8293,
+                "open_vocab_map50": 0.1514,
+                "clutter_rejection_rate": 0.4056,
+                "signboard_to_window_door_err": 0.16
+              },
+              "option_ab": {
+                "matched_prop_top1": 0.838,
+                "matched_prop_top3": 0.9649,
+                "seen_on_41bank_top1": 0.8279,
+                "open_vocab_map50": 0.1569,
+                "clutter_rejection_rate": 0.3626,
+                "signboard_to_window_door_err": 0.16
+              },
+              "signboard_instances": 25,
+              "option_a_b_top1_agreement": 0.8853,
+              "active_predicted_categories_37": 27,
+              "zero_gt_categories_detected": {
+                "stroller": 5,
+                "window": 2311,
+                "building": 1091,
+                "tree": 241
+              },
+              "predicted_category_counts_020": {
+                "building": 1091,
+                "traffic_light": 844,
+                "pole": 3374,
+                "car": 3359,
+                "traffic_sign": 855,
+                "signboard": 512,
+                "construction_barrier": 177,
+                "truck": 135,
+                "fence": 373,
+                "trash_bin": 379,
+                "window": 2311,
+                "pedestrian": 1686,
+                "traffic_cone": 98,
+                "door": 540,
+                "bus": 82,
+                "cyclist": 882,
+                "tree": 241,
+                "bench": 89,
+                "license_plate": 132,
+                "pillar": 334,
+                "fire_hydrant": 41,
+                "luggage_and_bags": 43,
+                "stroller": 5,
+                "cabinet": 181,
+                "dog": 28,
+                "table": 199,
+                "chair": 226
+              },
+              "per_class_top1": {
+                "car": {
+                  "count": 1507,
+                  "predicted_count_020": 3359,
+                  "option_a_top1": 0.9615,
+                  "option_b_top1": 0.9622,
+                  "option_ab_top1": 0.9628
+                },
+                "pedestrian": {
+                  "count": 751,
+                  "predicted_count_020": 1686,
+                  "option_a_top1": 0.8296,
+                  "option_b_top1": 0.8895,
+                  "option_ab_top1": 0.8735
+                },
+                "cyclist": {
+                  "count": 209,
+                  "predicted_count_020": 882,
+                  "option_a_top1": 0.7464,
+                  "option_b_top1": 0.7081,
+                  "option_ab_top1": 0.7512
+                },
+                "traffic_cone": {
+                  "count": 23,
+                  "predicted_count_020": 98,
+                  "option_a_top1": 0.4348,
+                  "option_b_top1": 0.7826,
+                  "option_ab_top1": 0.6957
+                },
+                "bus": {
+                  "count": 33,
+                  "predicted_count_020": 82,
+                  "option_a_top1": 0.5152,
+                  "option_b_top1": 0.5758,
+                  "option_ab_top1": 0.5455
+                },
+                "truck": {
+                  "count": 81,
+                  "predicted_count_020": 135,
+                  "option_a_top1": 0.3333,
+                  "option_b_top1": 0.3704,
+                  "option_ab_top1": 0.3951
+                },
+                "stroller": {
+                  "count": 0,
+                  "predicted_count_020": 5,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "dog": {
+                  "count": 4,
+                  "predicted_count_020": 28,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 0.75,
+                  "option_ab_top1": 1.0
+                },
+                "construction_barrier": {
+                  "count": 29,
+                  "predicted_count_020": 177,
+                  "option_a_top1": 0.5517,
+                  "option_b_top1": 0.6207,
+                  "option_ab_top1": 0.6552
+                },
+                "pillar": {
+                  "count": 6,
+                  "predicted_count_020": 334,
+                  "option_a_top1": 0.6667,
+                  "option_b_top1": 0.6667,
+                  "option_ab_top1": 0.6667
+                },
+                "trash_bin": {
+                  "count": 6,
+                  "predicted_count_020": 379,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 1.0,
+                  "option_ab_top1": 1.0
+                },
+                "fire_hydrant": {
+                  "count": 3,
+                  "predicted_count_020": 41,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 1.0,
+                  "option_ab_top1": 1.0
+                },
+                "luggage_and_bags": {
+                  "count": 52,
+                  "predicted_count_020": 43,
+                  "option_a_top1": 0.3654,
+                  "option_b_top1": 0.2885,
+                  "option_ab_top1": 0.3077
+                },
+                "signboard": {
+                  "count": 25,
+                  "predicted_count_020": 512,
+                  "option_a_top1": 0.56,
+                  "option_b_top1": 0.52,
+                  "option_ab_top1": 0.56
+                },
+                "traffic_sign": {
+                  "count": 240,
+                  "predicted_count_020": 855,
+                  "option_a_top1": 0.5708,
+                  "option_b_top1": 0.7417,
+                  "option_ab_top1": 0.7042
+                },
+                "traffic_light": {
+                  "count": 162,
+                  "predicted_count_020": 844,
+                  "option_a_top1": 0.8457,
+                  "option_b_top1": 0.8519,
+                  "option_ab_top1": 0.8642
+                },
+                "pole": {
+                  "count": 131,
+                  "predicted_count_020": 3374,
+                  "option_a_top1": 0.5878,
+                  "option_b_top1": 0.687,
+                  "option_ab_top1": 0.6718
+                },
+                "bench": {
+                  "count": 6,
+                  "predicted_count_020": 89,
+                  "option_a_top1": 0.5,
+                  "option_b_top1": 0.5,
+                  "option_ab_top1": 0.5
+                },
+                "license_plate": {
+                  "count": 15,
+                  "predicted_count_020": 132,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 1.0,
+                  "option_ab_top1": 1.0
+                },
+                "window": {
+                  "count": 0,
+                  "predicted_count_020": 2311,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "door": {
+                  "count": 54,
+                  "predicted_count_020": 540,
+                  "option_a_top1": 0.4815,
+                  "option_b_top1": 0.6481,
+                  "option_ab_top1": 0.5741
+                },
+                "building": {
+                  "count": 0,
+                  "predicted_count_020": 1091,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "tree": {
+                  "count": 0,
+                  "predicted_count_020": 241,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "fence": {
+                  "count": 24,
+                  "predicted_count_020": 373,
+                  "option_a_top1": 0.25,
+                  "option_b_top1": 0.25,
+                  "option_ab_top1": 0.2917
+                },
+                "chair": {
+                  "count": 168,
+                  "predicted_count_020": 226,
+                  "option_a_top1": 0.7202,
+                  "option_b_top1": 0.7679,
+                  "option_ab_top1": 0.756
+                },
+                "table": {
+                  "count": 86,
+                  "predicted_count_020": 199,
+                  "option_a_top1": 0.6395,
+                  "option_b_top1": 0.6163,
+                  "option_ab_top1": 0.6512
+                },
+                "cabinet": {
+                  "count": 63,
+                  "predicted_count_020": 181,
+                  "option_a_top1": 0.7778,
+                  "option_b_top1": 0.746,
+                  "option_ab_top1": 0.7937
+                }
+              }
+            },
+            "zero_shot_4_unseen": {
+              "unseen_categories": [
+                "book",
+                "painting",
+                "cushion",
+                "flowerpot"
+              ],
+              "recalled_unseen_gt": 153,
+              "oracle_unseen_gt": 222,
+              "option_a": {
+                "unseen_4way_top1": 0.9281,
+                "full_41way_top1": 0.8693,
+                "full_41way_top5": 0.9869
+              },
+              "option_b": {
+                "unseen_4way_top1": 0.9542,
+                "full_41way_top1": 0.9085,
+                "full_41way_top5": 0.9869,
+                "oracle_4way_top1": 0.9234,
+                "oracle_41way_top1": 0.8784,
+                "oracle_41way_top5": 0.9685
+              },
+              "option_ab": {
+                "unseen_4way_top1": 0.9608,
+                "full_41way_top1": 0.9216,
+                "full_41way_top5": 0.9935
+              }
+            }
+          },
+          "legacy": {}
+        },
+        "holdout_210": {
+          "sota": {
+            "num_images": 210,
+            "num_gt": 2269,
+            "localization": {
+              "boxes_per_img_030": 19.22,
+              "overlap_pairs_025": 8.2,
+              "post_semantic_nms_overlap_pairs_025": 2.25,
+              "dup_gt_rate": 0.0366,
+              "clutter_prop_rate_030": 0.5632,
+              "recall_10_50": 0.249,
+              "recall_100_50": 0.5165,
+              "recall_100_75": 0.1754,
+              "class_agnostic_ap50": 0.1171
+            },
+            "semantics_37_seen": {
+              "evaluated_recalled_gt": 974,
+              "option_a": {
+                "matched_prop_top1": 0.8244,
+                "matched_prop_top3": 0.96,
+                "seen_on_41bank_top1": 0.8203,
+                "open_vocab_map50": 0.1573,
+                "clutter_rejection_rate": 0.1579,
+                "signboard_to_window_door_err": 0.0
+              },
+              "option_b": {
+                "matched_prop_top1": 0.8645,
+                "matched_prop_top3": 0.9692,
+                "oracle_gt_box_top1": 0.7919,
+                "oracle_gt_box_top3": 0.937,
+                "seen_on_41bank_top1": 0.8583,
+                "open_vocab_map50": 0.1658,
+                "clutter_rejection_rate": 0.4228,
+                "signboard_to_window_door_err": 0.0
+              },
+              "option_ab": {
+                "matched_prop_top1": 0.8634,
+                "matched_prop_top3": 0.9723,
+                "seen_on_41bank_top1": 0.8583,
+                "open_vocab_map50": 0.1689,
+                "clutter_rejection_rate": 0.3696,
+                "signboard_to_window_door_err": 0.0
+              },
+              "signboard_instances": 2,
+              "option_a_b_top1_agreement": 0.9014,
+              "active_predicted_categories_37": 27,
+              "zero_gt_categories_detected": {
+                "stroller": 2,
+                "fire_hydrant": 9,
+                "bench": 21,
+                "window": 739,
+                "building": 313,
+                "tree": 69
+              },
+              "predicted_category_counts_020": {
+                "pillar": 115,
+                "cabinet": 29,
+                "signboard": 157,
+                "chair": 37,
+                "table": 38,
+                "window": 739,
+                "door": 160,
+                "car": 921,
+                "building": 313,
+                "fence": 104,
+                "bench": 21,
+                "pedestrian": 506,
+                "pole": 991,
+                "trash_bin": 119,
+                "traffic_light": 193,
+                "fire_hydrant": 9,
+                "truck": 41,
+                "luggage_and_bags": 14,
+                "traffic_sign": 211,
+                "tree": 69,
+                "dog": 9,
+                "cyclist": 340,
+                "construction_barrier": 30,
+                "traffic_cone": 25,
+                "bus": 21,
+                "stroller": 2,
+                "license_plate": 36
+              },
+              "per_class_top1": {
+                "car": {
+                  "count": 446,
+                  "predicted_count_020": 921,
+                  "option_a_top1": 0.9686,
+                  "option_b_top1": 0.9686,
+                  "option_ab_top1": 0.9709
+                },
+                "pedestrian": {
+                  "count": 203,
+                  "predicted_count_020": 506,
+                  "option_a_top1": 0.8079,
+                  "option_b_top1": 0.9015,
+                  "option_ab_top1": 0.8768
+                },
+                "cyclist": {
+                  "count": 74,
+                  "predicted_count_020": 340,
+                  "option_a_top1": 0.7973,
+                  "option_b_top1": 0.8243,
+                  "option_ab_top1": 0.8378
+                },
+                "traffic_cone": {
+                  "count": 6,
+                  "predicted_count_020": 25,
+                  "option_a_top1": 0.0,
+                  "option_b_top1": 0.5,
+                  "option_ab_top1": 0.3333
+                },
+                "bus": {
+                  "count": 6,
+                  "predicted_count_020": 21,
+                  "option_a_top1": 0.5,
+                  "option_b_top1": 0.3333,
+                  "option_ab_top1": 0.3333
+                },
+                "truck": {
+                  "count": 23,
+                  "predicted_count_020": 41,
+                  "option_a_top1": 0.3913,
+                  "option_b_top1": 0.4348,
+                  "option_ab_top1": 0.4783
+                },
+                "stroller": {
+                  "count": 0,
+                  "predicted_count_020": 2,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "dog": {
+                  "count": 2,
+                  "predicted_count_020": 9,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 0.5,
+                  "option_ab_top1": 1.0
+                },
+                "construction_barrier": {
+                  "count": 9,
+                  "predicted_count_020": 30,
+                  "option_a_top1": 0.4444,
+                  "option_b_top1": 0.5556,
+                  "option_ab_top1": 0.5556
+                },
+                "pillar": {
+                  "count": 3,
+                  "predicted_count_020": 115,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 1.0,
+                  "option_ab_top1": 1.0
+                },
+                "trash_bin": {
+                  "count": 2,
+                  "predicted_count_020": 119,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 1.0,
+                  "option_ab_top1": 1.0
+                },
+                "fire_hydrant": {
+                  "count": 0,
+                  "predicted_count_020": 9,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "luggage_and_bags": {
+                  "count": 15,
+                  "predicted_count_020": 14,
+                  "option_a_top1": 0.5333,
+                  "option_b_top1": 0.5333,
+                  "option_ab_top1": 0.5333
+                },
+                "signboard": {
+                  "count": 2,
+                  "predicted_count_020": 157,
+                  "option_a_top1": 0.5,
+                  "option_b_top1": 0.5,
+                  "option_ab_top1": 0.5
+                },
+                "traffic_sign": {
+                  "count": 46,
+                  "predicted_count_020": 211,
+                  "option_a_top1": 0.5435,
+                  "option_b_top1": 0.7391,
+                  "option_ab_top1": 0.7391
+                },
+                "traffic_light": {
+                  "count": 17,
+                  "predicted_count_020": 193,
+                  "option_a_top1": 0.8235,
+                  "option_b_top1": 0.8824,
+                  "option_ab_top1": 0.8824
+                },
+                "pole": {
+                  "count": 37,
+                  "predicted_count_020": 991,
+                  "option_a_top1": 0.5946,
+                  "option_b_top1": 0.7027,
+                  "option_ab_top1": 0.7297
+                },
+                "bench": {
+                  "count": 0,
+                  "predicted_count_020": 21,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "license_plate": {
+                  "count": 3,
+                  "predicted_count_020": 36,
+                  "option_a_top1": 1.0,
+                  "option_b_top1": 1.0,
+                  "option_ab_top1": 1.0
+                },
+                "window": {
+                  "count": 0,
+                  "predicted_count_020": 739,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "door": {
+                  "count": 11,
+                  "predicted_count_020": 160,
+                  "option_a_top1": 0.4545,
+                  "option_b_top1": 0.6364,
+                  "option_ab_top1": 0.5455
+                },
+                "building": {
+                  "count": 0,
+                  "predicted_count_020": 313,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "tree": {
+                  "count": 0,
+                  "predicted_count_020": 69,
+                  "option_a_top1": null,
+                  "option_b_top1": null,
+                  "option_ab_top1": null
+                },
+                "fence": {
+                  "count": 7,
+                  "predicted_count_020": 104,
+                  "option_a_top1": 0.2857,
+                  "option_b_top1": 0.2857,
+                  "option_ab_top1": 0.2857
+                },
+                "chair": {
+                  "count": 24,
+                  "predicted_count_020": 37,
+                  "option_a_top1": 0.7083,
+                  "option_b_top1": 0.875,
+                  "option_ab_top1": 0.7917
+                },
+                "table": {
+                  "count": 26,
+                  "predicted_count_020": 38,
+                  "option_a_top1": 0.6923,
+                  "option_b_top1": 0.5385,
+                  "option_ab_top1": 0.6154
+                },
+                "cabinet": {
+                  "count": 12,
+                  "predicted_count_020": 29,
+                  "option_a_top1": 0.8333,
+                  "option_b_top1": 0.75,
+                  "option_ab_top1": 0.8333
+                }
+              }
+            },
+            "zero_shot_4_unseen": {
+              "unseen_categories": [
+                "book",
+                "painting",
+                "cushion",
+                "flowerpot"
+              ],
+              "recalled_unseen_gt": 38,
+              "oracle_unseen_gt": 47,
+              "option_a": {
+                "unseen_4way_top1": 0.9474,
+                "full_41way_top1": 0.8684,
+                "full_41way_top5": 0.9737
+              },
+              "option_b": {
+                "unseen_4way_top1": 0.9474,
+                "full_41way_top1": 0.8947,
+                "full_41way_top5": 0.9737,
+                "oracle_4way_top1": 0.9362,
+                "oracle_41way_top1": 0.8936,
+                "oracle_41way_top5": 0.9787
+              },
+              "option_ab": {
+                "unseen_4way_top1": 0.9737,
+                "full_41way_top1": 0.9211,
+                "full_41way_top5": 0.9737
+              }
+            }
+          },
+          "legacy": {}
+        }
+      }
+    }
+  }
+}

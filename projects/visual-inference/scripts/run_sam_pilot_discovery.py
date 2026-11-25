@@ -30,6 +30,7 @@ from student_detector.discovery_storage import (
     init_discovery_db,
     save_image_batch,
 )
+from student_detector.sam_student_data import DEFAULT_IMAGE_ROOT
 from student_detector.semantic_evaluation_data import (
     SemanticGroundTruthRecord,
     SemanticImageRecord,
@@ -63,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-root",
         type=Path,
-        default=Path("/home/sashamikoff/git/skillup/data/visual-inference-datasets/output"),
+        default=DEFAULT_IMAGE_ROOT,
         help="Root path to visual inference dataset",
     )
     parser.add_argument(
